@@ -12,6 +12,7 @@ from neo4j import GraphDatabase
 from rich.console import Console
 from rich.table import Table
 
+from .config import ConfigError, load_config, merge_cli_overrides, require_packages
 from .loader import Neo4jLoader
 from .ownership import collect_ownership
 from .parser import TsParser
@@ -26,13 +27,6 @@ DEFAULT_URI = os.environ.get("CODEGRAPH_NEO4J_URI", "bolt://localhost:7688")
 DEFAULT_USER = os.environ.get("CODEGRAPH_NEO4J_USER", "neo4j")
 DEFAULT_PASS = os.environ.get("CODEGRAPH_NEO4J_PASS", "codegraph123")
 
-DEFAULT_EXCLUDE_DIRS = {
-    "node_modules", "dist", "build", ".next", ".turbo", "coverage",
-    ".git", "generated", "__generated__", ".cache",
-}
-DEFAULT_EXCLUDE_SUFFIXES = (
-    ".stories.tsx", ".d.ts",
-)
 TEST_SUFFIXES = (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx")
 
 
@@ -42,8 +36,11 @@ TEST_SUFFIXES = (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx")
 def index(
     repo: Path = typer.Argument(..., exists=True, file_okay=False),
     packages: list[str] = typer.Option(
-        ["twenty-server", "twenty-front"],
+        None,
         "--package", "-p",
+        help="Repo-relative path of a TypeScript package to index (e.g. "
+             "'packages/server'). Overrides codegraph.toml / pyproject.toml. "
+             "Repeatable.",
     ),
     wipe: bool = typer.Option(True, help="Wipe Neo4j database before load"),
     uri: str = DEFAULT_URI,
@@ -53,21 +50,43 @@ def index(
     skip_ownership: bool = typer.Option(False, help="Skip git log ingestion"),
 ) -> None:
     repo = repo.resolve()
-    console.print(f"[bold]Indexing[/] {repo}  packages={packages}")
+
+    # Load config (codegraph.toml, then pyproject.toml [tool.codegraph]), then
+    # overlay anything the user passed on the CLI.
+    try:
+        config = load_config(repo)
+        config = merge_cli_overrides(config, packages=packages)
+        require_packages(config)
+    except ConfigError as e:
+        console.print(f"[bold red]Configuration error[/]\n{e}")
+        raise typer.Exit(code=2)
+
+    source_note = f" (from {config.source})" if config.source and not packages else ""
+    console.print(
+        f"[bold]Indexing[/] {repo}  packages={config.packages}{source_note}"
+    )
 
     parser = TsParser()
     index_obj = Index()
+    exclude_dirs = config.effective_exclude_dirs()
+    exclude_suffixes = config.effective_exclude_suffixes()
 
     pkg_configs = []
-    for pkg_name in packages:
-        pkg_dir = repo / "packages" / pkg_name
-        if not pkg_dir.exists():
-            console.print(f"[yellow]skip[/] package {pkg_name} (not found)")
+    for pkg_path in config.packages:
+        pkg_dir = (repo / pkg_path).resolve()
+        if not pkg_dir.exists() or not pkg_dir.is_dir():
+            console.print(f"[yellow]skip[/] package {pkg_path} (not found at {pkg_dir})")
             continue
         pkg_configs.append(load_package_config(repo, pkg_dir))
         console.print(
-            f"  [green]•[/] {pkg_name}: aliases={list(pkg_configs[-1].aliases.keys())}"
+            f"  [green]•[/] {pkg_path}: aliases={list(pkg_configs[-1].aliases.keys())}"
         )
+    if not pkg_configs:
+        console.print(
+            "[bold red]No valid packages found[/] — every configured package was "
+            "missing on disk. Check your codegraph.toml or --package flags."
+        )
+        raise typer.Exit(code=2)
 
     # Walk files (now keeping tests)
     to_parse: list[tuple[Path, str, str, bool]] = []
@@ -75,12 +94,12 @@ def index(
         for p in pkg.root.rglob("*"):
             if not p.is_file():
                 continue
-            if any(part in DEFAULT_EXCLUDE_DIRS for part in p.parts):
+            if any(part in exclude_dirs for part in p.parts):
                 continue
             if p.suffix.lower() not in (".ts", ".tsx"):
                 continue
             name_lower = p.name.lower()
-            if any(name_lower.endswith(suf) for suf in DEFAULT_EXCLUDE_SUFFIXES):
+            if any(name_lower.endswith(suf) for suf in exclude_suffixes):
                 continue
             try:
                 if p.stat().st_size > 1_500_000:

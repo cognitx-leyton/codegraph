@@ -106,9 +106,11 @@ docker compose up -d
 # Browser UI:  http://localhost:7475   (neo4j / codegraph123)
 # Bolt:        bolt://localhost:7688
 
-# 3. Index a repo (scoped to the packages you care about)
+# 3. Tell codegraph which packages in your monorepo to index.
+#    Either drop a codegraph.toml at the repo root (see Configuration below)
+#    or pass --package flags:
 .venv/bin/python -m codegraph.cli index /path/to/your-monorepo \
-  --package twenty-server --package twenty-front
+  --package packages/server --package packages/web
 
 # 4. Sanity-check the load
 .venv/bin/python -m codegraph.cli validate /path/to/your-monorepo
@@ -165,7 +167,44 @@ See [`codegraph/queries.md`](codegraph/queries.md) for the full catalogue.
 
 ## ⚙️ Configuration
 
-Neo4j connection is controlled via environment variables (defaults match the bundled Docker Compose):
+### Project config — `codegraph.toml`
+
+`codegraph` has **no hardcoded packages**. You tell it which packages to index via a `codegraph.toml` at the repo root, a `[tool.codegraph]` block in your existing `pyproject.toml`, or `--package` flags on the CLI. Config file values are loaded first; CLI flags override them.
+
+**`codegraph.toml`** (preferred — a standalone file, no interference with Python tooling):
+
+```toml
+# Paths are relative to the repo root. Each entry should be a TypeScript
+# package directory (i.e. contain a package.json / tsconfig.json so path
+# aliases can be resolved).
+packages = [
+  "packages/server",
+  "packages/web",
+]
+
+# Optional — these extend the built-in defaults, they don't replace them.
+exclude_dirs     = ["custom-build", "fixtures"]
+exclude_suffixes = [".gen.ts"]
+```
+
+**`pyproject.toml`** (if you already have one and want everything in one place):
+
+```toml
+[tool.codegraph]
+packages = ["packages/server", "packages/web"]
+```
+
+**CLI override** — wins over either file:
+
+```bash
+codegraph index . --package packages/server --package packages/web
+```
+
+If no config file exists and no `--package` flags are passed, `index` stops with a clear error. There are no Twenty-specific or other defaults.
+
+### Neo4j connection
+
+Controlled via environment variables (defaults match the bundled `docker-compose.yml`):
 
 | Variable | Default |
 | --- | --- |
@@ -173,7 +212,9 @@ Neo4j connection is controlled via environment variables (defaults match the bun
 | `CODEGRAPH_NEO4J_USER` | `neo4j` |
 | `CODEGRAPH_NEO4J_PASS` | `codegraph123` |
 
-Indexing excludes `node_modules`, `dist`, `build`, `.next`, `.turbo`, `coverage`, generated directories, and test/story/declaration files by default. Override with `--package` to scope to specific monorepo packages.
+### File walk exclusions
+
+Indexing always skips `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.nuxt`, `.svelte-kit`, `.vercel`, `coverage`, `generated`, `__generated__`, `.cache`, `.parcel-cache`, plus `*.d.ts` and `*.stories.{ts,tsx}`. Add to these via `exclude_dirs` / `exclude_suffixes` in your config — those keys **extend** the defaults, they don't replace them.
 
 ## 🛣️ Roadmap
 
