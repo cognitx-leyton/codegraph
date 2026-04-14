@@ -557,20 +557,21 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
     """, buckets.get(CALLS, []))
     stats.edges[CALLS] = len(buckets.get(CALLS, []))
 
+    handles_endpoint = [r for r in buckets.get(HANDLES, []) if r["dst"].startswith("endpoint:")]
+    handles_gqlop = [r for r in buckets.get(HANDLES, []) if r["dst"].startswith("gqlop:")]
     _run(session, """
         UNWIND $rows AS r
         MATCH (m:Method {id: r.src})
         MATCH (e:Endpoint {id: r.dst})
         MERGE (m)-[:HANDLES]->(e)
-    """, [row for row in buckets.get(HANDLES, []) if ":Endpoint" or "endpoint:" in row["dst"]])
-    # Also method -> GraphQL operation for HANDLES (distinct query)
+    """, handles_endpoint)
     _run(session, """
         UNWIND $rows AS r
         MATCH (m:Method {id: r.src})
         MATCH (o:GraphQLOperation {id: r.dst})
         MERGE (m)-[:HANDLES]->(o)
-    """, buckets.get(HANDLES, []))
-    stats.edges[HANDLES] = len(buckets.get(HANDLES, []))
+    """, handles_gqlop)
+    stats.edges[HANDLES] = len(handles_endpoint) + len(handles_gqlop)
 
     # Decorator edges
     _run(session, """
@@ -710,8 +711,6 @@ def _write_ownership(session, ownership: dict, stats: LoadStats) -> None:
     contribs = ownership.get("contributors", [])
     owned = ownership.get("owned_by", [])
 
-    _run(session, "UNWIND $rows AS r MERGE (:Author {email: r.email}) SET email = r.email",
-         [dict(email=a["email"], name=a.get("name", "")) for a in authors])
     _run(session, """
         UNWIND $rows AS r
         MERGE (a:Author {email: r.email})

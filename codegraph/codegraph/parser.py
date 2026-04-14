@@ -55,6 +55,15 @@ _GQL_DECORATORS = {
     "ResolveField": "field",
 }
 
+# Class-level decorators that mark a class as a GraphQL resolver
+# (NestJS standard + Twenty conventions)
+_RESOLVER_CLASS_DECORATORS = {
+    "Resolver",
+    "MetadataResolver",
+    "CoreResolver",
+    "WorkspaceResolver",
+}
+
 _TYPEORM_COLUMN_DECORATORS = {
     "Column",
     "PrimaryColumn",
@@ -310,7 +319,7 @@ class _Walker:
                 cls.is_entity = True
                 if dargs:
                     cls.table_name = self._strip_quotes(dargs[0])
-            elif dname == "Resolver":
+            elif dname in _RESOLVER_CLASS_DECORATORS:
                 cls.is_resolver = True
 
         # Heritage
@@ -629,7 +638,11 @@ class _Walker:
             return
         field_name = self._text(name_node)
 
-        for dec in decorators:
+        # Field decorators live as children of the field node, not preceding siblings
+        own_decorators = [c for c in node.children if c.type == "decorator"]
+        all_decorators = decorators + own_decorators
+
+        for dec in all_decorators:
             dname, dargs, dargs_raw = self._parse_decorator(dec)
             if not dname:
                 continue
@@ -767,6 +780,10 @@ class _Walker:
             if value is None:
                 continue
 
+            # Top-level gql`...` literal bound to a const
+            if value.type in ("call_expression", "tagged_template_expression"):
+                self._scan_top_level_gql(value, name)
+
             # Function / component
             if value.type in ("arrow_function", "function_expression"):
                 fn = FunctionNode(name=name, file=self.result.file.path, exported=exported)
@@ -800,10 +817,75 @@ class _Walker:
                         Edge(kind=DEFINES_ATOM, src_id=self.result.file.id, dst_id=atom.id)
                     )
 
+    def _scan_top_level_gql(self, node: Node, binder: str) -> None:
+        """Detect `const X = gql`...`` at module scope."""
+        # tagged_template_expression: tag + template_string
+        if node.type == "tagged_template_expression":
+            tag = None
+            tmpl = None
+            for c in node.children:
+                if c.type in ("identifier", "member_expression"):
+                    tag = c
+                elif c.type == "template_string":
+                    tmpl = c
+            if tag is not None and tmpl is not None:
+                tag_name = self._text(tag)
+                if tag_name == "gql" or tag_name.endswith(".gql"):
+                    content = self._text(tmpl).strip("`")
+                    for m in _GQL_OP_RE.finditer(content):
+                        # Use the const binder name as the "containing function"
+                        self.result.gql_literals.append((binder, m.group(1), m.group(2)))
+            return
+
+        # call_expression: gql`...` (tree-sitter parses tagged-template as call_expression
+        # with the template_string as a direct child sibling of the function identifier)
+        if node.type == "call_expression":
+            fn_node = None
+            tmpl_node = None
+            for c in node.children:
+                if c.type in ("identifier", "member_expression") and fn_node is None:
+                    fn_node = c
+                elif c.type == "template_string":
+                    tmpl_node = c
+            if fn_node is None or tmpl_node is None:
+                return
+            tag = self._text(fn_node)
+            if tag != "gql" and not tag.endswith(".gql"):
+                return
+            content = self._text(tmpl_node).strip("`")
+            for m in _GQL_OP_RE.finditer(content):
+                self.result.gql_literals.append((binder, m.group(1), m.group(2)))
+
     def _scan_function_body(self, body: Node, fn: FunctionNode) -> None:
         """For component bodies: JSX renders, hook calls, atom reads, env reads, gql literals, REST calls."""
         for d in _descendants(body):
             t = d.type
+
+            # Nested atom definitions (Twenty wraps atoms in factory functions)
+            if t == "variable_declarator":
+                id_node = d.child_by_field_name("name")
+                if id_node is not None and id_node.type == "identifier":
+                    val = d.child_by_field_name("value")
+                    if val is not None and val.type == "call_expression":
+                        callee = val.child_by_field_name("function")
+                        if callee is not None:
+                            cname = self._text(callee)
+                            if cname in ("atom", "atomFamily", "atomWithStorage", "atomWithReset"):
+                                atom_name = self._text(id_node)
+                                self.result.atoms.append(AtomNode(
+                                    name=atom_name,
+                                    file=self.result.file.path,
+                                    family=(cname == "atomFamily"),
+                                ))
+
+            # All string literals: check if URL-like, register as rest_call
+            if t == "string":
+                for sc in d.children:
+                    if sc.type == "string_fragment":
+                        s = self._text(sc)
+                        if _looks_like_backend_url(s):
+                            self.result.rest_calls.append((fn.name, "", s))
+                        break
 
             if t in ("jsx_opening_element", "jsx_self_closing_element"):
                 tag = self._jsx_tag_name(d)
@@ -1009,3 +1091,15 @@ def _looks_like_url(s: str) -> bool:
     if s.startswith("http"):
         return True
     return False
+
+
+_BACKEND_URL_RE = re.compile(
+    r"^/(rest|api|auth|graphql|webhooks?|public-assets?|file|client-config|health|open-api|openapi)(/[\w\-:.{}/]*)?(?:\?.*)?$"
+)
+
+
+def _looks_like_backend_url(s: str) -> bool:
+    """Stricter than _looks_like_url — must look like a real backend route."""
+    if not s or len(s) < 2 or len(s) > 200:
+        return False
+    return bool(_BACKEND_URL_RE.match(s))
