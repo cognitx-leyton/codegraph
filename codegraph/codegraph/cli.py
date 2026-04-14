@@ -24,6 +24,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .config import ConfigError, load_config, merge_cli_overrides, require_packages
+from .ignore import IgnoreConfigError, IgnoreFilter
 from .loader import Neo4jLoader
 from .ownership import collect_ownership
 from .parser import TsParser
@@ -86,6 +87,13 @@ def index(
     password: str = DEFAULT_PASS,
     max_files: Optional[int] = typer.Option(None, help="Limit files (debug)"),
     skip_ownership: bool = typer.Option(False, help="Skip git log ingestion"),
+    ignore_file: Optional[str] = typer.Option(
+        None,
+        "--ignore-file",
+        help="Path to a .codegraphignore file (gitignore-style, plus @route: "
+             "and @component: extensions). Overrides codegraph.toml. If unset, "
+             "codegraph auto-detects <repo>/.codegraphignore.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit stats as JSON on stdout."),
 ) -> None:
     """Index a TypeScript monorepo into Neo4j."""
@@ -99,10 +107,14 @@ def index(
             password=password,
             max_files=max_files,
             skip_ownership=skip_ownership,
+            ignore_file=ignore_file,
             quiet=as_json,
         )
     except ConfigError as e:
         _emit_error(as_json, "config", str(e))
+        raise typer.Exit(code=2)
+    except IgnoreConfigError as e:
+        _emit_error(as_json, "ignore", str(e))
         raise typer.Exit(code=2)
 
     if as_json:
@@ -121,6 +133,7 @@ def _run_index(
     password: str,
     max_files: Optional[int] = None,
     skip_ownership: bool = False,
+    ignore_file: Optional[str] = None,
     quiet: bool = False,
 ) -> dict[str, Any]:
     """Core indexing routine. Returns a flat dict of stats (files, edges, ...).
@@ -133,11 +146,19 @@ def _run_index(
             console.print(msg)
 
     config = load_config(repo)
-    config = merge_cli_overrides(config, packages=packages)
+    config = merge_cli_overrides(config, packages=packages, ignore_file=ignore_file)
     require_packages(config)
 
     source_note = f" (from {config.source})" if config.source and not packages else ""
     say(f"[bold]Indexing[/] {repo}  packages={config.packages}{source_note}")
+
+    ignore_filter = _load_ignore_filter(repo, config.ignore_file)
+    if ignore_filter is not None:
+        nf, nr, nc = ignore_filter.counts()
+        say(
+            f"[bold]Ignore rules[/] loaded from {ignore_filter.ignore_path.name} "
+            f"({nf} file / {nr} route / {nc} component)"
+        )
 
     parser = TsParser()
     index_obj = Index()
@@ -177,6 +198,8 @@ def _run_index(
                 continue
             is_test = any(name_lower.endswith(suf) for suf in TEST_SUFFIXES)
             rel = str(p.resolve().relative_to(repo)).replace("\\", "/")
+            if ignore_filter is not None and ignore_filter.should_ignore_file(rel):
+                continue
             to_parse.append((p, rel, pkg.name, is_test))
     if max_files is not None:
         to_parse = to_parse[:max_files]
@@ -194,7 +217,12 @@ def _run_index(
     parse_time = time.time() - t0
     say(f"[bold green]✓[/] parsed {len(index_obj.files_by_path)} files in {parse_time:.1f}s")
 
-    _extract_routes(repo, index_obj)
+    _extract_routes(repo, index_obj, ignore_filter)
+
+    if ignore_filter is not None:
+        dropped = _strip_ignored_components(index_obj, ignore_filter)
+        if dropped:
+            say(f"[bold]Ignore rules[/] stripped :Component label from {dropped} function(s)")
 
     say("[bold]Resolving imports + references…")
     resolver = Resolver(repo, pkg_configs)
@@ -281,7 +309,11 @@ _ROUTE_RE = re.compile(
 )
 
 
-def _extract_routes(repo: Path, index_obj: Index) -> None:
+def _extract_routes(
+    repo: Path,
+    index_obj: Index,
+    ignore_filter: Optional[IgnoreFilter] = None,
+) -> None:
     """Best-effort ``<Route path="…" element={<X/>}/>`` detection."""
     for rel, result in index_obj.files_by_path.items():
         if not rel.endswith(".tsx"):
@@ -297,7 +329,48 @@ def _extract_routes(repo: Path, index_obj: Index) -> None:
             continue
         for m in _ROUTE_RE.finditer(text):
             path, comp = m.group(1), m.group(2)
+            if ignore_filter is not None and ignore_filter.should_ignore_route(path):
+                continue
             result.routes.append(RouteNode(path=path, component_name=comp, file=rel))
+
+
+def _strip_ignored_components(index_obj: Index, ignore_filter: IgnoreFilter) -> int:
+    """Flip ``is_component`` off for components whose name matches an ignore rule.
+
+    Flipping the flag rather than deleting the :class:`FunctionNode` is
+    deliberate: the function may still be legitimately imported or called
+    elsewhere. :mod:`codegraph.loader` only applies the ``:Component`` label
+    when ``is_component=True``, so this is all that's needed to keep the
+    component out of the queryable graph.
+    """
+    dropped = 0
+    for result in index_obj.files_by_path.values():
+        for fn in result.functions:
+            if fn.is_component and ignore_filter.should_ignore_component(fn.name):
+                fn.is_component = False
+                dropped += 1
+    return dropped
+
+
+def _load_ignore_filter(repo: Path, configured: Optional[str]) -> Optional[IgnoreFilter]:
+    """Resolve and load a :class:`IgnoreFilter`.
+
+    Resolution order:
+
+    1. If ``configured`` is set (from ``--ignore-file`` or ``codegraph.toml``),
+       use it as-is (absolute or repo-relative). Missing file is a hard error.
+    2. Otherwise, auto-detect ``<repo>/.codegraphignore``. Missing file → no
+       filter, no error.
+    """
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            candidate = repo / candidate
+        return IgnoreFilter(candidate)
+    default = repo / ".codegraphignore"
+    if default.exists():
+        return IgnoreFilter(default)
+    return None
 
 
 # ── validate ─────────────────────────────────────────────────────────

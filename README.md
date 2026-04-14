@@ -216,6 +216,27 @@ Controlled via environment variables (defaults match the bundled `docker-compose
 
 Indexing always skips `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.nuxt`, `.svelte-kit`, `.vercel`, `coverage`, `generated`, `__generated__`, `.cache`, `.parcel-cache`, plus `*.d.ts` and `*.stories.{ts,tsx}`. Add to these via `exclude_dirs` / `exclude_suffixes` in your config — those keys **extend** the defaults, they don't replace them.
 
+### `.codegraphignore`
+
+For **confidential routes, components, or files** that shouldn't reach the graph (and therefore shouldn't reach any LLM agent querying it), drop a `.codegraphignore` file at the repo root. Syntax is gitignore-style, plus two codegraph extensions:
+
+```gitignore
+# Standard gitignore — file paths
+**/admin/**
+**/*.secret.ts
+!**/admin/public/**         # negation — re-include a subtree
+
+# Route patterns — match RouteNode.path
+@route:/admin/*
+@route:/settings/system/*
+
+# Component patterns — match React component / NestJS class names
+@component:*Admin*
+@component:*UserManagement*
+```
+
+Override the default location with `--ignore-file PATH` on the CLI or `ignore_file = "custom/.ignore"` in `codegraph.toml`. `.codegraphignore` is **additive** on top of `BASE_EXCLUDE_DIRS` — it doesn't replace them.
+
 ## 🛣️ Roadmap
 
 - Incremental re-indexing on file changes
