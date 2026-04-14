@@ -31,6 +31,8 @@ Built at **[Leyton CognitX](https://cognitx.leyton.com/)** to make large TypeScr
 - [Configuration](#-configuration)
 - [Roadmap](#-roadmap)
 - [Contributing](#-contributing)
+- [Contributors](#-contributors)
+- [Star history](#-star-history)
 - [License](#-license)
 
 ## 🧠 Why a code knowledge graph?
@@ -158,6 +160,28 @@ PRs welcome. The repository uses protected branches:
 - **`hotfix`** — urgent fixes that need to skip the normal cycle.
 
 Every PR into `main`, `release`, or `hotfix` requires a Code Owner review (see [`CODEOWNERS`](CODEOWNERS)). Please open an issue before a large refactor so we can align on direction.
+
+## 👥 Contributors
+
+Thanks to everyone who has helped shape `graphrag-code`:
+
+<a href="https://github.com/cognitx-leyton/graphrag-code/graphs/contributors">
+  <img alt="Avatar grid of graphrag-code contributors" src="https://contrib.rocks/image?repo=cognitx-leyton/graphrag-code" />
+</a>
+
+*Made with [contrib.rocks](https://contrib.rocks).*
+
+## ⭐ Star history
+
+If `graphrag-code` helps you make sense of a TypeScript monorepo, a star helps others find it too.
+
+<a href="https://star-history.com/#cognitx-leyton/graphrag-code&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cognitx-leyton/graphrag-code&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=cognitx-leyton/graphrag-code&type=Date" />
+    <img alt="Star history chart for cognitx-leyton/graphrag-code" src="https://api.star-history.com/svg?repos=cognitx-leyton/graphrag-code&type=Date" />
+  </picture>
+</a>
 
 ## 📄 License
 
