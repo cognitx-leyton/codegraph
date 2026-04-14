@@ -454,15 +454,16 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
 
 
 def _caller_id_for_fn(rel: str, caller_name: str, index: Index) -> str:
-    """Figure out whether caller_name is a :Function or :Method."""
-    # Prefer function (components) first
-    if (rel, caller_name) in index.func_by_name_in_file:
+    """Figure out whether caller_name is a :Function, :Method, or fall back to :File."""
+    if caller_name and (rel, caller_name) in index.func_by_name_in_file:
         return f"func:{rel}#{caller_name}"
-    # Scan methods in this file for matching name (prefer first hit)
-    for (class_id, mname), _m in index.method_by_class_and_name.items():
-        if mname == caller_name and class_id.startswith(f"class:{rel}#"):
-            return f"method:{class_id}#{mname}"
-    return f"func:{rel}#{caller_name}"
+    # Scan methods in this file for matching name
+    if caller_name:
+        for (class_id, mname), _m in index.method_by_class_and_name.items():
+            if mname == caller_name and class_id.startswith(f"class:{rel}#"):
+                return f"method:{class_id}#{mname}"
+    # Fallback: attribute to file
+    return f"file:{rel}"
 
 
 def _resolve_call_target_class(

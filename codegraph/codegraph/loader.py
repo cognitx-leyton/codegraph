@@ -625,7 +625,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
         MATCH (a:Atom {name: r.atom_name})
         MERGE (fn)-[:READS_ATOM]->(a)
     """, atom_reads)
-    stats.edges[READS_ATOM] = len(atom_reads)
+    rec = session.run("MATCH ()-[r:READS_ATOM]->() RETURN count(r) AS v").single()
+    stats.edges[READS_ATOM] = int(rec["v"]) if rec else 0
 
     _run(session, """
         UNWIND $rows AS r
@@ -633,7 +634,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
         MATCH (a:Atom {name: r.atom_name})
         MERGE (fn)-[:WRITES_ATOM]->(a)
     """, atom_writes)
-    stats.edges[WRITES_ATOM] = len(atom_writes)
+    rec = session.run("MATCH ()-[r:WRITES_ATOM]->() RETURN count(r) AS v").single()
+    stats.edges[WRITES_ATOM] = int(rec["v"]) if rec else 0
 
     _run(session, """
         UNWIND $rows AS r

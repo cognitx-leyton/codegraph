@@ -88,7 +88,12 @@ _REST_METHOD_NAMES = {"get", "post", "put", "patch", "delete", "request", "fetch
 
 _URL_LIKE_RE = re.compile(r"^[/]?(rest|api|auth|graphql|webhooks|public)[/\w\-:.?=]*$|^/[a-zA-Z0-9_\-/:.]+$")
 
-_GQL_OP_RE = re.compile(r"\b(query|mutation|subscription)\s+([A-Z_][\w]*)\b")
+_GQL_OP_RE = re.compile(r"\b(query|mutation|subscription)\s+([A-Za-z_][\w]*)\b")
+# Field name inside the operation body — this is what matches a resolver method name.
+# `query EventLogs($x: Y) { eventLogs(input: $x) { ... } }` → field = 'eventLogs'
+_GQL_FIELD_RE = re.compile(
+    r"\b(query|mutation|subscription)\b[\s\S]*?\{\s*(\w+)",
+)
 
 
 # ── Public API ───────────────────────────────────────────────
@@ -169,9 +174,52 @@ class _Walker:
     def walk_program(self, root: Node) -> None:
         for child in root.children:
             self._handle_top_level(child)
+        # Whole-file URL scan (catches module-level strings, class method bodies, etc.)
+        self._scan_file_for_urls(root)
 
     def finalize(self) -> None:
         pass
+
+    def _scan_file_for_urls(self, root: Node) -> None:
+        """Walk every string literal in the file; if URL-like, attribute to enclosing fn/method."""
+        seen: set = set()
+        for d in _descendants(root):
+            if d.type != "string":
+                continue
+            for sc in d.children:
+                if sc.type != "string_fragment":
+                    continue
+                s = self._text(sc)
+                if not _looks_like_backend_url(s):
+                    break
+                key = (s, d.start_byte)
+                if key in seen:
+                    break
+                seen.add(key)
+                # Walk up to find the enclosing function/method/component
+                container = self._enclosing_container_name(d)
+                self.result.rest_calls.append((container, "", s))
+                break
+
+    def _enclosing_container_name(self, n: Node) -> str:
+        """Walk up until we hit a function/method/arrow/class declarator and return its name."""
+        cur = n.parent
+        while cur is not None:
+            t = cur.type
+            if t == "method_definition":
+                name = cur.child_by_field_name("name")
+                if name is not None:
+                    return self._text(name)
+            elif t == "function_declaration":
+                name = cur.child_by_field_name("name")
+                if name is not None:
+                    return self._text(name)
+            elif t == "variable_declarator":
+                name = cur.child_by_field_name("name")
+                if name is not None and name.type == "identifier":
+                    return self._text(name)
+            cur = cur.parent
+        return "<module>"
 
     def _handle_top_level(self, node: Node) -> None:
         t = node.type
@@ -818,30 +866,24 @@ class _Walker:
                     )
 
     def _scan_top_level_gql(self, node: Node, binder: str) -> None:
-        """Detect `const X = gql`...`` at module scope."""
-        # tagged_template_expression: tag + template_string
+        """Detect `const X = gql`...`` at module scope. Extract field name from body."""
+        tmpl_node = None
         if node.type == "tagged_template_expression":
-            tag = None
-            tmpl = None
+            for c in node.children:
+                if c.type == "template_string":
+                    tmpl_node = c
+                    break
+            tag_name = ""
             for c in node.children:
                 if c.type in ("identifier", "member_expression"):
-                    tag = c
-                elif c.type == "template_string":
-                    tmpl = c
-            if tag is not None and tmpl is not None:
-                tag_name = self._text(tag)
-                if tag_name == "gql" or tag_name.endswith(".gql"):
-                    content = self._text(tmpl).strip("`")
-                    for m in _GQL_OP_RE.finditer(content):
-                        # Use the const binder name as the "containing function"
-                        self.result.gql_literals.append((binder, m.group(1), m.group(2)))
-            return
-
-        # call_expression: gql`...` (tree-sitter parses tagged-template as call_expression
-        # with the template_string as a direct child sibling of the function identifier)
-        if node.type == "call_expression":
+                    tag_name = self._text(c)
+                    break
+            if tmpl_node is None:
+                return
+            if tag_name != "gql" and not tag_name.endswith(".gql"):
+                return
+        elif node.type == "call_expression":
             fn_node = None
-            tmpl_node = None
             for c in node.children:
                 if c.type in ("identifier", "member_expression") and fn_node is None:
                     fn_node = c
@@ -852,9 +894,23 @@ class _Walker:
             tag = self._text(fn_node)
             if tag != "gql" and not tag.endswith(".gql"):
                 return
-            content = self._text(tmpl_node).strip("`")
-            for m in _GQL_OP_RE.finditer(content):
-                self.result.gql_literals.append((binder, m.group(1), m.group(2)))
+        else:
+            return
+
+        content = self._text(tmpl_node).strip("`")
+        self._emit_gql_operations(content, binder)
+
+    def _emit_gql_operations(self, content: str, binder: str) -> None:
+        """Extract op_type + field name from a gql document body."""
+        # Get document operation type from the FIRST keyword
+        m_op = _GQL_OP_RE.search(content)
+        op_type = m_op.group(1) if m_op else "query"
+        # Field names: every '{ <field>' in the document — but we want the top-level field
+        # which is the first identifier after the operation's outer body open brace
+        m_field = _GQL_FIELD_RE.search(content)
+        if m_field:
+            field_name = m_field.group(2)
+            self.result.gql_literals.append((binder, op_type, field_name))
 
     def _scan_function_body(self, body: Node, fn: FunctionNode) -> None:
         """For component bodies: JSX renders, hook calls, atom reads, env reads, gql literals, REST calls."""
@@ -943,10 +999,7 @@ class _Walker:
                         tag_name = self._text(tag_fn)
                         if tag_name.endswith("gql") or tag_name == "gql":
                             content = self._text(d).strip("`")
-                            for m in _GQL_OP_RE.finditer(content):
-                                self.result.gql_literals.append(
-                                    (fn.name, m.group(1), m.group(2))
-                                )
+                            self._emit_gql_operations(content, fn.name)
 
             elif t == "member_expression":
                 # process.env.X
