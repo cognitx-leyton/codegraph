@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codegraph"
+version = "0.1.0"
+description = "Code knowledge graph for Claude Code & AI coding agents — index TypeScript, NestJS, React into Neo4j and query architecture in Cypher"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Leyton CognitX", email = "cognitx@leyton.com" },
+]
+keywords = [
+  "code-knowledge-graph",
+  "graphrag",
+  "neo4j",
+  "typescript",
+  "nestjs",
+  "react",
+  "claude-code",
+  "ai-agents",
+  "mcp",
+  "static-analysis",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Software Development :: Code Generators",
+]
+
+dependencies = [
+  "tree-sitter>=0.23,<0.25",
+  "tree-sitter-typescript>=0.23",
+  "neo4j>=5.28,<6",
+  "typer>=0.15",
+  "rich>=13",
+  "pyyaml>=6",
+  "tomli>=2.0; python_version<\"3.11\"",
+]
+
+[project.optional-dependencies]
+repl = [
+  # Enables history, editing, and tab-completion in the interactive REPL.
+  # The REPL works without it (falls back to plain input()), but it's much
+  # nicer with prompt_toolkit installed.
+  "prompt_toolkit>=3.0",
+]
+test = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+]
+
+[project.scripts]
+# Puts `codegraph` on PATH after `pip install -e .` / `pip install codegraph`.
+codegraph = "codegraph.cli:app"
+
+[project.urls]
+Homepage      = "https://cognitx.leyton.com/"
+Repository    = "https://github.com/cognitx-leyton/graphrag-code"
+Documentation = "https://github.com/cognitx-leyton/graphrag-code#readme"
+Issues        = "https://github.com/cognitx-leyton/graphrag-code/issues"
+
+[tool.setuptools.packages.find]
+where   = ["."]
+include = ["codegraph*"]
+exclude = ["tests*"]
