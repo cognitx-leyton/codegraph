@@ -31,6 +31,7 @@ from .ownership import collect_ownership
 from .parser import TsParser
 from .resolver import Index, Resolver, link_cross_file, load_package_config
 from .schema import PackageNode, RouteNode
+from .utils.neo4j_json import clean_row
 
 app = typer.Typer(
     help="codegraph — map a TS/TSX codebase into Neo4j and query it.",
@@ -442,7 +443,7 @@ def query(
     if as_json:
         serialised = [dict(r) for r in rows]
         # neo4j Node/Relationship aren't directly JSON-serialisable, flatten them
-        clean = [_clean_row(r) for r in serialised]
+        clean = [clean_row(r) for r in serialised]
         print(json.dumps({"ok": True, "rows": clean, "count": len(clean)}, indent=2, default=str))
         return
 
@@ -456,21 +457,6 @@ def query(
     for r in rows:
         t.add_row(*[str(r.get(h, "")) for h in headers])
     console.print(t)
-
-
-def _clean_row(row: dict) -> dict:
-    """Best-effort JSON-clean of neo4j row values (nodes, relationships, paths)."""
-    out = {}
-    for k, v in row.items():
-        try:
-            json.dumps(v)
-            out[k] = v
-        except TypeError:
-            if hasattr(v, "_properties"):
-                out[k] = dict(v._properties)  # neo4j Node
-            else:
-                out[k] = str(v)
-    return out
 
 
 # ── wipe ─────────────────────────────────────────────────────────────

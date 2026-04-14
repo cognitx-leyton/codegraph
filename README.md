@@ -71,11 +71,41 @@ All answered in single-digit milliseconds, with zero tokens spent on retrieving 
 
 ### Exposing the graph to Claude via MCP
 
-A first-class **[Model Context Protocol](https://modelcontextprotocol.io/)** server wrapping the graph is on the [Roadmap](#-roadmap). In the meantime, you can:
+codegraph ships a first-class **[Model Context Protocol](https://modelcontextprotocol.io/)** stdio server. Install the optional extra, add one block to Claude Code's config, and five typed tools appear in the agent's tool menu — no more shelling out to `codegraph query`.
 
-- Let Claude Code shell out to `codegraph query "<cypher>"` via its bash tool.
-- Write a small MCP server that exposes a `query_graph` tool backed by the Neo4j driver.
-- Query Bolt directly from any agent framework that supports custom tools.
+```bash
+pip install "codegraph[mcp]"
+```
+
+In `~/.claude.json` (or your Claude Desktop config):
+
+```json
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "codegraph-mcp",
+      "type": "stdio",
+      "env": {
+        "CODEGRAPH_NEO4J_URI":  "bolt://localhost:7688",
+        "CODEGRAPH_NEO4J_USER": "neo4j",
+        "CODEGRAPH_NEO4J_PASS": "codegraph123"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Code. Five tools become available:
+
+| Tool | Purpose |
+| --- | --- |
+| `query_graph(cypher, limit)` | Read-only Cypher escape hatch. Writes are rejected at the session level, so an LLM-generated `DROP`/`DELETE` can't mutate the graph. |
+| `describe_schema()` | Labels, relationship types, and per-label node counts — cheap way for an agent to learn what's in the graph at session start. |
+| `list_packages()` | Every indexed monorepo package with its detected framework, version, TypeScript flag, package manager, and detection confidence. |
+| `callers_of_class(class_name, max_depth)` | Blast-radius traversal over `INJECTS` / `EXTENDS` / `IMPLEMENTS`. The canonical "what breaks if I rename X" query. |
+| `endpoints_for_controller(controller_name)` | HTTP routes exposed by a NestJS controller class (method + path + handler). |
+
+All five tools share a single long-lived Neo4j driver and open sessions in `READ_ACCESS` mode. Configuration is env-var only (the same `CODEGRAPH_NEO4J_*` vars the CLI uses). The server is stdio-only — no network exposure.
 
 ## 🏗️ Architecture
 
@@ -242,7 +272,7 @@ Override the default location with `--ignore-file PATH` on the CLI or `ignore_fi
 
 - Incremental re-indexing on file changes
 - Python and Go language frontends
-- First-class MCP server exposing the graph to LLM agents
+- ~~First-class MCP server exposing the graph to LLM agents~~ — **shipped** (see [Exposing the graph to Claude via MCP](#exposing-the-graph-to-claude-via-mcp))
 - Pre-built RAG retrievers for common architecture questions
 
 ## 🤝 Contributing

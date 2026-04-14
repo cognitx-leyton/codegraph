@@ -54,6 +54,11 @@ repl = [
   # nicer with prompt_toolkit installed.
   "prompt_toolkit>=3.0",
 ]
+mcp = [
+  # Stdio MCP server at codegraph.mcp:main — exposes the graph to Claude
+  # Code and other MCP-aware agents as typed tool calls.
+  "mcp>=1.0",
+]
 test = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
@@ -62,6 +67,8 @@ test = [
 [project.scripts]
 # Puts `codegraph` on PATH after `pip install -e .` / `pip install codegraph`.
 codegraph = "codegraph.cli:app"
+# Stdio MCP server; install the [mcp] extra for this to work.
+codegraph-mcp = "codegraph.mcp:main"
 
 [project.urls]
 Homepage      = "https://cognitx.leyton.com/"
