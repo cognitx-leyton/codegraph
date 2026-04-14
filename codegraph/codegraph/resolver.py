@@ -223,10 +223,11 @@ class Resolver:
 # ── URL matching for Phase 3 ─────────────────────────────────
 
 def _url_pattern_to_regex(path_template: str) -> re.Pattern:
-    """Convert '/rest/users/:id' → '^/rest/users/[^/]+$'."""
+    """Convert '/rest/users/:id' → '^/rest/users/[^/]+$' (with prefix tolerance)."""
     escaped = re.escape(path_template)
-    escaped = re.sub(r"\\:[A-Za-z_]\w*", r"[^/]+", escaped)
-    return re.compile(f"^{escaped}$")
+    escaped = re.sub(r"\\:[A-Za-z_]\w*", r"[^/?#]+", escaped)
+    # Allow trailing slashes / query strings
+    return re.compile(f"^{escaped}/?(?:[?#].*)?$")
 
 
 # ── Cross-file linker ────────────────────────────────────────
