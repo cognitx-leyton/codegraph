@@ -206,12 +206,12 @@ Thanks to everyone who has helped shape `graphrag-code`:
 
 If `graphrag-code` helps you make sense of a TypeScript monorepo, a star helps others find it too.
 
-<a href="https://star-history.com/#cognitx-leyton/graphrag-code&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cognitx-leyton/graphrag-code&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=cognitx-leyton/graphrag-code&type=Date" />
-    <img alt="Star history chart for cognitx-leyton/graphrag-code" src="https://api.star-history.com/svg?repos=cognitx-leyton/graphrag-code&type=Date" />
-  </picture>
+<a href="https://www.star-history.com/?repos=cognitx-leyton%2Fgraphrag-code&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=cognitx-leyton/graphrag-code&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=cognitx-leyton/graphrag-code&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=cognitx-leyton/graphrag-code&type=date&legend=top-left" />
+ </picture>
 </a>
 
 ## 📄 License
