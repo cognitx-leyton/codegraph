@@ -38,16 +38,19 @@ from .schema import (
     OWNED_BY,
     PackageNode,
     PROVIDES,
+    PY_CONFTEST_FILENAME,
+    PY_TEST_PREFIX,
+    PY_TEST_SUFFIX_TRAILING,
     READS_ATOM,
     READS_ENV,
     RELATES_TO,
     RENDERS,
-    RENDERS_COMPONENT,
     REPOSITORY_OF,
     RESOLVES,
     RETURNS,
     TESTS,
     TESTS_CLASS,
+    TS_TEST_SUFFIXES,
     USES_HOOK,
     USES_OPERATION,
     WRITES_ATOM,
@@ -752,7 +755,15 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
 
 
 def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
-    """Link *.spec.ts / *.test.ts to their production peer by filename."""
+    """Link test files to their production peer by filename.
+
+    TS: ``foo.spec.ts`` / ``foo.test.tsx`` → ``foo.ts`` / ``foo.tsx`` (same dir).
+    Python: ``test_foo.py`` / ``foo_test.py`` → ``foo.py`` (same dir only —
+    cross-directory pairing is ambiguous, deferred to Stage 2). ``conftest.py``
+    never pairs.
+    """
+    import posixpath
+
     rows: list = []
     rows_class: list = []
     files = index.files_by_path
@@ -760,17 +771,32 @@ def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
     for rel, r in files.items():
         if not r.file.is_test:
             continue
-        # Derive peer: foo.spec.ts -> foo.ts
         peer = None
-        for suf in (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx"):
-            if rel.endswith(suf):
-                base = rel[: -len(suf)]
-                for ext in (".ts", ".tsx"):
-                    cand = base + ext
-                    if cand in files:
-                        peer = cand
-                        break
-                break
+
+        # TS pairing
+        if rel.endswith(TS_TEST_SUFFIXES):
+            for suf in TS_TEST_SUFFIXES:
+                if rel.endswith(suf):
+                    base = rel[: -len(suf)]
+                    for ext in (".ts", ".tsx"):
+                        cand = base + ext
+                        if cand in files:
+                            peer = cand
+                            break
+                    break
+        # Python pairing — same directory only
+        elif rel.endswith(".py"):
+            dirpath, basename = posixpath.split(rel)
+            if basename == PY_CONFTEST_FILENAME:
+                continue
+            cand = None
+            if basename.endswith(PY_TEST_SUFFIX_TRAILING):
+                cand = posixpath.join(dirpath, basename[: -len(PY_TEST_SUFFIX_TRAILING)] + ".py")
+            elif basename.startswith(PY_TEST_PREFIX):
+                cand = posixpath.join(dirpath, basename[len(PY_TEST_PREFIX):])
+            if cand and cand in files:
+                peer = cand
+
         if peer:
             rows.append(dict(test=rel, peer=peer))
         # Also link by described subject

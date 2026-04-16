@@ -287,10 +287,16 @@ DEFINES_ATOM      = "DEFINES_ATOM"
 READS_ATOM        = "READS_ATOM"
 WRITES_ATOM       = "WRITES_ATOM"
 READS_ENV         = "READS_ENV"
-RENDERS_COMPONENT = "RENDERS_COMPONENT"
 
 # Phase 9 — package / framework detection
 BELONGS_TO        = "BELONGS_TO"
+
+
+# ── Test-file pairing conventions ────────────────────────────
+TS_TEST_SUFFIXES = (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx")
+PY_TEST_SUFFIX_TRAILING = "_test.py"       # foo_test.py ↔ foo.py
+PY_TEST_PREFIX = "test_"                   # test_foo.py ↔ foo.py
+PY_CONFTEST_FILENAME = "conftest.py"       # no pairing
 
 
 # ── Import spec (Phase 1) ────────────────────────────────────

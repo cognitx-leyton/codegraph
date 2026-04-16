@@ -30,15 +30,15 @@ Read-only Cypher against `bolt://localhost:7688`. Prefer this over manual `codeg
 
 ### `/graph-refresh` — update the graph
 
-Re-indexes this repo's Python package (`codegraph/codegraph/`) so `/graph` queries reflect the latest on-disk state. **Run it after any structural edit** — adding, removing, renaming, or moving classes / functions / methods / imports / decorators. Cosmetic edits don't need a refresh.
+Re-indexes this repo's Python package + its tests (`codegraph/codegraph/` + `codegraph/tests/`) so `/graph` queries reflect the latest on-disk state. **Run it after any structural edit** — adding, removing, renaming, or moving classes / functions / methods / imports / decorators. Cosmetic edits don't need a refresh.
 
 Takes ~5 seconds. Uses `--no-wipe` so other indexed graphs (e.g. Twenty) survive. See `.claude/commands/graph-refresh.md`.
 
 ### What's indexed (and what isn't)
 
-The slash commands point at `codegraph/codegraph/` — the Python package. That's ~18 files, 41 classes, 82 module functions, ~150 methods, all their decorators, and their intra-package imports. **Not indexed**: `codegraph/tests/`, the root-level `dependency_slicer.py`, `.venv`, the repo root's config files.
+The slash commands point at `codegraph/codegraph/` (the Python package) and `codegraph/tests/` (its test suite). The package is ~18 files, 41 classes, 82 module functions, ~150 methods; tests add another handful of files that pair back via `TESTS` edges where they share a directory with their production peer. **Not indexed**: the root-level `dependency_slicer.py`, `.venv`, the repo root's config files.
 
-If you want a query against tests or other paths, re-run `codegraph/.venv/bin/codegraph index . -p <path>` with the package scope you want.
+If you want a query against other paths, re-run `codegraph/.venv/bin/codegraph index . -p <path>` with the package scope you want.
 
 ### Prerequisites
 

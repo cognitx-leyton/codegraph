@@ -9,12 +9,13 @@ codegraph is a static snapshot of the codebase at index time. Edits after indexi
 
 ## What this does
 
-Re-parses every `.py` file under `codegraph/codegraph/` and upserts nodes / edges into Neo4j. **Does not wipe the rest of the graph** — Twenty (or any other indexed TS repos) stays untouched. Typical runtime: ~5 seconds for the codegraph package.
+Re-parses every `.py` file under `codegraph/codegraph/` and `codegraph/tests/` and upserts nodes / edges into Neo4j. **Does not wipe the rest of the graph** — Twenty (or any other indexed TS repos) stays untouched. Typical runtime: ~5 seconds for both packages.
 
 ```bash
 codegraph/.venv/bin/codegraph index \
     /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code \
     -p codegraph/codegraph \
+    -p codegraph/tests \
     --no-wipe \
     --skip-ownership
 ```

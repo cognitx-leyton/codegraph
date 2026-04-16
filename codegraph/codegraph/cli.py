@@ -36,7 +36,13 @@ from .resolver import (
     load_package_config,
     load_python_package_config,
 )
-from .schema import PackageNode, RouteNode
+from .schema import (
+    PackageNode,
+    PY_TEST_PREFIX,
+    PY_TEST_SUFFIX_TRAILING,
+    RouteNode,
+    TS_TEST_SUFFIXES,
+)
 from .utils.neo4j_json import clean_row
 
 app = typer.Typer(
@@ -51,15 +57,9 @@ DEFAULT_URI = os.environ.get("CODEGRAPH_NEO4J_URI", "bolt://localhost:7688")
 DEFAULT_USER = os.environ.get("CODEGRAPH_NEO4J_USER", "neo4j")
 DEFAULT_PASS = os.environ.get("CODEGRAPH_NEO4J_PASS", "codegraph123")
 
-TEST_SUFFIXES = (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx")
-PY_TEST_SUFFIXES = ("_test.py",)
-
-
 def _is_python_test_file(name_lower: str) -> bool:
     """Return True for conventional pytest file names (``test_*.py`` / ``*_test.py``)."""
-    return name_lower.startswith("test_") or any(
-        name_lower.endswith(s) for s in PY_TEST_SUFFIXES
-    )
+    return name_lower.startswith(PY_TEST_PREFIX) or name_lower.endswith(PY_TEST_SUFFIX_TRAILING)
 
 
 # ── top-level callback: enter REPL when no subcommand ───────────────
@@ -247,7 +247,7 @@ def _run_index(
             if pkg.language == "py":
                 is_test = _is_python_test_file(name_lower)
             else:
-                is_test = any(name_lower.endswith(suf) for suf in TEST_SUFFIXES)
+                is_test = any(name_lower.endswith(suf) for suf in TS_TEST_SUFFIXES)
             rel = str(p.resolve().relative_to(repo)).replace("\\", "/")
             if ignore_filter is not None and ignore_filter.should_ignore_file(rel):
                 continue
