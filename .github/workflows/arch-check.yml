@@ -22,9 +22,10 @@ on:
   # it lands on the shared branch, but a red dev blocks the whole team.
   # push:
   #   branches: [dev]
-  # Uncomment to allow manual runs from the Actions UI (useful for
-  # reproducing a failing check without pushing).
-  # workflow_dispatch:
+  # Manual runs from the Actions UI or `gh workflow run arch-check.yml
+  # --ref <branch>`. Useful for reproducing a failing check without pushing
+  # or creating a PR.
+  workflow_dispatch:
 
 jobs:
   arch-check:
