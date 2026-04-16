@@ -490,17 +490,22 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
 
         # -- Phase 4: method CALLS --
         for caller_mid, recv_kind, recv_name, target_method in result.method_calls:
-            # Figure out target class
-            target_class_id = _resolve_call_target_class(
-                rel, caller_mid, recv_kind, recv_name, index
-            )
+            # Figure out target class (super() takes a special path).
+            if recv_kind == "super":
+                target_class_id = _resolve_super_target_class(
+                    rel, caller_mid, result, index, resolver
+                )
+            else:
+                target_class_id = _resolve_call_target_class(
+                    rel, caller_mid, recv_kind, recv_name, index
+                )
             if target_class_id is None:
                 continue
             # Does target class have target_method?
             key = (target_class_id, target_method)
             if key in index.method_by_class_and_name:
                 m = index.method_by_class_and_name[key]
-                confidence = "typed" if recv_kind in ("this", "this.field") else "name"
+                confidence = "typed" if recv_kind in ("this", "this.field", "super") else "name"
                 edges.append(Edge(
                     kind=CALLS,
                     src_id=caller_mid,
@@ -620,6 +625,35 @@ def _resolve_call_target_class(
         if len(hits) == 1:
             return f"class:{hits[0]}#{recv_name}"
     return None
+
+
+def _resolve_super_target_class(
+    importer: str,
+    caller_mid: str,
+    result: ParseResult,
+    index: Index,
+    resolver: Resolver,
+) -> Optional[str]:
+    """Resolve the target class for a ``super().foo()`` call.
+
+    Walks the enclosing class's first parent in :attr:`ParseResult.class_extends`
+    and returns the parent's ``class:{file}#{name}`` id, or ``None`` if the
+    parent isn't in the indexed graph (external bases like ``Exception`` /
+    ``Enum`` / ``ABC`` fall through).
+    """
+    if not caller_mid.startswith("method:class:"):
+        return None
+    class_id = caller_mid[len("method:"):].rsplit("#", 1)[0]
+    cls_name = class_id.split("#", 1)[1] if "#" in class_id else ""
+    if not cls_name:
+        return None
+    parents = [p for (c, p) in result.class_extends if c == cls_name]
+    if not parents:
+        return None
+    target_file = _find_class(importer, parents[0], index, resolver)
+    if target_file is None:
+        return None
+    return f"class:{target_file}#{parents[0]}"
 
 
 def _capitalize_guess(name: str) -> str:

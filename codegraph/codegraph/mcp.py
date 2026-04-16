@@ -410,6 +410,78 @@ def find_class(name_pattern: str, limit: int = 50) -> list[dict]:
 
 
 @mcp.tool()
+def calls_from(
+    name: str,
+    file: Optional[str] = None,
+    max_depth: int = 1,
+    limit: int = 50,
+) -> list[dict]:
+    """Return what a function/method calls, optionally transitively.
+
+    Walks outgoing ``:CALLS`` edges from every ``:Function`` / ``:Method`` node
+    whose ``name`` matches. Targets can be functions, methods, or ``:External``
+    nodes (unresolved calls — stdlib, builtins, dynamic). Use ``file`` to
+    disambiguate collisions across modules.
+
+    Args:
+        name: Exact ``:Function.name`` or ``:Method.name`` to traverse from.
+        file: Optional exact file path to narrow the source node.
+        max_depth: 1 for direct calls, up to 5 for transitive reach.
+        limit: Max rows to return. Integer in 1..1000, default 50.
+    """
+    if not isinstance(max_depth, int) or not 1 <= max_depth <= 5:
+        return [{"error": "max_depth must be an integer in 1..5"}]
+    err = _validate_limit(limit)
+    if err:
+        return [{"error": err}]
+    cypher = (
+        "MATCH (src) WHERE (src:Function OR src:Method) AND src.name = $name "
+        "  AND ($file IS NULL OR src.file = $file) "
+        f"MATCH (src)-[:CALLS*1..{max_depth}]->(dst) "
+        "RETURN DISTINCT labels(dst)[0] AS kind, dst.name AS name, "
+        "       coalesce(dst.file, '') AS file, "
+        "       coalesce(dst.docstring, '') AS docstring "
+        f"ORDER BY file, name LIMIT {limit}"
+    )
+    return _run_read(cypher, name=name, file=file)
+
+
+@mcp.tool()
+def callers_of(
+    name: str,
+    file: Optional[str] = None,
+    max_depth: int = 1,
+    limit: int = 50,
+) -> list[dict]:
+    """Return who calls a function/method, optionally transitively.
+
+    Walks incoming ``:CALLS`` edges in reverse to the named target. Callers
+    are always ``:Function`` or ``:Method`` — only those emit calls. Use
+    ``file`` to disambiguate collisions.
+
+    Args:
+        name: Exact ``:Function.name`` or ``:Method.name`` to find callers of.
+        file: Optional exact file path to narrow the target node.
+        max_depth: 1 for direct callers, up to 5 for transitive reach.
+        limit: Max rows to return. Integer in 1..1000, default 50.
+    """
+    if not isinstance(max_depth, int) or not 1 <= max_depth <= 5:
+        return [{"error": "max_depth must be an integer in 1..5"}]
+    err = _validate_limit(limit)
+    if err:
+        return [{"error": err}]
+    cypher = (
+        "MATCH (dst) WHERE (dst:Function OR dst:Method) AND dst.name = $name "
+        "  AND ($file IS NULL OR dst.file = $file) "
+        f"MATCH (src)-[:CALLS*1..{max_depth}]->(dst) "
+        "WHERE src:Function OR src:Method "
+        "RETURN DISTINCT labels(src)[0] AS kind, src.name AS name, src.file AS file "
+        f"ORDER BY src.file, src.name LIMIT {limit}"
+    )
+    return _run_read(cypher, name=name, file=file)
+
+
+@mcp.tool()
 def describe_function(name: str, file: Optional[str] = None) -> list[dict]:
     """Return rich signature info for functions and methods matching ``name``.
 

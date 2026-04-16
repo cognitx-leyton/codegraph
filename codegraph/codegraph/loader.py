@@ -1,6 +1,7 @@
 """Neo4j writer: constraints, batched UNWIND-MERGE, idempotent. Phases 1-8."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -51,6 +52,8 @@ from .schema import (
     USES_OPERATION,
     WRITES_ATOM,
 )
+
+log = logging.getLogger(__name__)
 
 
 BATCH = 1000
@@ -444,6 +447,7 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
     # Partition
     buckets: dict[str, list] = {}
     dec_class: list = []
+    dec_func: list = []
     dec_method: list = []
 
     for e in edges:
@@ -454,8 +458,12 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
             dname = e.dst_id[len("dec:"):]
             if e.src_id.startswith("class:"):
                 dec_class.append(dict(src=e.src_id, name=dname))
+            elif e.src_id.startswith("func:"):
+                dec_func.append(dict(src=e.src_id, name=dname))
             elif e.src_id.startswith("method:"):
                 dec_method.append(dict(src=e.src_id, name=dname))
+            else:
+                log.debug("DECORATED_BY edge with unknown src prefix dropped: %r", e.src_id)
             continue
 
         if e.kind == IMPORTS:
@@ -657,11 +665,17 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
     """, dec_class)
     _run(session, """
         UNWIND $rows AS r
+        MATCH (a:Function {id: r.src})
+        MATCH (d:Decorator {name: r.name})
+        MERGE (a)-[:DECORATED_BY]->(d)
+    """, dec_func)
+    _run(session, """
+        UNWIND $rows AS r
         MATCH (a:Method {id: r.src})
         MATCH (d:Decorator {name: r.name})
         MERGE (a)-[:DECORATED_BY]->(d)
     """, dec_method)
-    stats.edges[DECORATED_BY] = len(dec_class) + len(dec_method)
+    stats.edges[DECORATED_BY] = len(dec_class) + len(dec_func) + len(dec_method)
 
 
 def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:

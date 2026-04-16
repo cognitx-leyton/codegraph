@@ -19,7 +19,7 @@ from codegraph.resolver import (
     link_cross_file,
     load_python_package_config,
 )
-from codegraph.schema import IMPORTS, IMPORTS_SYMBOL
+from codegraph.schema import CALLS, IMPORTS, IMPORTS_SYMBOL
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -230,3 +230,82 @@ def test_ts_import_unaffected_by_python_dispatch(tmp_path: Path):
     # The TS path would try pkg/a/../.b + TS extensions; none exist, so None.
     # (We just want no crash and no accidental Python resolution.)
     assert result is None or not result.endswith(".py")
+
+
+# ── Phase 4: method CALLS resolution (Python) ───────────────────────
+
+
+def _calls_edges(edges):
+    return [e for e in edges if e.kind == CALLS]
+
+
+def test_self_call_resolves_typed(tmp_path: Path):
+    """``self.foo()`` inside the same class → typed CALLS edge."""
+    _build_pkg(tmp_path, {
+        "pkg/__init__.py": "",
+        "pkg/a.py": (
+            "class A:\n"
+            "    def run(self):\n"
+            "        self.foo()\n"
+            "    def foo(self):\n"
+            "        pass\n"
+        ),
+    })
+    _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
+    calls = _calls_edges(edges)
+    assert any(
+        e.src_id == "method:class:pkg/a.py#A#run"
+        and e.dst_id == "method:class:pkg/a.py#A#foo"
+        and e.props.get("confidence") == "typed"
+        for e in calls
+    ), f"expected typed self.foo() edge; got {calls}"
+
+
+def test_super_call_resolves_to_parent(tmp_path: Path):
+    """``super().run()`` resolves via ``class_extends`` to the parent method."""
+    _build_pkg(tmp_path, {
+        "pkg/__init__.py": "",
+        "pkg/base.py": (
+            "class B:\n"
+            "    def run(self):\n"
+            "        pass\n"
+        ),
+        "pkg/child.py": (
+            "from .base import B\n"
+            "class A(B):\n"
+            "    def run(self):\n"
+            "        super().run()\n"
+        ),
+    })
+    _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
+    calls = _calls_edges(edges)
+    assert any(
+        e.src_id == "method:class:pkg/child.py#A#run"
+        and e.dst_id == "method:class:pkg/base.py#B#run"
+        and e.props.get("confidence") == "typed"
+        for e in calls
+    ), f"expected typed super().run() edge; got {calls}"
+
+
+def test_cls_call_resolves_like_self(tmp_path: Path):
+    """``cls.foo()`` inside a classmethod resolves to the enclosing class."""
+    _build_pkg(tmp_path, {
+        "pkg/__init__.py": "",
+        "pkg/a.py": (
+            "class A:\n"
+            "    @classmethod\n"
+            "    def make(cls):\n"
+            "        cls.foo()\n"
+            "    @classmethod\n"
+            "    def foo(cls):\n"
+            "        pass\n"
+        ),
+    })
+    _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
+    calls = _calls_edges(edges)
+    assert any(
+        e.src_id == "method:class:pkg/a.py#A#make"
+        and e.dst_id == "method:class:pkg/a.py#A#foo"
+        and e.props.get("confidence") == "typed"
+        for e in calls
+    ), f"expected typed cls.foo() edge; got {calls}"

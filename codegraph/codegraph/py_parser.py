@@ -61,6 +61,19 @@ from .schema import (
 )
 
 
+def _descend(root):
+    """Iterative depth-first descent over a tree-sitter subtree.
+
+    Yields every descendant (including ``root``). Uses an explicit stack to
+    avoid Python recursion limits on deep method bodies.
+    """
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(node.children)
+
+
 class PyParserUnavailable(RuntimeError):
     """Raised when ``tree-sitter-python`` is not installed.
 
@@ -389,6 +402,96 @@ class _PyWalker:
                     src_id=method.id,
                     dst_id=f"dec:{dname}",
                 ))
+
+        # Method call graph (Phase 4 input — consumed by resolver)
+        body = self._child_by_field(node, "body")
+        if body is not None:
+            self._scan_body_for_calls(body, method)
+
+    # ── call classification ──────────────────────────────────────────
+
+    def _scan_body_for_calls(self, body, method: MethodNode) -> None:
+        """Walk every ``call`` node under a method body and emit call-graph refs.
+
+        Populates ``result.method_calls`` — the resolver then wires typed +
+        name-based :data:`~.schema.CALLS` edges across files in Phase 4.
+        Descendant walk catches calls nested in ``if`` / ``for`` / lambdas /
+        comprehensions.
+        """
+        for node in _descend(body):
+            if node.type != "call":
+                continue
+            fn = node.child_by_field_name("function")
+            if fn is None:
+                continue
+            recv_kind, recv_name, target = self._classify_py_call(fn)
+            if target:
+                self.result.method_calls.append(
+                    (method.id, recv_kind, recv_name or "", target)
+                )
+
+    def _classify_py_call(self, fn) -> tuple[str, Optional[str], Optional[str]]:
+        """Classify a ``call``'s function subexpression.
+
+        Returns ``(receiver_kind, receiver_name, target_method)`` using the TS
+        vocabulary so :mod:`~.resolver` Phase 4 logic slots in unchanged:
+
+        - ``"this"`` — resolver treats as ``confidence="typed"``. Used for
+          ``self.foo()`` and ``cls.foo()`` (classmethod invokes MRO like self).
+        - ``"this.field"`` — also typed; ``self.svc.run()``.
+        - ``"super"`` — new; resolver resolves via the enclosing class's first
+          ``class_extends`` parent (see :func:`.resolver.link_cross_file`).
+        - ``"name"`` — name-based resolution, ``confidence="name"``.
+
+        Falls back to ``("", None, None)`` when we can't identify a target.
+        """
+        if fn.type == "identifier":
+            # Bare call: foo()
+            return "name", None, self._text(fn)
+
+        if fn.type == "attribute":
+            obj = fn.child_by_field_name("object")
+            attr = fn.child_by_field_name("attribute")
+            if obj is None or attr is None:
+                return "", None, None
+            attr_name = self._text(attr)
+
+            # super().foo() — function-valued receiver, special-case super first.
+            if obj.type == "call":
+                obj_fn = obj.child_by_field_name("function")
+                if (obj_fn is not None
+                        and obj_fn.type == "identifier"
+                        and self._text(obj_fn) == "super"):
+                    return "super", None, attr_name
+                # get_obj().foo() — keep target, drop receiver name.
+                return "name", None, attr_name
+
+            # self.foo() / cls.foo() / obj.foo()
+            if obj.type == "identifier":
+                obj_name = self._text(obj)
+                if obj_name in ("self", "cls"):
+                    return "this", None, attr_name
+                return "name", obj_name, attr_name
+
+            # self.field.foo() or a.b.c.foo()
+            if obj.type == "attribute":
+                inner_obj = obj.child_by_field_name("object")
+                inner_attr = obj.child_by_field_name("attribute")
+                if inner_obj is None or inner_attr is None:
+                    return "", None, None
+                if (inner_obj.type == "identifier"
+                        and self._text(inner_obj) in ("self", "cls")):
+                    return "this.field", self._text(inner_attr), attr_name
+                # Deeper chain (a.b.c.m()) — use the immediately-preceding
+                # attribute as the receiver name; best-effort name resolution.
+                return "name", self._text(inner_attr), attr_name
+
+            # Subscripts (a[0].m()), parenthesized wrappers — keep target only.
+            return "name", None, attr_name
+
+        # Parenthesized / walrus / anything else — skip (descendant walk
+        # still finds inner calls via separate visits).
+        return "", None, None
 
     # ── functions (module level) ──────────────────────────────────────
 
