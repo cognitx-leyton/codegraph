@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(codegraph:*)",
+      "Bash(codegraph query:*)",
+      "Bash(codegraph index:*)",
+      "Bash(codegraph validate:*)",
+      "Bash(codegraph/.venv/bin/codegraph:*)",
+      "Bash(.venv/bin/codegraph:*)",
+      "Bash(python -m codegraph.cli:*)",
+      "Bash(python -m compileall:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(pip install:*)",
+      "Bash(docker:*)",
+      "Bash(docker compose:*)"
+    ]
+  }
+}

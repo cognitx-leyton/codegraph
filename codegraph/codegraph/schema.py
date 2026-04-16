@@ -2,10 +2,56 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from .framework import FrameworkInfo
 
 
 # ── Nodes ────────────────────────────────────────────────────
+
+@dataclass
+class PackageNode:
+    """A monorepo package with per-package framework detection.
+
+    Mirrors :class:`codegraph.framework.FrameworkInfo` as a flat set of
+    properties so every field is queryable directly in Cypher without a join.
+    The ``name`` matches the ``package`` string already stored on
+    :class:`FileNode`, and :class:`FileNode` → :class:`PackageNode` is wired
+    via ``BELONGS_TO`` at load time (see :mod:`codegraph.loader`).
+    """
+    name: str
+    framework: str                                  # display name: "React", "Next.js", "Odoo", ...
+    framework_version: Optional[str] = None
+    typescript: bool = False
+    styling: list[str] = field(default_factory=list)
+    router: Optional[str] = None
+    state_management: list[str] = field(default_factory=list)
+    ui_library: Optional[str] = None
+    build_tool: Optional[str] = None
+    package_manager: Optional[str] = None
+    confidence: float = 0.0
+
+    @property
+    def id(self) -> str:
+        return f"package:{self.name}"
+
+    @classmethod
+    def from_framework_info(cls, name: str, info: "FrameworkInfo") -> "PackageNode":
+        return cls(
+            name=name,
+            framework=info.display_name,
+            framework_version=info.version,
+            typescript=info.typescript,
+            styling=list(info.styling),
+            router=info.router,
+            state_management=list(info.state_management),
+            ui_library=info.ui_library,
+            build_tool=info.build_tool,
+            package_manager=info.package_manager,
+            confidence=info.confidence,
+        )
+
 
 @dataclass
 class FileNode:
@@ -50,6 +96,9 @@ class FunctionNode:
     file: str
     is_component: bool = False
     exported: bool = False
+    docstring: str = ""
+    return_type: str = ""
+    params_json: str = "[]"
 
     @property
     def id(self) -> str:
@@ -77,6 +126,7 @@ class MethodNode:
     visibility: str = "public"   # public | private | protected
     return_type: str = ""
     params_json: str = "[]"
+    docstring: str = ""
 
     @property
     def id(self) -> str:
@@ -237,7 +287,16 @@ DEFINES_ATOM      = "DEFINES_ATOM"
 READS_ATOM        = "READS_ATOM"
 WRITES_ATOM       = "WRITES_ATOM"
 READS_ENV         = "READS_ENV"
-RENDERS_COMPONENT = "RENDERS_COMPONENT"
+
+# Phase 9 — package / framework detection
+BELONGS_TO        = "BELONGS_TO"
+
+
+# ── Test-file pairing conventions ────────────────────────────
+TS_TEST_SUFFIXES = (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx")
+PY_TEST_SUFFIX_TRAILING = "_test.py"       # foo_test.py ↔ foo.py
+PY_TEST_PREFIX = "test_"                   # test_foo.py ↔ foo.py
+PY_CONFTEST_FILENAME = "conftest.py"       # no pairing
 
 
 # ── Import spec (Phase 1) ────────────────────────────────────

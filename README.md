@@ -71,11 +71,46 @@ All answered in single-digit milliseconds, with zero tokens spent on retrieving 
 
 ### Exposing the graph to Claude via MCP
 
-A first-class **[Model Context Protocol](https://modelcontextprotocol.io/)** server wrapping the graph is on the [Roadmap](#-roadmap). In the meantime, you can:
+codegraph ships a first-class **[Model Context Protocol](https://modelcontextprotocol.io/)** stdio server. Install the optional extra, add one block to Claude Code's config, and five typed tools appear in the agent's tool menu — no more shelling out to `codegraph query`.
 
-- Let Claude Code shell out to `codegraph query "<cypher>"` via its bash tool.
-- Write a small MCP server that exposes a `query_graph` tool backed by the Neo4j driver.
-- Query Bolt directly from any agent framework that supports custom tools.
+```bash
+pip install "codegraph[mcp]"
+```
+
+In `~/.claude.json` (or your Claude Desktop config):
+
+```json
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "codegraph-mcp",
+      "type": "stdio",
+      "env": {
+        "CODEGRAPH_NEO4J_URI":  "bolt://localhost:7688",
+        "CODEGRAPH_NEO4J_USER": "neo4j",
+        "CODEGRAPH_NEO4J_PASS": "codegraph123"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Code. Five tools become available:
+
+| Tool | Purpose |
+| --- | --- |
+| `query_graph(cypher, limit)` | Read-only Cypher escape hatch. Writes are rejected at the session level, so an LLM-generated `DROP`/`DELETE` can't mutate the graph. |
+| `describe_schema()` | Labels, relationship types, and per-label node counts — cheap way for an agent to learn what's in the graph at session start. |
+| `list_packages()` | Every indexed monorepo package with its detected framework, version, TypeScript flag, package manager, and detection confidence. |
+| `callers_of_class(class_name, max_depth)` | Blast-radius traversal over `INJECTS` / `EXTENDS` / `IMPLEMENTS`. The canonical "what breaks if I rename X" query. |
+| `endpoints_for_controller(controller_name)` | HTTP routes exposed by a NestJS controller class (method + path + handler). |
+| `files_in_package(name, limit)` | List files belonging to a `:Package` by name. |
+| `hook_usage(hook_name, limit)` | Which components / functions use a given React hook. |
+| `gql_operation_callers(op_name, op_type, limit)` | Who calls a GraphQL query / mutation / subscription, optionally narrowed by type. |
+| `most_injected_services(limit)` | Rank `@Injectable` classes by number of unique callers — the classic "DI hub detection" query. |
+| `find_class(name_pattern, limit)` | Case-sensitive substring search over class names, backed by the `class_name` index. |
+
+All ten tools share a single long-lived Neo4j driver and open sessions in `READ_ACCESS` mode. Configuration is env-var only (the same `CODEGRAPH_NEO4J_*` vars the CLI uses). The server is stdio-only — no network exposure.
 
 ## 🏗️ Architecture
 
@@ -106,9 +141,11 @@ docker compose up -d
 # Browser UI:  http://localhost:7475   (neo4j / codegraph123)
 # Bolt:        bolt://localhost:7688
 
-# 3. Index a repo (scoped to the packages you care about)
+# 3. Tell codegraph which packages in your monorepo to index.
+#    Either drop a codegraph.toml at the repo root (see Configuration below)
+#    or pass --package flags:
 .venv/bin/python -m codegraph.cli index /path/to/your-monorepo \
-  --package twenty-server --package twenty-front
+  --package packages/server --package packages/web
 
 # 4. Sanity-check the load
 .venv/bin/python -m codegraph.cli validate /path/to/your-monorepo
@@ -124,6 +161,7 @@ docker compose up -d
 
 | Kind | Examples / notes |
 | --- | --- |
+| `Package` | One per configured monorepo package with detected `framework` (React / Next.js / Vue / Angular / Svelte / SvelteKit / **NestJS** / Odoo), `framework_version`, `typescript`, `styling`, `router`, `state_management`, `ui_library`, `build_tool`, `package_manager`, and a detection `confidence`. Framework detection walks up to the monorepo root for lockfiles + workspace-hoisted dependencies. |
 | `File` | TS/TSX files with language, LOC, and framework flags (`is_controller`, `is_component`, …) |
 | `Class` | NestJS controllers, injectables, modules, entities, resolvers |
 | `Function` | Exported functions and React components |
@@ -135,7 +173,7 @@ docker compose up -d
 
 **Edges**
 
-`IMPORTS`, `IMPORTS_EXTERNAL`, `DEFINES_CLASS`, `DEFINES_FUNC`, `DEFINES_IFACE`, `EXPOSES`, `INJECTS`, `EXTENDS`, `IMPLEMENTS`, `RENDERS`, `USES_HOOK`, `DECORATED_BY`.
+`IMPORTS`, `IMPORTS_EXTERNAL`, `DEFINES_CLASS`, `DEFINES_FUNC`, `DEFINES_IFACE`, `EXPOSES`, `INJECTS`, `EXTENDS`, `IMPLEMENTS`, `RENDERS`, `USES_HOOK`, `DECORATED_BY`, `BELONGS_TO` (File → Package).
 
 ## 🔎 Example queries
 
@@ -165,7 +203,62 @@ See [`codegraph/queries.md`](codegraph/queries.md) for the full catalogue.
 
 ## ⚙️ Configuration
 
-Neo4j connection is controlled via environment variables (defaults match the bundled Docker Compose):
+### Project config — `codegraph.toml`
+
+`codegraph` has **no hardcoded packages**. You tell it which packages to index via a `codegraph.toml` at the repo root, a `[tool.codegraph]` block in your existing `pyproject.toml`, or `--package` flags on the CLI. Config file values are loaded first; CLI flags override them.
+
+**`codegraph.toml`** (preferred — a standalone file, no interference with Python tooling):
+
+```toml
+# Paths are relative to the repo root. Each entry should be a TypeScript
+# package directory (i.e. contain a package.json / tsconfig.json so path
+# aliases can be resolved).
+packages = [
+  "packages/server",
+  "packages/web",
+]
+
+# Optional — these extend the built-in defaults, they don't replace them.
+exclude_dirs     = ["custom-build", "fixtures"]
+exclude_suffixes = [".gen.ts"]
+```
+
+**`pyproject.toml`** (if you already have one and want everything in one place):
+
+```toml
+[tool.codegraph]
+packages = ["packages/server", "packages/web"]
+```
+
+**CLI override** — wins over either file:
+
+```bash
+codegraph index . --package packages/server --package packages/web
+```
+
+If no config file exists and no `--package` flags are passed, `index` stops with a clear error. There are no Twenty-specific or other defaults.
+
+### Python support (`.py` indexing)
+
+codegraph also indexes Python codebases. The detector auto-picks the language based on the package directory: if the directory contains `__init__.py`, it's parsed as Python; otherwise it's parsed as TypeScript (with `tsconfig.json` / `package.json`).
+
+Install the optional `[python]` extra to enable the Python frontend:
+
+```bash
+pip install "codegraph[python]"
+```
+
+Then point `--package` at a Python package root (the directory containing `__init__.py`):
+
+```bash
+codegraph index . --package src/my_package
+```
+
+Stage 1 indexes: modules (`.py` files), classes, functions, methods, imports (relative + absolute + `import x as y`), class inheritance, and decorators. Framework detection (FastAPI / Flask / Django / Typer / pytest) and route extraction land in Stage 2.
+
+### Neo4j connection
+
+Controlled via environment variables (defaults match the bundled `docker-compose.yml`):
 
 | Variable | Default |
 | --- | --- |
@@ -173,13 +266,36 @@ Neo4j connection is controlled via environment variables (defaults match the bun
 | `CODEGRAPH_NEO4J_USER` | `neo4j` |
 | `CODEGRAPH_NEO4J_PASS` | `codegraph123` |
 
-Indexing excludes `node_modules`, `dist`, `build`, `.next`, `.turbo`, `coverage`, generated directories, and test/story/declaration files by default. Override with `--package` to scope to specific monorepo packages.
+### File walk exclusions
+
+Indexing always skips `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.nuxt`, `.svelte-kit`, `.vercel`, `coverage`, `generated`, `__generated__`, `.cache`, `.parcel-cache`, plus `*.d.ts` and `*.stories.{ts,tsx}`. Add to these via `exclude_dirs` / `exclude_suffixes` in your config — those keys **extend** the defaults, they don't replace them.
+
+### `.codegraphignore`
+
+For **confidential routes, components, or files** that shouldn't reach the graph (and therefore shouldn't reach any LLM agent querying it), drop a `.codegraphignore` file at the repo root. Syntax is gitignore-style, plus two codegraph extensions:
+
+```gitignore
+# Standard gitignore — file paths
+**/admin/**
+**/*.secret.ts
+!**/admin/public/**         # negation — re-include a subtree
+
+# Route patterns — match RouteNode.path
+@route:/admin/*
+@route:/settings/system/*
+
+# Component patterns — match React component / NestJS class names
+@component:*Admin*
+@component:*UserManagement*
+```
+
+Override the default location with `--ignore-file PATH` on the CLI or `ignore_file = "custom/.ignore"` in `codegraph.toml`. `.codegraphignore` is **additive** on top of `BASE_EXCLUDE_DIRS` — it doesn't replace them.
 
 ## 🛣️ Roadmap
 
 - Incremental re-indexing on file changes
 - Python and Go language frontends
-- First-class MCP server exposing the graph to LLM agents
+- ~~First-class MCP server exposing the graph to LLM agents~~ — **shipped** (see [Exposing the graph to Claude via MCP](#exposing-the-graph-to-claude-via-mcp))
 - Pre-built RAG retrievers for common architecture questions
 
 ## 🤝 Contributing

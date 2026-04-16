@@ -1,6 +1,7 @@
 """Neo4j writer: constraints, batched UNWIND-MERGE, idempotent. Phases 1-8."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -8,6 +9,7 @@ from neo4j import Driver, GraphDatabase
 
 from .resolver import Index
 from .schema import (
+    BELONGS_TO,
     CALLS,
     CALLS_ENDPOINT,
     CONTRIBUTED_BY,
@@ -34,21 +36,27 @@ from .schema import (
     INJECTS,
     LAST_MODIFIED_BY,
     OWNED_BY,
+    PackageNode,
     PROVIDES,
+    PY_CONFTEST_FILENAME,
+    PY_TEST_PREFIX,
+    PY_TEST_SUFFIX_TRAILING,
     READS_ATOM,
     READS_ENV,
     RELATES_TO,
     RENDERS,
-    RENDERS_COMPONENT,
     REPOSITORY_OF,
     RESOLVES,
     RETURNS,
     TESTS,
     TESTS_CLASS,
+    TS_TEST_SUFFIXES,
     USES_HOOK,
     USES_OPERATION,
     WRITES_ATOM,
 )
+
+log = logging.getLogger(__name__)
 
 
 BATCH = 1000
@@ -72,6 +80,7 @@ _CONSTRAINTS = [
     "CREATE CONSTRAINT author_email IF NOT EXISTS FOR (n:Author) REQUIRE n.email IS UNIQUE",
     "CREATE CONSTRAINT team_name IF NOT EXISTS FOR (n:Team) REQUIRE n.name IS UNIQUE",
     "CREATE CONSTRAINT route_id IF NOT EXISTS FOR (n:Route) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT package_name IF NOT EXISTS FOR (n:Package) REQUIRE n.name IS UNIQUE",
 ]
 
 _INDEXES = [
@@ -97,6 +106,8 @@ class LoadStats:
     columns: int = 0
     gql_operations: int = 0
     atoms: int = 0
+    packages: int = 0
+    belongs_to_edges: int = 0
     edges: dict = field(default_factory=dict)
 
 
@@ -192,6 +203,10 @@ class Neo4jLoader:
                 SET f:TestFile
             """, [dict(path=f.path) for f in files if f.is_test])
 
+            # ── Packages + BELONGS_TO edges ───────────────────────
+            _write_packages(s, index.packages, stats)
+            _write_belongs_to(s, files, stats)
+
             # ── Classes ───────────────────────────────────────────
             _run(s, """
                 UNWIND $rows AS r
@@ -232,13 +247,17 @@ class Neo4jLoader:
                 UNWIND $rows AS r
                 MERGE (n:Function {id: r.id})
                 SET n.name = r.name, n.file = r.file,
-                    n.is_component = r.is_component, n.exported = r.exported
+                    n.is_component = r.is_component, n.exported = r.exported,
+                    n.docstring = r.docstring, n.return_type = r.return_type,
+                    n.params_json = r.params_json
                 WITH n, r
                 MATCH (f:File {path: r.file})
                 MERGE (f)-[:DEFINES_FUNC]->(n)
             """, [
                 dict(id=f.id, name=f.name, file=f.file,
-                     is_component=f.is_component, exported=f.exported)
+                     is_component=f.is_component, exported=f.exported,
+                     docstring=f.docstring, return_type=f.return_type,
+                     params_json=f.params_json)
                 for f in funcs
             ])
             _run(s, "UNWIND $rows AS r MATCH (f:Function {id: r.id}) SET f:Component",
@@ -251,14 +270,19 @@ class Neo4jLoader:
                 SET n.name = r.name, n.file = r.file,
                     n.is_static = r.is_static, n.is_async = r.is_async,
                     n.is_constructor = r.is_constructor,
-                    n.visibility = r.visibility
+                    n.visibility = r.visibility,
+                    n.return_type = r.return_type,
+                    n.params_json = r.params_json,
+                    n.docstring = r.docstring
                 WITH n, r
                 MATCH (c:Class {id: r.class_id})
                 MERGE (c)-[:HAS_METHOD]->(n)
             """, [
                 dict(id=m.id, name=m.name, file=m.file, class_id=m.class_id,
                      is_static=m.is_static, is_async=m.is_async,
-                     is_constructor=m.is_constructor, visibility=m.visibility)
+                     is_constructor=m.is_constructor, visibility=m.visibility,
+                     return_type=m.return_type, params_json=m.params_json,
+                     docstring=m.docstring)
                 for m in methods
             ])
 
@@ -365,10 +389,68 @@ def _run(session, cypher: str, rows: list) -> None:
         session.run(cypher, rows=chunk)
 
 
+def _write_packages(session, packages: list[PackageNode], stats: LoadStats) -> None:
+    """MERGE one ``:Package`` node per configured monorepo package.
+
+    All :class:`~.framework.FrameworkInfo` fields are flattened onto the node
+    so queries can branch by stack in a single hop. The ``name`` is the unique
+    key and matches the ``package`` string property on every :class:`FileNode`.
+    """
+    rows = [
+        dict(
+            name=p.name,
+            framework=p.framework,
+            framework_version=p.framework_version,
+            typescript=p.typescript,
+            styling=p.styling,
+            router=p.router,
+            state_management=p.state_management,
+            ui_library=p.ui_library,
+            build_tool=p.build_tool,
+            package_manager=p.package_manager,
+            confidence=p.confidence,
+        )
+        for p in packages
+    ]
+    _run(session, """
+        UNWIND $rows AS r
+        MERGE (p:Package {name: r.name})
+        SET p.framework         = r.framework,
+            p.framework_version = r.framework_version,
+            p.typescript        = r.typescript,
+            p.styling           = r.styling,
+            p.router            = r.router,
+            p.state_management  = r.state_management,
+            p.ui_library        = r.ui_library,
+            p.build_tool        = r.build_tool,
+            p.package_manager   = r.package_manager,
+            p.confidence        = r.confidence
+    """, rows)
+    stats.packages = len(rows)
+
+
+def _write_belongs_to(session, files, stats: LoadStats) -> None:
+    """MERGE ``(f:File)-[:BELONGS_TO]->(p:Package)`` for every file.
+
+    The edge is redundant with :attr:`FileNode.package` (which stays for the
+    existing ``file_package`` index) but makes Cypher patterns one hop cleaner,
+    e.g. ``MATCH (f:File)-[:BELONGS_TO]->(p:Package {framework:'Next.js'})``.
+    """
+    rows = [dict(path=f.path, package=f.package) for f in files if f.package]
+    _run(session, """
+        UNWIND $rows AS r
+        MATCH (f:File {path: r.path})
+        MATCH (p:Package {name: r.package})
+        MERGE (f)-[:BELONGS_TO]->(p)
+    """, rows)
+    stats.belongs_to_edges = len(rows)
+
+
 def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
     # Partition
     buckets: dict[str, list] = {}
     dec_class: list = []
+    dec_func: list = []
     dec_method: list = []
 
     for e in edges:
@@ -379,8 +461,12 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
             dname = e.dst_id[len("dec:"):]
             if e.src_id.startswith("class:"):
                 dec_class.append(dict(src=e.src_id, name=dname))
+            elif e.src_id.startswith("func:"):
+                dec_func.append(dict(src=e.src_id, name=dname))
             elif e.src_id.startswith("method:"):
                 dec_method.append(dict(src=e.src_id, name=dname))
+            else:
+                log.debug("DECORATED_BY edge with unknown src prefix dropped: %r", e.src_id)
             continue
 
         if e.kind == IMPORTS:
@@ -557,20 +643,21 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
     """, buckets.get(CALLS, []))
     stats.edges[CALLS] = len(buckets.get(CALLS, []))
 
+    handles_endpoint = [r for r in buckets.get(HANDLES, []) if r["dst"].startswith("endpoint:")]
+    handles_gqlop = [r for r in buckets.get(HANDLES, []) if r["dst"].startswith("gqlop:")]
     _run(session, """
         UNWIND $rows AS r
         MATCH (m:Method {id: r.src})
         MATCH (e:Endpoint {id: r.dst})
         MERGE (m)-[:HANDLES]->(e)
-    """, [row for row in buckets.get(HANDLES, []) if ":Endpoint" or "endpoint:" in row["dst"]])
-    # Also method -> GraphQL operation for HANDLES (distinct query)
+    """, handles_endpoint)
     _run(session, """
         UNWIND $rows AS r
         MATCH (m:Method {id: r.src})
         MATCH (o:GraphQLOperation {id: r.dst})
         MERGE (m)-[:HANDLES]->(o)
-    """, buckets.get(HANDLES, []))
-    stats.edges[HANDLES] = len(buckets.get(HANDLES, []))
+    """, handles_gqlop)
+    stats.edges[HANDLES] = len(handles_endpoint) + len(handles_gqlop)
 
     # Decorator edges
     _run(session, """
@@ -581,11 +668,17 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
     """, dec_class)
     _run(session, """
         UNWIND $rows AS r
+        MATCH (a:Function {id: r.src})
+        MATCH (d:Decorator {name: r.name})
+        MERGE (a)-[:DECORATED_BY]->(d)
+    """, dec_func)
+    _run(session, """
+        UNWIND $rows AS r
         MATCH (a:Method {id: r.src})
         MATCH (d:Decorator {name: r.name})
         MERGE (a)-[:DECORATED_BY]->(d)
     """, dec_method)
-    stats.edges[DECORATED_BY] = len(dec_class) + len(dec_method)
+    stats.edges[DECORATED_BY] = len(dec_class) + len(dec_func) + len(dec_method)
 
 
 def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
@@ -624,7 +717,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
         MATCH (a:Atom {name: r.atom_name})
         MERGE (fn)-[:READS_ATOM]->(a)
     """, atom_reads)
-    stats.edges[READS_ATOM] = len(atom_reads)
+    rec = session.run("MATCH ()-[r:READS_ATOM]->() RETURN count(r) AS v").single()
+    stats.edges[READS_ATOM] = int(rec["v"]) if rec else 0
 
     _run(session, """
         UNWIND $rows AS r
@@ -632,7 +726,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
         MATCH (a:Atom {name: r.atom_name})
         MERGE (fn)-[:WRITES_ATOM]->(a)
     """, atom_writes)
-    stats.edges[WRITES_ATOM] = len(atom_writes)
+    rec = session.run("MATCH ()-[r:WRITES_ATOM]->() RETURN count(r) AS v").single()
+    stats.edges[WRITES_ATOM] = int(rec["v"]) if rec else 0
 
     _run(session, """
         UNWIND $rows AS r
@@ -660,7 +755,15 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
 
 
 def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
-    """Link *.spec.ts / *.test.ts to their production peer by filename."""
+    """Link test files to their production peer by filename.
+
+    TS: ``foo.spec.ts`` / ``foo.test.tsx`` → ``foo.ts`` / ``foo.tsx`` (same dir).
+    Python: ``test_foo.py`` / ``foo_test.py`` → ``foo.py`` (same dir only —
+    cross-directory pairing is ambiguous, deferred to Stage 2). ``conftest.py``
+    never pairs.
+    """
+    import posixpath
+
     rows: list = []
     rows_class: list = []
     files = index.files_by_path
@@ -668,17 +771,32 @@ def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
     for rel, r in files.items():
         if not r.file.is_test:
             continue
-        # Derive peer: foo.spec.ts -> foo.ts
         peer = None
-        for suf in (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx"):
-            if rel.endswith(suf):
-                base = rel[: -len(suf)]
-                for ext in (".ts", ".tsx"):
-                    cand = base + ext
-                    if cand in files:
-                        peer = cand
-                        break
-                break
+
+        # TS pairing
+        if rel.endswith(TS_TEST_SUFFIXES):
+            for suf in TS_TEST_SUFFIXES:
+                if rel.endswith(suf):
+                    base = rel[: -len(suf)]
+                    for ext in (".ts", ".tsx"):
+                        cand = base + ext
+                        if cand in files:
+                            peer = cand
+                            break
+                    break
+        # Python pairing — same directory only
+        elif rel.endswith(".py"):
+            dirpath, basename = posixpath.split(rel)
+            if basename == PY_CONFTEST_FILENAME:
+                continue
+            cand = None
+            if basename.endswith(PY_TEST_SUFFIX_TRAILING):
+                cand = posixpath.join(dirpath, basename[: -len(PY_TEST_SUFFIX_TRAILING)] + ".py")
+            elif basename.startswith(PY_TEST_PREFIX):
+                cand = posixpath.join(dirpath, basename[len(PY_TEST_PREFIX):])
+            if cand and cand in files:
+                peer = cand
+
         if peer:
             rows.append(dict(test=rel, peer=peer))
         # Also link by described subject
@@ -710,8 +828,6 @@ def _write_ownership(session, ownership: dict, stats: LoadStats) -> None:
     contribs = ownership.get("contributors", [])
     owned = ownership.get("owned_by", [])
 
-    _run(session, "UNWIND $rows AS r MERGE (:Author {email: r.email}) SET email = r.email",
-         [dict(email=a["email"], name=a.get("name", "")) for a in authors])
     _run(session, """
         UNWIND $rows AS r
         MERGE (a:Author {email: r.email})

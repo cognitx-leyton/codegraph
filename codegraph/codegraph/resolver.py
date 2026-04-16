@@ -22,6 +22,7 @@ from .schema import (
     IMPORTS_SYMBOL,
     INJECTS,
     MethodNode,
+    PackageNode,
     ParseResult,
     PROVIDES,
     RELATES_TO,
@@ -96,6 +97,7 @@ class PackageConfig:
     root: Path
     repo_root: Path
     aliases: dict[str, list[Path]] = field(default_factory=dict)
+    language: str = "ts"  # "ts" (TypeScript/TSX) or "py" (Python)
 
 
 def load_package_config(repo_root: Path, package_dir: Path) -> PackageConfig:
@@ -107,6 +109,25 @@ def load_package_config(repo_root: Path, package_dir: Path) -> PackageConfig:
             resolved.append((package_dir / t.rstrip("*")).resolve())
         cfg.aliases[alias_prefix] = resolved
     return cfg
+
+
+def load_python_package_config(repo_root: Path, package_dir: Path) -> PackageConfig:
+    """Build a :class:`PackageConfig` for a Python package directory.
+
+    Unlike TS, Python has no tsconfig equivalent — imports are resolved
+    purely by filesystem layout (relative imports walk up, absolute imports
+    match the top-level package name and resolve under the package root).
+    The returned config has ``language="py"`` and empty ``aliases``. The
+    ``name`` is the directory basename, which doubles as the Python
+    top-level package name (what ``from <name> import ...`` would use).
+    """
+    return PackageConfig(
+        name=package_dir.name,
+        root=package_dir.resolve(),
+        repo_root=repo_root.resolve(),
+        aliases={},
+        language="py",
+    )
 
 
 # ── Index ────────────────────────────────────────────────────
@@ -122,6 +143,8 @@ class Index:
     # Phase 3: endpoint lookup structures
     endpoint_nodes: list = field(default_factory=list)  # list of (EndpointNode, file_id)
     gql_operations: dict[tuple[str, str], list] = field(default_factory=dict)  # (op_type, name) -> list of (op, file)
+    # Phase 9: per-package framework detection
+    packages: list[PackageNode] = field(default_factory=list)
 
     def add(self, result: ParseResult) -> None:
         path = result.file.path
@@ -190,6 +213,11 @@ class Resolver:
         if not spec:
             return None
 
+        # Python files dispatch to their own resolver — TS logic (extension
+        # candidates, tsconfig aliases, .d.ts fallback) doesn't apply.
+        if self._is_python_file(importer_rel):
+            return self._resolve_python(importer_rel, spec)
+
         # Relative
         if spec.startswith("."):
             importer_abs = (self.repo_root / importer_rel).resolve()
@@ -219,14 +247,104 @@ class Resolver:
                         return hit
         return None
 
+    # ── Python resolution ─────────────────────────────────────────────
+
+    def _is_python_file(self, rel: str) -> bool:
+        """Check if ``rel`` lives under a Python package (``language=="py"``)."""
+        abs_path = (self.repo_root / rel).resolve()
+        for pkg in self.packages:
+            if pkg.language != "py":
+                continue
+            try:
+                abs_path.relative_to(pkg.root)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    def _resolve_python(self, importer_rel: str, spec: str) -> Optional[str]:
+        """Resolve a Python import specifier to a rel file path, or ``None``.
+
+        Three rules:
+
+        1. **Relative** (``.x`` / ``..x`` / ``.``): walk up ``dots - 1``
+           directories from the importer's parent, then resolve the
+           remainder as a module path.
+        2. **Absolute intra-package** (``codegraph.schema``): if the first
+           segment matches a Python package's ``name``, strip it and
+           resolve under the package root.
+        3. **External**: return ``None``; the caller emits an
+           ``IMPORTS_EXTERNAL`` edge.
+        """
+        # Count leading dots (relative import level).
+        leading_dots = 0
+        while leading_dots < len(spec) and spec[leading_dots] == ".":
+            leading_dots += 1
+
+        if leading_dots > 0:
+            remainder = spec[leading_dots:]
+            importer_abs = (self.repo_root / importer_rel).resolve()
+            base = importer_abs.parent
+            for _ in range(leading_dots - 1):
+                base = base.parent
+            return self._resolve_python_module(base, remainder)
+
+        # Absolute intra-package import: strip the top-level name.
+        first = spec.split(".")[0]
+        for pkg in self.packages:
+            if pkg.language != "py":
+                continue
+            if pkg.name == first:
+                remainder = ".".join(spec.split(".")[1:])
+                return self._resolve_python_module(pkg.root, remainder)
+
+        # External — the caller emits IMPORTS_EXTERNAL.
+        return None
+
+    def _resolve_python_module(self, base: Path, module_path: str) -> Optional[str]:
+        """Given a filesystem base + a dotted module path, find a ``.py`` file.
+
+        Tries the module as a plain file (``base/foo/bar.py``) first, then as
+        a package (``base/foo/bar/__init__.py``). Returns the repo-relative
+        path if found in the path index, else ``None``.
+        """
+        if self._path_index is None:
+            return None
+
+        if not module_path:
+            # ``from . import X`` → base/__init__.py
+            candidate = base / "__init__.py"
+            return self._path_index_membership(candidate)
+
+        parts = module_path.split(".")
+        # Try as .py file.
+        file_candidate = base.joinpath(*parts).with_suffix(".py")
+        hit = self._path_index_membership(file_candidate)
+        if hit is not None:
+            return hit
+        # Try as package: <parts>/__init__.py
+        pkg_candidate = base.joinpath(*parts) / "__init__.py"
+        return self._path_index_membership(pkg_candidate)
+
+    def _path_index_membership(self, candidate: Path) -> Optional[str]:
+        """Return the rel path if ``candidate`` is in the path index, else None."""
+        if self._path_index is None:
+            return None
+        try:
+            rel = str(candidate.resolve().relative_to(self.repo_root)).replace("\\", "/")
+        except ValueError:
+            return None
+        return rel if rel in self._path_index.files else None
+
 
 # ── URL matching for Phase 3 ─────────────────────────────────
 
 def _url_pattern_to_regex(path_template: str) -> re.Pattern:
-    """Convert '/rest/users/:id' → '^/rest/users/[^/]+$'."""
+    """Convert '/rest/users/:id' → '^/rest/users/[^/]+$' (with prefix tolerance)."""
     escaped = re.escape(path_template)
-    escaped = re.sub(r"\\:[A-Za-z_]\w*", r"[^/]+", escaped)
-    return re.compile(f"^{escaped}$")
+    escaped = re.sub(r"\\:[A-Za-z_]\w*", r"[^/?#]+", escaped)
+    # Allow trailing slashes / query strings
+    return re.compile(f"^{escaped}/?(?:[?#].*)?$")
 
 
 # ── Cross-file linker ────────────────────────────────────────
@@ -372,17 +490,22 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
 
         # -- Phase 4: method CALLS --
         for caller_mid, recv_kind, recv_name, target_method in result.method_calls:
-            # Figure out target class
-            target_class_id = _resolve_call_target_class(
-                rel, caller_mid, recv_kind, recv_name, index
-            )
+            # Figure out target class (super() takes a special path).
+            if recv_kind == "super":
+                target_class_id = _resolve_super_target_class(
+                    rel, caller_mid, result, index, resolver
+                )
+            else:
+                target_class_id = _resolve_call_target_class(
+                    rel, caller_mid, recv_kind, recv_name, index
+                )
             if target_class_id is None:
                 continue
             # Does target class have target_method?
             key = (target_class_id, target_method)
             if key in index.method_by_class_and_name:
                 m = index.method_by_class_and_name[key]
-                confidence = "typed" if recv_kind in ("this", "this.field") else "name"
+                confidence = "typed" if recv_kind in ("this", "this.field", "super") else "name"
                 edges.append(Edge(
                     kind=CALLS,
                     src_id=caller_mid,
@@ -453,15 +576,16 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
 
 
 def _caller_id_for_fn(rel: str, caller_name: str, index: Index) -> str:
-    """Figure out whether caller_name is a :Function or :Method."""
-    # Prefer function (components) first
-    if (rel, caller_name) in index.func_by_name_in_file:
+    """Figure out whether caller_name is a :Function, :Method, or fall back to :File."""
+    if caller_name and (rel, caller_name) in index.func_by_name_in_file:
         return f"func:{rel}#{caller_name}"
-    # Scan methods in this file for matching name (prefer first hit)
-    for (class_id, mname), _m in index.method_by_class_and_name.items():
-        if mname == caller_name and class_id.startswith(f"class:{rel}#"):
-            return f"method:{class_id}#{mname}"
-    return f"func:{rel}#{caller_name}"
+    # Scan methods in this file for matching name
+    if caller_name:
+        for (class_id, mname), _m in index.method_by_class_and_name.items():
+            if mname == caller_name and class_id.startswith(f"class:{rel}#"):
+                return f"method:{class_id}#{mname}"
+    # Fallback: attribute to file
+    return f"file:{rel}"
 
 
 def _resolve_call_target_class(
@@ -501,6 +625,35 @@ def _resolve_call_target_class(
         if len(hits) == 1:
             return f"class:{hits[0]}#{recv_name}"
     return None
+
+
+def _resolve_super_target_class(
+    importer: str,
+    caller_mid: str,
+    result: ParseResult,
+    index: Index,
+    resolver: Resolver,
+) -> Optional[str]:
+    """Resolve the target class for a ``super().foo()`` call.
+
+    Walks the enclosing class's first parent in :attr:`ParseResult.class_extends`
+    and returns the parent's ``class:{file}#{name}`` id, or ``None`` if the
+    parent isn't in the indexed graph (external bases like ``Exception`` /
+    ``Enum`` / ``ABC`` fall through).
+    """
+    if not caller_mid.startswith("method:class:"):
+        return None
+    class_id = caller_mid[len("method:"):].rsplit("#", 1)[0]
+    cls_name = class_id.split("#", 1)[1] if "#" in class_id else ""
+    if not cls_name:
+        return None
+    parents = [p for (c, p) in result.class_extends if c == cls_name]
+    if not parents:
+        return None
+    target_file = _find_class(importer, parents[0], index, resolver)
+    if target_file is None:
+        return None
+    return f"class:{target_file}#{parents[0]}"
 
 
 def _capitalize_guess(name: str) -> str:
