@@ -241,13 +241,17 @@ class Neo4jLoader:
                 UNWIND $rows AS r
                 MERGE (n:Function {id: r.id})
                 SET n.name = r.name, n.file = r.file,
-                    n.is_component = r.is_component, n.exported = r.exported
+                    n.is_component = r.is_component, n.exported = r.exported,
+                    n.docstring = r.docstring, n.return_type = r.return_type,
+                    n.params_json = r.params_json
                 WITH n, r
                 MATCH (f:File {path: r.file})
                 MERGE (f)-[:DEFINES_FUNC]->(n)
             """, [
                 dict(id=f.id, name=f.name, file=f.file,
-                     is_component=f.is_component, exported=f.exported)
+                     is_component=f.is_component, exported=f.exported,
+                     docstring=f.docstring, return_type=f.return_type,
+                     params_json=f.params_json)
                 for f in funcs
             ])
             _run(s, "UNWIND $rows AS r MATCH (f:Function {id: r.id}) SET f:Component",
@@ -260,14 +264,19 @@ class Neo4jLoader:
                 SET n.name = r.name, n.file = r.file,
                     n.is_static = r.is_static, n.is_async = r.is_async,
                     n.is_constructor = r.is_constructor,
-                    n.visibility = r.visibility
+                    n.visibility = r.visibility,
+                    n.return_type = r.return_type,
+                    n.params_json = r.params_json,
+                    n.docstring = r.docstring
                 WITH n, r
                 MATCH (c:Class {id: r.class_id})
                 MERGE (c)-[:HAS_METHOD]->(n)
             """, [
                 dict(id=m.id, name=m.name, file=m.file, class_id=m.class_id,
                      is_static=m.is_static, is_async=m.is_async,
-                     is_constructor=m.is_constructor, visibility=m.visibility)
+                     is_constructor=m.is_constructor, visibility=m.visibility,
+                     return_type=m.return_type, params_json=m.params_json,
+                     docstring=m.docstring)
                 for m in methods
             ])
 

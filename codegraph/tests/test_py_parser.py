@@ -91,14 +91,14 @@ def test_schema_py_defines_class_edges():
 # ── mcp.py ground-truth ─────────────────────────────────────────────
 
 
-def test_mcp_py_ten_tool_decorators():
-    """mcp.py ships 10 `@mcp.tool()` tools — that count is load-bearing."""
+def test_mcp_py_tool_decorators():
+    """mcp.py ships 11 `@mcp.tool()` tools (10 legacy + describe_function)."""
     result = _parse(CODEGRAPH_PKG / "mcp.py")
     tool_edges = [
         e for e in result.edges
         if e.kind == DECORATED_BY and "mcp.tool" in e.dst_id
     ]
-    assert len(tool_edges) == 10
+    assert len(tool_edges) == 11
 
 
 def test_mcp_py_module_functions():
@@ -276,3 +276,92 @@ def test_empty_file(tmp_path: Path):
 def test_missing_file_returns_none(tmp_path: Path):
     result = PyParser().parse_file(tmp_path / "nope.py", "nope.py", "pkg")
     assert result is None
+
+
+# ── Docstring + signature extraction ────────────────────────────────
+
+
+def test_function_docstring_dedented(tmp_path: Path):
+    """Triple-quoted docstring is captured, quotes stripped, indentation dedented."""
+    src = (
+        'def greet(name: str) -> str:\n'
+        '    """Say hello.\n'
+        '\n'
+        '    A simple greeter.\n'
+        '    """\n'
+        '    return "hi " + name\n'
+    )
+    f = tmp_path / "a.py"
+    f.write_text(src)
+    result = PyParser().parse_file(f, "a.py", "pkg")
+    assert result is not None
+    fn = result.functions[0]
+    assert fn.docstring.startswith("Say hello.")
+    assert "A simple greeter." in fn.docstring
+    # No surrounding quotes.
+    assert not fn.docstring.startswith('"')
+    assert not fn.docstring.endswith('"')
+
+
+def test_signature_params_and_return_type(tmp_path: Path):
+    """Typed params, defaults, and return type are all extracted."""
+    import json as _json
+    src = 'def f(x: int, y: str = "a", *args, **kwargs) -> bool:\n    return True\n'
+    f = tmp_path / "a.py"
+    f.write_text(src)
+    result = PyParser().parse_file(f, "a.py", "pkg")
+    assert result is not None
+    fn = result.functions[0]
+    assert fn.return_type == "bool"
+    params = _json.loads(fn.params_json)
+    assert len(params) == 4
+    assert params[0] == {"name": "x", "type": "int", "kind": "positional"}
+    assert params[1]["name"] == "y"
+    assert params[1]["type"] == "str"
+    assert params[1]["default"] == '"a"'
+    assert params[2] == {"name": "*args", "kind": "var_positional"}
+    assert params[3] == {"name": "**kwargs", "kind": "var_keyword"}
+
+
+def test_no_docstring_empty_string(tmp_path: Path):
+    """A function without a docstring gets ``""`` (not ``None``)."""
+    f = tmp_path / "a.py"
+    f.write_text("def f():\n    return 1\n")
+    result = PyParser().parse_file(f, "a.py", "pkg")
+    assert result is not None
+    fn = result.functions[0]
+    assert fn.docstring == ""
+    assert fn.return_type == ""
+    assert fn.params_json == "[]"
+
+
+def test_method_docstring_and_self_kept(tmp_path: Path):
+    """Methods get docstrings; ``self`` is kept in params_json for honesty."""
+    import json as _json
+    src = (
+        "class Greeter:\n"
+        "    def greet(self, name: str) -> str:\n"
+        '        """Greet someone."""\n'
+        '        return "hi " + name\n'
+    )
+    f = tmp_path / "a.py"
+    f.write_text(src)
+    result = PyParser().parse_file(f, "a.py", "pkg")
+    assert result is not None
+    assert len(result.methods) == 1
+    m = result.methods[0]
+    assert m.docstring == "Greet someone."
+    params = _json.loads(m.params_json)
+    assert params[0]["name"] == "self"
+    assert len(params) == 2
+    assert m.return_type == "str"
+
+
+def test_docstring_with_non_string_first_stmt(tmp_path: Path):
+    """A non-string first statement means no docstring (PEP 257)."""
+    src = "def f():\n    x = 1\n    return x\n"
+    f = tmp_path / "a.py"
+    f.write_text(src)
+    result = PyParser().parse_file(f, "a.py", "pkg")
+    assert result is not None
+    assert result.functions[0].docstring == ""

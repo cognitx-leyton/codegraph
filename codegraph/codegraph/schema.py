@@ -96,6 +96,9 @@ class FunctionNode:
     file: str
     is_component: bool = False
     exported: bool = False
+    docstring: str = ""
+    return_type: str = ""
+    params_json: str = "[]"
 
     @property
     def id(self) -> str:
@@ -123,6 +126,7 @@ class MethodNode:
     visibility: str = "public"   # public | private | protected
     return_type: str = ""
     params_json: str = "[]"
+    docstring: str = ""
 
     @property
     def id(self) -> str:

@@ -301,7 +301,10 @@ def hook_usage(hook_name: str, limit: int = 50) -> list[dict]:
     cypher = (
         "MATCH (fn:Function)-[:USES_HOOK]->(:Hook {name: $hook_name}) "
         "RETURN DISTINCT fn.name AS name, fn.file AS file, "
-        "       fn.is_component AS is_component "
+        "       fn.is_component AS is_component, "
+        "       fn.docstring AS docstring, "
+        "       fn.params_json AS params_json, "
+        "       fn.return_type AS return_type "
         f"ORDER BY fn.name LIMIT {limit}"
     )
     return _run_read(cypher, hook_name=hook_name)
@@ -344,6 +347,8 @@ def gql_operation_callers(
         "WHERE $op_type IS NULL OR op.type = $op_type "
         "RETURN DISTINCT caller.name AS caller_name, caller.file AS caller_file, "
         "       labels(caller)[0] AS caller_kind, "
+        "       caller.docstring AS caller_docstring, "
+        "       caller.params_json AS caller_params_json, "
         "       op.type AS op_type, op.return_type AS return_type "
         f"ORDER BY caller.name LIMIT {limit}"
     )
@@ -402,6 +407,34 @@ def find_class(name_pattern: str, limit: int = 50) -> list[dict]:
         f"ORDER BY c.name LIMIT {limit}"
     )
     return _run_read(cypher, name_pattern=name_pattern)
+
+
+@mcp.tool()
+def describe_function(name: str, file: Optional[str] = None) -> list[dict]:
+    """Return rich signature info for functions and methods matching ``name``.
+
+    Projects ``docstring``, ``params_json``, ``return_type`` and the list of
+    decorator names so an agent can answer "what does X do" in one tool call
+    instead of reading the source. Matches both ``:Function`` and ``:Method``
+    nodes. The same name may exist in several files — pass ``file`` to
+    narrow, otherwise every match is returned.
+
+    Args:
+        name: Exact ``:Function.name`` or ``:Method.name``.
+        file: Optional exact file path (``:File.path``) to disambiguate
+            collisions across modules.
+    """
+    cypher = (
+        "MATCH (n) WHERE (n:Function OR n:Method) AND n.name = $name "
+        "  AND ($file IS NULL OR n.file = $file) "
+        "OPTIONAL MATCH (n)-[:DECORATED_BY]->(d:Decorator) "
+        "WITH n, collect(DISTINCT d.name) AS decorators "
+        "RETURN labels(n)[0] AS kind, n.name AS name, n.file AS file, "
+        "       n.docstring AS docstring, n.params_json AS params_json, "
+        "       n.return_type AS return_type, decorators "
+        "ORDER BY n.file, n.name"
+    )
+    return _run_read(cypher, name=name, file=file)
 
 
 # ── Entry point ─────────────────────────────────────────────────────

@@ -30,8 +30,10 @@ dispatch by file extension without special-casing downstream code.
 """
 from __future__ import annotations
 
+import json
+import textwrap
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from tree_sitter import Language, Parser
@@ -365,8 +367,9 @@ class _PyWalker:
             is_async=False,
             is_constructor=is_constructor,
             visibility=visibility,
-            return_type="",
-            params_json="[]",
+            return_type=self._extract_return_type(node),
+            params_json=self._extract_params_json(node),
+            docstring=self._extract_docstring(node),
         )
         self.result.methods.append(method)
 
@@ -400,6 +403,9 @@ class _PyWalker:
             file=rel,
             is_component=False,  # never — that flag is TS/React-specific
             exported=True,       # Python has no `export`; module-level = importable
+            docstring=self._extract_docstring(node),
+            return_type=self._extract_return_type(node),
+            params_json=self._extract_params_json(node),
         )
         self.result.functions.append(fn)
 
@@ -419,6 +425,102 @@ class _PyWalker:
                     src_id=fn.id,
                     dst_id=f"dec:{dname}",
                 ))
+
+    # ── signature + docstring extraction ──────────────────────────────
+
+    def _extract_docstring(self, fn_def_node) -> str:
+        """Return the PEP 257 docstring of a function/method, or ``""``.
+
+        Docstring is the first statement of the body when that statement is
+        a bare string literal. We dedent per ``textwrap.dedent`` and strip
+        the surrounding quotes + string prefix so downstream consumers get
+        readable prose, not raw source. Comments between ``def`` and the
+        docstring are skipped; anything else as the first statement means
+        no docstring.
+        """
+        body = self._child_by_field(fn_def_node, "body")
+        if body is None:
+            return ""
+        first_stmt = None
+        for c in body.children:
+            if c.type == "comment":
+                continue
+            first_stmt = c
+            break
+        if first_stmt is None or first_stmt.type != "expression_statement":
+            return ""
+        for c in first_stmt.children:
+            if c.type == "string":
+                return self._clean_docstring(self._text(c))
+        return ""
+
+    def _clean_docstring(self, raw: str) -> str:
+        s = raw.strip()
+        # Drop prefix chars (r, b, u, f — docstrings rarely prefixed but be safe)
+        i = 0
+        while i < len(s) and s[i].lower() in "rbuf":
+            i += 1
+        s = s[i:]
+        for q in ('"""', "'''", '"', "'"):
+            if s.startswith(q) and s.endswith(q) and len(s) >= 2 * len(q):
+                s = s[len(q):-len(q)]
+                break
+        return textwrap.dedent(s).strip()
+
+    def _extract_return_type(self, fn_def_node) -> str:
+        ret = self._child_by_field(fn_def_node, "return_type")
+        if ret is None:
+            return ""
+        return self._text(ret).strip()
+
+    def _extract_params_json(self, fn_def_node) -> str:
+        params_node = self._child_by_field(fn_def_node, "parameters")
+        if params_node is None:
+            return "[]"
+        out: list[dict] = []
+        for c in params_node.named_children:
+            entry = self._param_to_dict(c)
+            if entry is not None:
+                out.append(entry)
+        return json.dumps(out, separators=(",", ":"))
+
+    def _param_to_dict(self, node) -> Optional[dict]:
+        t = node.type
+        if t == "identifier":
+            return {"name": self._text(node), "kind": "positional"}
+        if t == "list_splat_pattern":
+            return {"name": self._text(node), "kind": "var_positional"}
+        if t == "dictionary_splat_pattern":
+            return {"name": self._text(node), "kind": "var_keyword"}
+        if t in ("typed_parameter", "typed_default_parameter", "default_parameter"):
+            entry: dict[str, Any] = {"kind": "positional"}
+            name_field = self._child_by_field(node, "name")
+            type_field = self._child_by_field(node, "type")
+            value_field = self._child_by_field(node, "value")
+            if name_field is not None:
+                entry["name"] = self._text(name_field)
+            else:
+                # typed_parameter's name isn't a named field — scan children.
+                for c in node.children:
+                    if c.type == "identifier":
+                        entry["name"] = self._text(c)
+                        break
+                    if c.type == "list_splat_pattern":
+                        entry["name"] = self._text(c)
+                        entry["kind"] = "var_positional"
+                        break
+                    if c.type == "dictionary_splat_pattern":
+                        entry["name"] = self._text(c)
+                        entry["kind"] = "var_keyword"
+                        break
+            if type_field is not None:
+                entry["type"] = self._text(type_field).strip()
+            if value_field is not None:
+                entry["default"] = self._text(value_field).strip()
+            if "name" not in entry:
+                return None
+            return entry
+        return None
 
     # ── decorator naming ──────────────────────────────────────────────
 
