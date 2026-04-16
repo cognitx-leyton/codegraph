@@ -13,6 +13,25 @@
 
 Built at **[Leyton CognitX](https://cognitx.leyton.com/)** to make large TypeScript monorepos legible to humans, to Claude, and to LLM agents alike.
 
+## 🚀 Quickstart: use in your repo
+
+```bash
+pipx install cognitx-codegraph
+cd /path/to/your-repo
+codegraph init
+```
+
+`codegraph init` asks 4-5 short questions (which packages to index, which package boundaries to enforce, whether to install the Claude Code surface + GitHub Actions gate + local Neo4j) and then:
+
+1. Writes `.claude/commands/` (7 slash commands), `.github/workflows/arch-check.yml`, `.arch-policies.toml`, `docker-compose.yml`, and a `CLAUDE.md` snippet.
+2. Starts a local Neo4j container via `docker compose up -d`.
+3. Runs the first index.
+4. Prints what to query next.
+
+You're fully set up in ~2 minutes. Want everything without prompts? `codegraph init --yes`. Want just the files and no Docker? `codegraph init --yes --skip-docker --skip-index`.
+
+Full walkthrough: [codegraph/docs/init.md](./codegraph/docs/init.md). Policy reference: [codegraph/docs/arch-policies.md](./codegraph/docs/arch-policies.md).
+
 ## ✨ Highlights
 
 - **Framework-aware parsing** — not just imports: controllers, injectables, modules, entities, React components and hooks are first-class nodes.

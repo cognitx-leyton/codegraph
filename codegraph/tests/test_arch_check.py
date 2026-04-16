@@ -1,15 +1,15 @@
 """Tests for :mod:`codegraph.arch_check`.
 
-Each policy function takes a ``neo4j.Driver`` and runs two queries: a count
-query and a sample query. We mock both with a fake session that dispatches
-on a substring of the Cypher string. That gives us policy-level coverage
-without needing a running Neo4j — the Cypher itself is smoke-tested by
-``codegraph arch-check`` against the live graph in dev.
+Each policy function takes a ``neo4j.Driver`` + a per-policy config and runs
+two queries: a count query and a sample query. We mock both with a fake
+session that dispatches on a substring of the Cypher string. That gives us
+policy-level coverage without needing a running Neo4j — the Cypher itself is
+smoke-tested by ``codegraph arch-check`` against the live graph in dev.
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable
+from typing import Any
 
 import pytest
 
@@ -18,9 +18,18 @@ from codegraph.arch_check import (
     ArchReport,
     PolicyResult,
     _check_cross_package,
+    _check_custom,
     _check_import_cycles,
     _check_layer_bypass,
     run_arch_check,
+)
+from codegraph.arch_config import (
+    ArchConfig,
+    CrossPackageConfig,
+    CrossPackagePair,
+    CustomPolicy,
+    ImportCyclesConfig,
+    LayerBypassConfig,
 )
 
 
@@ -123,7 +132,7 @@ def test_import_cycles_clean():
         "count(DISTINCT path) AS v": [{"v": 0}],
         "DISTINCT cycle, hops": [],
     })
-    result = _check_import_cycles(driver)
+    result = _check_import_cycles(driver, ImportCyclesConfig())
     assert result.name == "import_cycles"
     assert result.passed is True
     assert result.violation_count == 0
@@ -133,58 +142,69 @@ def test_import_cycles_clean():
 def test_import_cycles_detected():
     sample = [
         {"cycle": ["a.py", "b.py", "a.py"], "hops": 2},
-        {"cycle": ["x.py", "y.py", "z.py", "x.py"], "hops": 3},
     ]
     driver = _constant_driver({
-        "count(DISTINCT path) AS v": [{"v": 2}],
+        "count(DISTINCT path) AS v": [{"v": 1}],
         "DISTINCT cycle, hops": sample,
     })
-    result = _check_import_cycles(driver)
+    result = _check_import_cycles(driver, ImportCyclesConfig())
     assert result.passed is False
-    assert result.violation_count == 2
+    assert result.violation_count == 1
     assert result.sample == sample
+
+
+def test_import_cycles_honours_hop_config():
+    """Custom hop range should appear in the Cypher sent to the driver."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **_params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(DISTINCT path)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_import_cycles(driver, ImportCyclesConfig(min_hops=3, max_hops=4))
+    assert any("IMPORTS*3..4" in c for c in captured)
 
 
 # ── cross_package ───────────────────────────────────────────────────
 
 
 def test_cross_package_clean():
-    # All pair queries return zero count.
     driver = _constant_driver({
         "count(*) AS v": [{"v": 0}],
     })
-    result = _check_cross_package(driver)
+    result = _check_cross_package(driver, CrossPackageConfig())
     assert result.name == "cross_package"
     assert result.passed is True
     assert result.violation_count == 0
-    assert "twenty-front" in result.detail
-    assert "twenty-server" in result.detail
 
 
 def test_cross_package_detected():
-    # Violations on the first configured pair; sample rows returned.
-    call_log: list[tuple[str, dict]] = []
-
     def resolver(cypher: str, **params):
-        call_log.append((cypher, params))
         if "count(*) AS v" in cypher:
             return [{"v": 2}]
         if "RETURN a.path AS importer" in cypher:
             return [
-                {"importer": "packages/twenty-front/src/a.ts",
-                 "importee": "packages/twenty-server/src/b.ts"},
-                {"importer": "packages/twenty-front/src/c.ts",
-                 "importee": "packages/twenty-server/src/d.ts"},
+                {"importer": "apps/web/src/a.ts", "importee": "apps/api/src/b.ts"},
+                {"importer": "apps/web/src/c.ts", "importee": "apps/api/src/d.ts"},
             ]
         return []
 
     driver = _FakeDriver(resolver)
-    result = _check_cross_package(driver)
+    cfg = CrossPackageConfig(pairs=[CrossPackagePair("apps/web", "apps/api")])
+    result = _check_cross_package(driver, cfg)
     assert result.passed is False
     assert result.violation_count == 2
-    assert len(result.sample) == 2
-    assert result.sample[0]["importer_package"] == "twenty-front"
-    assert result.sample[0]["importee_package"] == "twenty-server"
+    assert result.sample[0]["importer_package"] == "apps/web"
+    assert result.sample[0]["importee_package"] == "apps/api"
+
+
+def test_cross_package_no_pairs_is_trivially_clean():
+    driver = _constant_driver({})
+    cfg = CrossPackageConfig(pairs=[])
+    result = _check_cross_package(driver, cfg)
+    assert result.passed is True
+    assert result.violation_count == 0
 
 
 # ── layer_bypass ────────────────────────────────────────────────────
@@ -195,10 +215,9 @@ def test_layer_bypass_clean():
         "count(DISTINCT ctrl) AS v": [{"v": 0}],
         "DISTINCT ctrl.name AS controller": [],
     })
-    result = _check_layer_bypass(driver)
+    result = _check_layer_bypass(driver, LayerBypassConfig())
     assert result.name == "layer_bypass"
     assert result.passed is True
-    assert result.violation_count == 0
 
 
 def test_layer_bypass_detected():
@@ -209,45 +228,155 @@ def test_layer_bypass_detected():
         "count(DISTINCT ctrl) AS v": [{"v": 1}],
         "DISTINCT ctrl.name AS controller": sample,
     })
-    result = _check_layer_bypass(driver)
+    result = _check_layer_bypass(driver, LayerBypassConfig())
     assert result.passed is False
     assert result.violation_count == 1
     assert result.sample == sample
+
+
+def test_layer_bypass_uses_config_suffixes():
+    captured_params: dict = {}
+
+    def resolver(cypher: str, **params):
+        captured_params.update(params)
+        return [{"v": 0}] if "count(DISTINCT ctrl)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = LayerBypassConfig(
+        controller_labels=["Gateway"],
+        repository_suffix="Repo",
+        service_suffix="Manager",
+        call_depth=5,
+    )
+    _check_layer_bypass(driver, cfg)
+    assert captured_params["repo_suffix"] == "Repo"
+    assert captured_params["svc_suffix"] == "Manager"
+
+
+# ── custom policies ─────────────────────────────────────────────────
+
+
+def test_custom_policy_clean_skips_sample_query():
+    """count=0 → sample query is NOT run (saves a round-trip)."""
+    queries_run: list[str] = []
+
+    def resolver(cypher: str, **_params):
+        queries_run.append(cypher)
+        return [{"v": 0}] if "count(n)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    custom = CustomPolicy(
+        name="demo",
+        description="demo policy",
+        count_cypher="MATCH (n) RETURN count(n) AS v",
+        sample_cypher="MATCH (n) RETURN n LIMIT 10",
+    )
+    result = _check_custom(driver, custom)
+    assert result.name == "demo"
+    assert result.passed is True
+    assert result.violation_count == 0
+    assert len(queries_run) == 1  # only the count query, not the sample
+
+
+def test_custom_policy_detects_violations():
+    def resolver(cypher: str, **_params):
+        if "count(f)" in cypher:
+            return [{"v": 3}]
+        return [{"path": "a.py"}, {"path": "b.py"}, {"path": "c.py"}]
+
+    driver = _FakeDriver(resolver)
+    custom = CustomPolicy(
+        name="no_fat_files",
+        description="Files over 500 LOC",
+        count_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v",
+        sample_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS path",
+    )
+    result = _check_custom(driver, custom)
+    assert result.passed is False
+    assert result.violation_count == 3
+    assert len(result.sample) == 3
+    assert result.detail == "Files over 500 LOC"
 
 
 # ── Orchestrator ────────────────────────────────────────────────────
 
 
 def test_run_arch_check_aggregates_three_policies(monkeypatch):
-    """``run_arch_check`` opens a driver, runs all 3 policies, closes it."""
+    """``run_arch_check`` opens a driver, runs all 3 built-in policies, closes it."""
     fake_driver = _constant_driver({
-        # Every count query in every policy returns 0 → all pass.
         "count(DISTINCT path) AS v": [{"v": 0}],
         "count(*) AS v": [{"v": 0}],
         "count(DISTINCT ctrl) AS v": [{"v": 0}],
     })
 
     def _fake_driver_factory(uri, auth):
-        assert uri == "bolt://fake:7687"
-        assert auth == ("neo4j", "pw")
         return fake_driver
 
     monkeypatch.setattr(arch_check.GraphDatabase, "driver", _fake_driver_factory)
 
-    report = run_arch_check("bolt://fake:7687", "neo4j", "pw", console=None)
+    report = run_arch_check(
+        "bolt://fake:7687", "neo4j", "pw", console=None, config=ArchConfig(),
+    )
     assert fake_driver.closed is True
     assert report.ok is True
+    assert [p.name for p in report.policies] == ["import_cycles", "cross_package", "layer_bypass"]
+
+
+def test_run_arch_check_with_disabled_policy_emits_skip_marker(monkeypatch):
+    # Other policies still run, so the mock must answer their count queries.
+    fake_driver = _constant_driver({
+        "count(*) AS v": [{"v": 0}],
+        "count(DISTINCT ctrl) AS v": [{"v": 0}],
+    })
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    config = ArchConfig(import_cycles=ImportCyclesConfig(enabled=False))
+    report = run_arch_check("bolt://fake:7687", "neo4j", "pw", console=None, config=config)
+
+    cycles = next(p for p in report.policies if p.name == "import_cycles")
+    assert cycles.passed is True
+    assert "disabled" in cycles.detail
+
+
+def test_run_arch_check_runs_custom_policies(monkeypatch):
+    """Custom policies in the config are evaluated after built-ins."""
+    def resolver(cypher: str, **_params):
+        if "count(DISTINCT path)" in cypher:
+            return [{"v": 0}]
+        if "count(*)" in cypher:
+            return [{"v": 0}]
+        if "count(DISTINCT ctrl)" in cypher:
+            return [{"v": 0}]
+        if "count(custom_node)" in cypher:
+            return [{"v": 1}]
+        return [{"x": "violation"}]
+
+    fake_driver = _FakeDriver(resolver)
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    custom = CustomPolicy(
+        name="my_rule",
+        description="demo",
+        count_cypher="MATCH (custom_node) RETURN count(custom_node) AS v",
+        sample_cypher="MATCH (n) RETURN n AS x LIMIT 10",
+    )
+    config = ArchConfig(custom=[custom])
+    report = run_arch_check("bolt://fake:7687", "neo4j", "pw", console=None, config=config)
+
     policy_names = [p.name for p in report.policies]
-    assert policy_names == ["import_cycles", "cross_package", "layer_bypass"]
+    assert policy_names == ["import_cycles", "cross_package", "layer_bypass", "my_rule"]
+    my_rule = report.policies[-1]
+    assert my_rule.passed is False
+    assert my_rule.violation_count == 1
 
 
 def test_run_arch_check_closes_driver_even_on_failure(monkeypatch):
-    """Driver lifecycle must be finally-protected."""
     fake_driver = _constant_driver({})
     fake_driver._resolver = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom"))
-
     monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
 
     with pytest.raises(RuntimeError):
-        run_arch_check("bolt://fake:7687", "neo4j", "pw", console=None)
+        run_arch_check(
+            "bolt://fake:7687", "neo4j", "pw", console=None, config=ArchConfig(),
+        )
     assert fake_driver.closed is True

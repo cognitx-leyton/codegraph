@@ -137,12 +137,99 @@ The Controller → Service → Repository layering is the default pattern in Nes
 
 CI job fails on non-zero. Report artifact (`arch-report.json`) is always uploaded, even on failure, so you can inspect the samples without re-running.
 
-## Adding a new policy
+## Configuring policies — `.arch-policies.toml`
 
-For v1, extending means forking `codegraph/codegraph/arch_check.py` and adding a new `_check_<policy_name>` function. It should:
-1. Take a `neo4j.Driver` argument.
-2. Run a count query and a sample query (limit via `SAMPLE_LIMIT`).
-3. Return a `PolicyResult`.
-4. Be appended to the list in `run_arch_check`.
+Every policy (built-in or custom) is tunable via a `.arch-policies.toml` file at the repo root. Missing file → all built-in defaults. `codegraph init` scaffolds a starter template.
 
-Stage 2 will add a `.arch-policies.toml` loader so per-repo extensions don't require a fork. Until then, fork-and-maintain is the expected path.
+Full schema:
+
+```toml
+# ── Built-in policies: tune or disable ─────────────────────────
+
+[policies.import_cycles]
+enabled  = true   # false disables this policy entirely
+min_hops = 2      # minimum cycle length (must be >= 2)
+max_hops = 6      # maximum cycle length to detect
+
+[policies.cross_package]
+enabled = true
+pairs = [
+  { importer = "apps/web",    importee = "apps/api" },
+  { importer = "packages/ui", importee = "packages/server" },
+]
+
+[policies.layer_bypass]
+enabled           = true
+controller_labels = ["Controller"]   # Neo4j labels to match as controllers
+repository_suffix = "Repository"      # class name suffix for repos
+service_suffix    = "Service"         # class name suffix for the required intermediate layer
+call_depth        = 3                  # max CALLS hops to traverse
+
+# ── Custom policies: user-authored Cypher ──────────────────────
+
+[[policies.custom]]
+name          = "no_fat_files"
+description   = "Files over 500 LOC"
+count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file, f.loc AS loc LIMIT 10"
+enabled       = true   # optional, defaults to true
+
+[[policies.custom]]
+name          = "no_dead_endpoints"
+description   = "Endpoints without a HANDLES method"
+count_cypher  = "MATCH (e:Endpoint) WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e) } RETURN count(e) AS v"
+sample_cypher = "MATCH (e:Endpoint) WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e) } RETURN e.path AS route LIMIT 10"
+```
+
+### Rules
+- Every section is optional. Omit to use defaults.
+- Every `count_cypher` must return a single row with column `v` containing an integer ≥ 0.
+- Every `sample_cypher` should return at most 10 rows — each row becomes a dict in the JSON report's `sample` array.
+- Custom policy names must be unique and must not collide with built-in names (`import_cycles`, `cross_package`, `layer_bypass`).
+- Malformed TOML or invalid fields → exit code 2 with a clear error message (not exit code 1, which means policy violations).
+
+### Worked examples by repo shape
+
+**Full-stack monorepo (Next.js + NestJS)** — front must never import from server:
+```toml
+[policies.cross_package]
+pairs = [
+  { importer = "apps/web", importee = "apps/server" },
+]
+```
+
+**Pure Python service** — no NestJS controllers, disable the layer-bypass policy:
+```toml
+[policies.layer_bypass]
+enabled = false
+
+[[policies.custom]]
+name          = "no_views_calling_models_directly"
+description   = "Django views should go through a service"
+count_cypher  = "MATCH (:Class {name:'View'})-[:HAS_METHOD]->(:Method)-[:CALLS]->(:Method)<-[:HAS_METHOD]-(m:Class) WHERE m.name ENDS WITH 'Model' RETURN count(m) AS v"
+sample_cypher = "MATCH (v:Class {name:'View'})-[:HAS_METHOD]->(:Method)-[:CALLS]->(:Method)<-[:HAS_METHOD]-(m:Class) WHERE m.name ENDS WITH 'Model' RETURN v.name AS view, m.name AS model LIMIT 10"
+```
+
+**Shared types package** — must be leaf (no outbound imports to any app):
+```toml
+[policies.cross_package]
+pairs = [
+  { importer = "packages/types", importee = "apps/web" },
+  { importer = "packages/types", importee = "apps/server" },
+  { importer = "packages/types", importee = "services/worker" },
+]
+```
+
+## Exit codes
+
+`codegraph arch-check` returns:
+- **0** — every policy passed.
+- **1** — one or more policies reported violations.
+- **2** — `.arch-policies.toml` is malformed or semantically invalid.
+
+CI job fails on any non-zero exit. The `arch-report.json` artifact is always uploaded on violations (exit 1); config errors (exit 2) are surfaced in the step log.
+
+## Adding a policy you can't express in the built-ins
+
+1. **First try a custom policy** — `[[policies.custom]]` with raw Cypher. Covers ~80% of real extensions.
+2. **If Cypher isn't enough** — fork `codegraph/codegraph/arch_check.py`, add a new `_check_<name>(driver, cfg)` function, wire it into `_run_all`. Worth it when the policy needs multi-step state (e.g. cross-query aggregation, custom sampling) or Python logic that doesn't round-trip through Cypher.

@@ -23,7 +23,7 @@ Returns four categories of orphan, each tagged with a `kind` column so you can s
 ## What this does
 
 ```bash
-PREFIX="${ARGUMENTS:-codegraph/codegraph/}"
+PREFIX="${ARGUMENTS:-$DEFAULT_PACKAGE_PREFIX}"
 
 codegraph query "
 MATCH (f:Function)

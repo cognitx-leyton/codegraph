@@ -1,0 +1,308 @@
+"""Configuration for :mod:`codegraph.arch_check`.
+
+Parses ``.arch-policies.toml`` at the repo root (or a user-provided path) and
+returns a typed :class:`ArchConfig` object that :mod:`codegraph.arch_check`
+consumes. Missing file → all defaults, which match the previously-hardcoded
+behaviour exactly. Extends the policy set with user-authored Cypher policies
+so users can add rules without forking the Python package.
+
+TOML schema (all sections optional):
+
+    [policies.import_cycles]
+    enabled  = true
+    min_hops = 2
+    max_hops = 6
+
+    [policies.cross_package]
+    enabled = true
+    pairs = [
+      { importer = "apps/web", importee = "apps/api" },
+    ]
+
+    [policies.layer_bypass]
+    enabled           = true
+    controller_labels = ["Controller"]
+    repository_suffix = "Repository"
+    service_suffix    = "Service"
+    call_depth        = 3
+
+    [[policies.custom]]
+    name          = "no_fat_files"
+    description   = "Files over 500 LOC"
+    count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
+    sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file LIMIT 10"
+"""
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover
+    import tomli as tomllib
+
+
+DEFAULT_CONFIG_FILENAME = ".arch-policies.toml"
+
+
+class ArchConfigError(ValueError):
+    """Raised when ``.arch-policies.toml`` is malformed or semantically invalid."""
+
+
+# ── Per-policy config dataclasses ────────────────────────────
+
+
+@dataclass
+class ImportCyclesConfig:
+    enabled: bool = True
+    min_hops: int = 2
+    max_hops: int = 6
+
+
+@dataclass
+class CrossPackagePair:
+    importer: str
+    importee: str
+
+
+@dataclass
+class CrossPackageConfig:
+    enabled: bool = True
+    pairs: list[CrossPackagePair] = field(
+        default_factory=lambda: [
+            # Preserve the previously-hardcoded default from arch_check.py.
+            CrossPackagePair(importer="twenty-front", importee="twenty-server"),
+        ]
+    )
+
+
+@dataclass
+class LayerBypassConfig:
+    enabled: bool = True
+    controller_labels: list[str] = field(default_factory=lambda: ["Controller"])
+    repository_suffix: str = "Repository"
+    service_suffix: str = "Service"
+    call_depth: int = 3
+
+
+@dataclass
+class CustomPolicy:
+    """User-authored policy, identified by a pair of Cypher queries."""
+
+    name: str
+    count_cypher: str
+    sample_cypher: str
+    description: str = ""
+    enabled: bool = True
+
+
+@dataclass
+class ArchConfig:
+    """Aggregate config for ``codegraph arch-check``.
+
+    Defaults match the previously-hardcoded behaviour so callers that don't
+    supply a config file get identical results to pre-refactor.
+    """
+
+    import_cycles: ImportCyclesConfig = field(default_factory=ImportCyclesConfig)
+    cross_package: CrossPackageConfig = field(default_factory=CrossPackageConfig)
+    layer_bypass: LayerBypassConfig = field(default_factory=LayerBypassConfig)
+    custom: list[CustomPolicy] = field(default_factory=list)
+
+
+# ── Loader ───────────────────────────────────────────────────
+
+
+def load_arch_config(repo_root: Path, path: Optional[Path] = None) -> ArchConfig:
+    """Load ``.arch-policies.toml`` from ``repo_root`` (or explicit ``path``).
+
+    Missing file is not an error — returns :class:`ArchConfig` with all
+    defaults. Malformed TOML or invalid fields raise :class:`ArchConfigError`.
+    """
+    config_path = path if path is not None else (repo_root / DEFAULT_CONFIG_FILENAME)
+    if not config_path.exists():
+        return ArchConfig()
+
+    try:
+        with config_path.open("rb") as f:
+            raw = tomllib.load(f)
+    except tomllib.TOMLDecodeError as exc:
+        raise ArchConfigError(f"Malformed TOML in {config_path}: {exc}") from exc
+
+    policies = raw.get("policies", {})
+    if not isinstance(policies, dict):
+        raise ArchConfigError(
+            f"{config_path}: [policies] must be a table, got {type(policies).__name__}"
+        )
+
+    return ArchConfig(
+        import_cycles=_parse_import_cycles(policies.get("import_cycles", {}), config_path),
+        cross_package=_parse_cross_package(policies.get("cross_package", {}), config_path),
+        layer_bypass=_parse_layer_bypass(policies.get("layer_bypass", {}), config_path),
+        custom=_parse_custom(policies.get("custom", []), config_path),
+    )
+
+
+# ── Parsers ──────────────────────────────────────────────────
+
+
+def _parse_import_cycles(raw: dict, path: Path) -> ImportCyclesConfig:
+    defaults = ImportCyclesConfig()
+    cfg = ImportCyclesConfig(
+        enabled=_bool(raw, "enabled", defaults.enabled, path, "import_cycles"),
+        min_hops=_int(raw, "min_hops", defaults.min_hops, path, "import_cycles"),
+        max_hops=_int(raw, "max_hops", defaults.max_hops, path, "import_cycles"),
+    )
+    if cfg.min_hops < 2:
+        raise ArchConfigError(
+            f"{path}: policies.import_cycles.min_hops must be >= 2 (got {cfg.min_hops})"
+        )
+    if cfg.max_hops < cfg.min_hops:
+        raise ArchConfigError(
+            f"{path}: policies.import_cycles.max_hops ({cfg.max_hops}) "
+            f"must be >= min_hops ({cfg.min_hops})"
+        )
+    return cfg
+
+
+def _parse_cross_package(raw: dict, path: Path) -> CrossPackageConfig:
+    defaults = CrossPackageConfig()
+    enabled = _bool(raw, "enabled", defaults.enabled, path, "cross_package")
+    pairs_raw = raw.get("pairs")
+    if pairs_raw is None:
+        return CrossPackageConfig(enabled=enabled, pairs=defaults.pairs)
+    if not isinstance(pairs_raw, list):
+        raise ArchConfigError(
+            f"{path}: policies.cross_package.pairs must be a list, "
+            f"got {type(pairs_raw).__name__}"
+        )
+    pairs: list[CrossPackagePair] = []
+    for i, p in enumerate(pairs_raw):
+        if not isinstance(p, dict):
+            raise ArchConfigError(
+                f"{path}: policies.cross_package.pairs[{i}] must be a table"
+            )
+        try:
+            importer = p["importer"]
+            importee = p["importee"]
+        except KeyError as missing:
+            raise ArchConfigError(
+                f"{path}: policies.cross_package.pairs[{i}] missing key: {missing}"
+            ) from missing
+        if not (isinstance(importer, str) and isinstance(importee, str)):
+            raise ArchConfigError(
+                f"{path}: policies.cross_package.pairs[{i}] importer/importee must be strings"
+            )
+        pairs.append(CrossPackagePair(importer=importer, importee=importee))
+    return CrossPackageConfig(enabled=enabled, pairs=pairs)
+
+
+def _parse_layer_bypass(raw: dict, path: Path) -> LayerBypassConfig:
+    defaults = LayerBypassConfig()
+    labels = raw.get("controller_labels", defaults.controller_labels)
+    if not (isinstance(labels, list) and all(isinstance(x, str) for x in labels)):
+        raise ArchConfigError(
+            f"{path}: policies.layer_bypass.controller_labels must be a list of strings"
+        )
+    if not labels:
+        raise ArchConfigError(
+            f"{path}: policies.layer_bypass.controller_labels must not be empty"
+        )
+    return LayerBypassConfig(
+        enabled=_bool(raw, "enabled", defaults.enabled, path, "layer_bypass"),
+        controller_labels=list(labels),
+        repository_suffix=_str(
+            raw, "repository_suffix", defaults.repository_suffix, path, "layer_bypass"
+        ),
+        service_suffix=_str(
+            raw, "service_suffix", defaults.service_suffix, path, "layer_bypass"
+        ),
+        call_depth=_int(raw, "call_depth", defaults.call_depth, path, "layer_bypass"),
+    )
+
+
+def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:
+    if not isinstance(raw, list):
+        raise ArchConfigError(
+            f"{path}: policies.custom must be an array of tables, got {type(raw).__name__}"
+        )
+    seen: set[str] = set()
+    builtins = {"import_cycles", "cross_package", "layer_bypass"}
+    out: list[CustomPolicy] = []
+    for i, p in enumerate(raw):
+        if not isinstance(p, dict):
+            raise ArchConfigError(
+                f"{path}: policies.custom[{i}] must be a table"
+            )
+        name = p.get("name")
+        count_cypher = p.get("count_cypher")
+        sample_cypher = p.get("sample_cypher")
+        for field_name, value in (
+            ("name", name),
+            ("count_cypher", count_cypher),
+            ("sample_cypher", sample_cypher),
+        ):
+            if not (isinstance(value, str) and value.strip()):
+                raise ArchConfigError(
+                    f"{path}: policies.custom[{i}].{field_name} must be a non-empty string"
+                )
+        if name in builtins:
+            raise ArchConfigError(
+                f"{path}: custom policy name '{name}' collides with a built-in policy"
+            )
+        if name in seen:
+            raise ArchConfigError(
+                f"{path}: duplicate custom policy name '{name}'"
+            )
+        seen.add(name)
+        enabled = p.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ArchConfigError(
+                f"{path}: policies.custom[{i}].enabled must be a boolean"
+            )
+        description = p.get("description", "")
+        if not isinstance(description, str):
+            raise ArchConfigError(
+                f"{path}: policies.custom[{i}].description must be a string"
+            )
+        out.append(CustomPolicy(
+            name=name,
+            count_cypher=count_cypher,
+            sample_cypher=sample_cypher,
+            description=description,
+            enabled=enabled,
+        ))
+    return out
+
+
+# ── Tiny typed-getters ───────────────────────────────────────
+
+
+def _bool(raw: dict, key: str, default: bool, path: Path, section: str) -> bool:
+    if key not in raw:
+        return default
+    v = raw[key]
+    if not isinstance(v, bool):
+        raise ArchConfigError(f"{path}: policies.{section}.{key} must be a boolean")
+    return v
+
+
+def _int(raw: dict, key: str, default: int, path: Path, section: str) -> int:
+    if key not in raw:
+        return default
+    v = raw[key]
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise ArchConfigError(f"{path}: policies.{section}.{key} must be an integer")
+    return v
+
+
+def _str(raw: dict, key: str, default: str, path: Path, section: str) -> str:
+    if key not in raw:
+        return default
+    v = raw[key]
+    if not isinstance(v, str):
+        raise ArchConfigError(f"{path}: policies.{section}.{key} must be a string")
+    return v

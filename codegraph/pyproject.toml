@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codegraph"
-version = "0.1.0"
+name = "cognitx-codegraph"
+version = "0.2.0"
 description = "Code knowledge graph for Claude Code & AI coding agents — index TypeScript, NestJS, React into Neo4j and query architecture in Cypher"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -87,3 +87,19 @@ Issues        = "https://github.com/cognitx-leyton/graphrag-code/issues"
 where   = ["."]
 include = ["codegraph*"]
 exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: integration tests that spin up external services (Docker, Neo4j). Deselected by default.",
+]
+# Deselect slow tests by default — run them explicitly with `-m slow`.
+addopts = "-m 'not slow'"
+
+[tool.setuptools.package-data]
+# Ship the init scaffolder's templates with the wheel. Without this line,
+# `codegraph init` can't find its own templates after `pip install`.
+codegraph = [
+    "templates/**/*.md",
+    "templates/**/*.yml",
+    "templates/**/*.toml",
+]

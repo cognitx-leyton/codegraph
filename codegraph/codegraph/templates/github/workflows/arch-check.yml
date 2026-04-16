@@ -53,11 +53,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install codegraph
-        # Source install — keeps the codegraph repo dogfooding itself on every PR.
-        # External users who copy this workflow should swap this for:
-        #   run: pip install "cognitx-codegraph[python]"
-        # (or pin a specific version: cognitx-codegraph[python]==0.2.0)
-        run: pip install -e "./codegraph[python]"
+        run: pip install "cognitx-codegraph[python]==$PIPX_VERSION"
 
       - name: Wait for Neo4j
         run: |
@@ -71,7 +67,7 @@ jobs:
       - name: Index repo
         env:
           CODEGRAPH_NEO4J_URI: bolt://localhost:7687
-        run: codegraph index . -p codegraph/codegraph -p codegraph/tests --skip-ownership
+        run: codegraph index . $PACKAGE_PATHS_FLAGS --skip-ownership
 
       - name: Run architecture policies
         env:

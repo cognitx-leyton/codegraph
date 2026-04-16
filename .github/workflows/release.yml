@@ -1,0 +1,46 @@
+# Publish cognitx-codegraph to PyPI on tag push.
+#
+# Uses PyPI Trusted Publishers (OIDC) — no API token stored in secrets.
+# Prerequisite: cognitx-codegraph must be registered on PyPI with
+# `cognitx-leyton/graphrag-code` configured as a Trusted Publisher for the
+# `release` environment (pypi.org → Your projects → codegraph → Publishing).
+#
+# Tag format: `v<semver>` (e.g. v0.2.0, v0.2.1, v1.0.0-rc.1). The workflow
+# derives nothing from the tag — setuptools reads the version from
+# pyproject.toml, so bump that in the same commit as the tag.
+#
+# SAFETY: No untrusted GitHub context (issue/PR/commit titles, bodies,
+# authors, refs) is interpolated into any `run:` command. Every step uses
+# either hardcoded arguments or pinned actions.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build wheel and sdist
+        working-directory: codegraph
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: codegraph/dist

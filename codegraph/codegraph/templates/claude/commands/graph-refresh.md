@@ -1,6 +1,6 @@
 ---
 allowed-tools: Bash(codegraph index:*), Bash(.venv/bin/codegraph index:*), Bash(codegraph index:*)
-description: Re-index the codegraph Python package so /graph queries reflect the latest on-disk state
+description: Re-index your repo so /graph queries reflect the latest on-disk state
 ---
 
 ## Why
@@ -9,15 +9,10 @@ codegraph is a static snapshot of the codebase at index time. Edits after indexi
 
 ## What this does
 
-Re-parses every `.py` file under `codegraph/codegraph/` and `codegraph/tests/` and upserts nodes / edges into Neo4j. **Does not wipe the rest of the graph** — Twenty (or any other indexed TS repos) stays untouched. Typical runtime: ~5 seconds for both packages.
+Re-parses every source file under the configured packages and upserts nodes / edges into Neo4j. **Does not wipe the rest of the graph** — other indexed repos survive. Typical runtime: ~5 seconds for a medium package.
 
 ```bash
-codegraph index \
-    /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code \
-    -p codegraph/codegraph \
-    -p codegraph/tests \
-    --no-wipe \
-    --skip-ownership
+codegraph index . $PACKAGE_PATHS_FLAGS --no-wipe --skip-ownership
 ```
 
 `--no-wipe` keeps other graphs alive. `--skip-ownership` skips the git-log pass (faster; owners can be added back later if needed).
@@ -34,4 +29,4 @@ To point the graph at some other TS / Python repo:
 codegraph index /path/to/repo -p <package>
 ```
 
-Drop `--no-wipe` if you want to start from a clean graph (wipes everything, including the codegraph + Twenty snapshots).
+Drop `--no-wipe` if you want to start from a clean graph (wipes everything in the Neo4j database).

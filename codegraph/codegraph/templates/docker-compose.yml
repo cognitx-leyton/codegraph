@@ -1,0 +1,27 @@
+# Local Neo4j for codegraph. Start with `docker compose up -d`.
+# Auth uses a local-only password — fine for a dev container; rotate before
+# exposing the Neo4j ports on a shared network.
+
+services:
+  neo4j:
+    image: neo4j:5.24-community
+    container_name: $CONTAINER_NAME
+    ports:
+      - "$NEO4J_HTTP_PORT:7474"
+      - "$NEO4J_BOLT_PORT:7687"
+    environment:
+      NEO4J_AUTH: neo4j/codegraph123
+      NEO4J_server_memory_heap_initial__size: 1G
+      NEO4J_server_memory_heap_max__size: 2G
+    volumes:
+      - ${CONTAINER_NAME}_data:/data
+      - ${CONTAINER_NAME}_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  ${CONTAINER_NAME}_data:
+  ${CONTAINER_NAME}_logs:
