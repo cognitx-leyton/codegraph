@@ -602,6 +602,24 @@ class _Walker:
                     return name
         return ""
 
+    # Fastify/Express-style server objects that register routes
+    _FASTIFY_OBJECTS = {"fastify", "server", "app", "instance", "fastifyInstance"}
+
+    def _is_fastify_route(self, fn: Node) -> bool:
+        """Check if a call is a Fastify/Express route registration: ``fastify.get(...)``."""
+        if fn.type != "member_expression":
+            return False
+        obj = fn.child_by_field_name("object")
+        prop = fn.child_by_field_name("property")
+        if obj is None or prop is None:
+            return False
+        prop_name = self._text(prop)
+        obj_name = self._text(obj)
+        return (
+            prop_name in ("get", "post", "put", "patch", "delete", "head", "options")
+            and obj_name in self._FASTIFY_OBJECTS
+        )
+
     def _is_emit_call(self, fn: Node) -> bool:
         if fn.type != "member_expression":
             return False
@@ -975,6 +993,31 @@ class _Walker:
                     if first_str and _looks_like_url(first_str):
                         http_m = self._extract_http_method_from_callee(callee)
                         self.result.rest_calls.append((fn.name, http_m, first_str))
+
+                # Fastify route registration: fastify.get('/path', handler)
+                if self._is_fastify_route(callee):
+                    args = d.child_by_field_name("arguments")
+                    first_str = self._first_string_arg(args)
+                    if first_str and first_str.startswith("/"):
+                        # Extract method directly from the property name (already
+                        # validated by _is_fastify_route) — avoids the
+                        # _extract_http_method_from_callee gap for HEAD/OPTIONS.
+                        prop = callee.child_by_field_name("property")
+                        http_m = self._text(prop).upper() if prop else "GET"
+                        ep = EndpointNode(
+                            method=http_m,
+                            path=first_str,
+                            controller_class=f"file:{self.result.file.path}",
+                            file=self.result.file.path,
+                            handler=fn.name,
+                        )
+                        self.result.endpoints.append(ep)
+                        self.result.edges.append(
+                            Edge(kind=EXPOSES, src_id=f"file:{self.result.file.path}", dst_id=ep.id)
+                        )
+                        self.result.edges.append(
+                            Edge(kind=HANDLES, src_id=fn.id, dst_id=ep.id)
+                        )
 
                 # ConfigService.get('X')
                 if self._is_config_get(callee):

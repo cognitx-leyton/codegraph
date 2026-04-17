@@ -48,17 +48,38 @@ except ImportError:  # pragma: no cover
 
 from .schema import (
     ClassNode,
+    ColumnNode,
     DECORATED_BY,
     DEFINES_CLASS,
     DEFINES_FUNC,
     Edge,
+    EndpointNode,
+    EXPOSES,
     FileNode,
     FunctionNode,
+    HANDLES,
+    HAS_COLUMN,
     HAS_METHOD,
     ImportSpec,
     MethodNode,
     ParseResult,
 )
+
+
+# ── Python route decorator mapping ───────────────────────────────────
+
+# Maps canonical decorator base names (without "()" suffix) to HTTP methods.
+# None means the method must be extracted from a `methods=` kwarg (Flask-style).
+_PY_ROUTE_DECORATORS: dict[str, Optional[str]] = {}
+for _obj in ("app", "router"):
+    for _method, _verb in [("get", "GET"), ("post", "POST"), ("put", "PUT"),
+                           ("delete", "DELETE"), ("patch", "PATCH"),
+                           ("head", "HEAD"), ("options", "OPTIONS")]:
+        _PY_ROUTE_DECORATORS[f"{_obj}.{_method}"] = _verb
+
+# Flask-style route() — method extracted from `methods=` kwarg, default GET
+for _obj in ("app", "bp", "blueprint"):
+    _PY_ROUTE_DECORATORS[f"{_obj}.route"] = None
 
 
 def _descend(root):
@@ -308,15 +329,23 @@ class _PyWalker:
             dst_id=cls.id,
         ))
 
-        # Base classes → class_extends name-refs + is_abstract detection
+        # Base classes → class_extends name-refs + is_abstract + ORM entity detection
+        base_names: list[str] = []
         superclasses = self._child_by_field(node, "superclasses")
         if superclasses is not None:
             for c in superclasses.children:
                 if c.type in ("identifier", "attribute", "dotted_name"):
                     base_name = self._text(c).split(".")[-1]
+                    base_names.append(base_name)
                     if base_name in ("ABC", "ABCMeta"):
                         cls.is_abstract = True
                     self.result.class_extends.append((name, base_name))
+
+        # Detect ORM entities: SQLAlchemy (Base, DeclarativeBase, db.Model)
+        # and Django (models.Model, Model)
+        _ORM_BASES = {"Base", "DeclarativeBase", "Model"}
+        if any(b in _ORM_BASES for b in base_names):
+            cls.is_entity = True
 
         # Class-level decorators
         for dec in decorators:
@@ -328,10 +357,12 @@ class _PyWalker:
                     dst_id=f"dec:{dname}",
                 ))
 
-        # Walk body for methods
+        # Walk body for methods + ORM columns
         body = self._child_by_field(node, "body")
         if body is not None:
             self._walk_class_body(body, cls)
+            if cls.is_entity:
+                self._scan_orm_columns(body, cls)
 
     def _walk_class_body(self, body, cls: ClassNode) -> None:
         for child in body.children:
@@ -352,6 +383,142 @@ class _PyWalker:
                 elif target.type == "class_definition":
                     # Nested class — treat as a top-level class for simplicity.
                     self._handle_class(target, decorators=decorators)
+
+    # ── ORM column detection ───────────────────────────────────────────
+
+    # Column-producing call names (SQLAlchemy + Django)
+    _COLUMN_CALLS = {
+        "Column", "mapped_column",
+        # Django model fields
+        "CharField", "IntegerField", "FloatField", "BooleanField",
+        "TextField", "DateField", "DateTimeField", "TimeField",
+        "DecimalField", "EmailField", "URLField", "UUIDField",
+        "SlugField", "FileField", "ImageField", "JSONField",
+        "BigIntegerField", "SmallIntegerField", "PositiveIntegerField",
+        "PositiveSmallIntegerField", "BinaryField", "DurationField",
+        "AutoField", "BigAutoField", "SmallAutoField",
+    }
+
+    # Relationship/ForeignKey calls → result.relations
+    _RELATION_CALLS = {"relationship", "ForeignKey"}
+
+    def _scan_orm_columns(self, body, cls: ClassNode) -> None:
+        """Scan a class body for ORM column and relationship assignments."""
+        for child in body.children:
+            # Assignments are wrapped in expression_statement → assignment
+            target = child
+            if target.type == "expression_statement":
+                for c in target.children:
+                    if c.type == "assignment":
+                        target = c
+                        break
+            if target.type == "assignment":
+                self._check_column_assignment(target, cls)
+
+    def _check_column_assignment(self, node, cls: ClassNode) -> None:
+        """Check if a statement is a column/relationship assignment."""
+        # Find assignment: look for "=" with LHS identifier and RHS call
+        # Tree-sitter shapes:
+        #   assignment: left=identifier, right=call
+        #   assignment: left=identifier, type=..., right=call (annotated)
+
+        lhs = self._child_by_field(node, "left")
+        rhs = self._child_by_field(node, "right")
+
+        if lhs is None or rhs is None:
+            return
+
+        # Get the column name from LHS
+        col_name = None
+        if lhs.type == "identifier":
+            col_name = self._text(lhs)
+        elif lhs.type == "pattern_list":
+            return  # tuple unpacking, not a column
+
+        if not col_name or col_name.startswith("_"):
+            # Skip __tablename__, __table_args__, etc. — but extract tablename
+            if col_name == "__tablename__" and rhs.type == "string":
+                cls.table_name = self._strip_quotes(self._text(rhs))
+            return
+
+        # Get the call name from RHS
+        if rhs.type != "call":
+            return
+
+        fn = self._child_by_field(rhs, "function")
+        if fn is None:
+            return
+
+        # Get the function name (handles `Column(...)`, `models.CharField(...)`)
+        call_name = self._text(fn).split(".")[-1]
+
+        if call_name in self._COLUMN_CALLS:
+            col_type = self._extract_column_type(rhs)
+            # Django fields: the type is the field class name itself (CharField, etc.)
+            if not col_type and call_name not in ("Column", "mapped_column"):
+                col_type = call_name.replace("Field", "")
+            col = ColumnNode(entity_id=cls.id, name=col_name, type=col_type)
+            self.result.columns.append(col)
+            self.result.edges.append(Edge(
+                kind=HAS_COLUMN,
+                src_id=cls.id,
+                dst_id=f"col:{cls.id}#{col_name}",
+            ))
+            # Scan Column args for nested ForeignKey/relationship calls
+            self._scan_nested_relations(rhs, cls, col_name)
+        elif call_name in self._RELATION_CALLS:
+            # relationship("Address") or ForeignKey("address.id")
+            target = self._call_first_string_arg(rhs)
+            if target:
+                # Strip table references: "address.id" → "address"
+                target = target.split(".")[0]
+                self.result.relations.append((cls.name, call_name, col_name, target))
+
+    def _scan_nested_relations(self, call_node, cls: ClassNode, col_name: str) -> None:
+        """Scan a Column() call's arguments for nested ForeignKey/relationship calls."""
+        args = self._child_by_field(call_node, "arguments")
+        if args is None:
+            return
+        for arg in args.children:
+            if arg.type == "call":
+                fn = self._child_by_field(arg, "function")
+                if fn is None:
+                    continue
+                nested_name = self._text(fn).split(".")[-1]
+                if nested_name in self._RELATION_CALLS:
+                    target = self._call_first_string_arg(arg)
+                    if target:
+                        target = target.split(".")[0]
+                        self.result.relations.append((cls.name, nested_name, col_name, target))
+
+    def _extract_column_type(self, call_node) -> str:
+        """Extract the type from a Column/mapped_column/models.*Field call."""
+        args = self._child_by_field(call_node, "arguments")
+        if args is None:
+            return ""
+        for arg in args.children:
+            if arg.type in ("(", ")", ","):
+                continue
+            if arg.type == "keyword_argument":
+                continue
+            # First positional arg is typically the type
+            return self._text(arg).split("(")[0]  # Column(String(50)) → "String"
+        return ""
+
+    def _call_first_string_arg(self, call_node) -> Optional[str]:
+        """Extract the first string literal argument from a call."""
+        args = self._child_by_field(call_node, "arguments")
+        if args is None:
+            return None
+        for arg in args.children:
+            if arg.type == "string":
+                return self._strip_quotes(self._text(arg))
+            if arg.type in ("(", ")", ","):
+                continue
+            if arg.type == "keyword_argument":
+                continue
+            break
+        return None
 
     # ── methods ───────────────────────────────────────────────────────
 
@@ -393,7 +560,8 @@ class _PyWalker:
             dst_id=method.id,
         ))
 
-        # Method decorators
+        # Method decorators + route endpoint detection
+        http_dec = None  # (http_method, path) if a route decorator is found
         for dec in decorators:
             dname = self._decorator_name(dec)
             if dname:
@@ -402,6 +570,29 @@ class _PyWalker:
                     src_id=method.id,
                     dst_id=f"dec:{dname}",
                 ))
+                # Check if this decorator is a route decorator
+                base = dname.rstrip("()")
+                if base in _PY_ROUTE_DECORATORS:
+                    verb = _PY_ROUTE_DECORATORS[base]
+                    path = self._decorator_first_string_arg(dec) or "/"
+                    if verb is None:
+                        # Flask-style: extract method from `methods=` kwarg
+                        verb = self._decorator_methods_kwarg(dec) or "GET"
+                    http_dec = (verb, path)
+
+        if http_dec:
+            http_method, path = http_dec
+            full_path = self._join_paths(cls.base_path, path)
+            ep = EndpointNode(
+                method=http_method,
+                path=full_path,
+                controller_class=cls.id,
+                file=self.result.file.path,
+                handler=name,
+            )
+            self.result.endpoints.append(ep)
+            self.result.edges.append(Edge(kind=EXPOSES, src_id=cls.id, dst_id=ep.id))
+            self.result.edges.append(Edge(kind=HANDLES, src_id=method.id, dst_id=ep.id))
 
         # Method call graph (Phase 4 input — consumed by resolver)
         body = self._child_by_field(node, "body")
@@ -519,7 +710,8 @@ class _PyWalker:
             dst_id=fn.id,
         ))
 
-        # Function decorators
+        # Function decorators + route endpoint detection
+        http_dec = None
         for dec in decorators:
             dname = self._decorator_name(dec)
             if dname:
@@ -528,6 +720,26 @@ class _PyWalker:
                     src_id=fn.id,
                     dst_id=f"dec:{dname}",
                 ))
+                base = dname.rstrip("()")
+                if base in _PY_ROUTE_DECORATORS:
+                    verb = _PY_ROUTE_DECORATORS[base]
+                    path = self._decorator_first_string_arg(dec) or "/"
+                    if verb is None:
+                        verb = self._decorator_methods_kwarg(dec) or "GET"
+                    http_dec = (verb, path)
+
+        if http_dec:
+            http_method, path = http_dec
+            ep = EndpointNode(
+                method=http_method,
+                path=path,
+                controller_class=self.result.file.id,
+                file=self.result.file.path,
+                handler=name,
+            )
+            self.result.endpoints.append(ep)
+            self.result.edges.append(Edge(kind=EXPOSES, src_id=self.result.file.id, dst_id=ep.id))
+            self.result.edges.append(Edge(kind=HANDLES, src_id=fn.id, dst_id=ep.id))
 
     # ── signature + docstring extraction ──────────────────────────────
 
@@ -624,6 +836,68 @@ class _PyWalker:
                 return None
             return entry
         return None
+
+    # ── decorator argument extraction ────────────────────────────────
+
+    def _decorator_first_string_arg(self, dec) -> Optional[str]:
+        """Extract the first positional string literal from a decorator call.
+
+        ``@app.get("/users")`` → ``"/users"``
+        ``@app.route("/items", methods=["POST"])`` → ``"/items"``
+        """
+        for c in dec.children:
+            if c.type == "call":
+                args = self._child_by_field(c, "arguments")
+                if args is None:
+                    continue
+                for arg in args.children:
+                    if arg.type == "string":
+                        return self._strip_quotes(self._text(arg))
+                    if arg.type == "concatenated_string":
+                        # f"..." or "a" "b" — just take the raw text
+                        return self._strip_quotes(self._text(arg))
+                    if arg.type in ("keyword_argument",):
+                        continue  # skip kwargs, look for positional
+                    if arg.type in ("(", ")", ","):
+                        continue
+                    break  # first non-string positional → give up
+        return None
+
+    def _decorator_methods_kwarg(self, dec) -> Optional[str]:
+        """Extract the first HTTP method from a ``methods=[...]`` kwarg.
+
+        ``@app.route("/x", methods=["POST", "PUT"])`` → ``"POST"``
+        """
+        for c in dec.children:
+            if c.type == "call":
+                args = self._child_by_field(c, "arguments")
+                if args is None:
+                    continue
+                for arg in args.children:
+                    if arg.type == "keyword_argument":
+                        key = self._child_by_field(arg, "name")
+                        if key and self._text(key) == "methods":
+                            value = self._child_by_field(arg, "value")
+                            if value and value.type == "list":
+                                for item in value.children:
+                                    if item.type == "string":
+                                        return self._strip_quotes(self._text(item))
+        return None
+
+    @staticmethod
+    def _strip_quotes(s: str) -> str:
+        """Remove surrounding quotes from a string literal."""
+        for q in ('"""', "'''", '"', "'"):
+            if s.startswith(q) and s.endswith(q):
+                return s[len(q):-len(q)]
+        return s
+
+    @staticmethod
+    def _join_paths(base: str, sub: str) -> str:
+        """Join a base path and a sub path, normalising slashes."""
+        if not base:
+            return sub
+        return f"{base.rstrip('/')}/{sub.lstrip('/')}"
 
     # ── decorator naming ──────────────────────────────────────────────
 

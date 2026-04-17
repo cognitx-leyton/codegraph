@@ -36,6 +36,9 @@ from .schema import (
 _EXT_CANDIDATES = ["", ".ts", ".tsx", ".d.ts", "/index.ts", "/index.tsx", "/index.d.ts"]
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 
+# NodeNext-style imports use .js extensions even when the source is .ts on disk.
+_JS_TO_TS_REMAP = {".js": ".ts", ".jsx": ".tsx", ".mjs": ".mts", ".cjs": ".cts"}
+
 
 # ── tsconfig JSONC ───────────────────────────────────────────
 
@@ -198,13 +201,16 @@ class Resolver:
 
     def set_path_index(self, path_index: PathIndex) -> None:
         self._path_index = path_index
-        # Precompute alias → [(alias_prefix, absolute_target_dir)] for quick scan
+        # Precompute alias → [(alias_prefix, absolute_target_dir)] for quick scan.
+        # Keyed by str(pkg.root) (not pkg.name) so two packages with the same
+        # basename (e.g. apps/frontend/src and apps/backend/src) get distinct buckets.
         self._alias_cache = {}
         for pkg in self.packages:
+            pkg_key = str(pkg.root)
             for alias, targets in pkg.aliases.items():
-                self._alias_cache.setdefault(pkg.name, [])
+                self._alias_cache.setdefault(pkg_key, [])
                 for t in targets:
-                    self._alias_cache[pkg.name].append((alias, t))
+                    self._alias_cache[pkg_key].append((alias, t))
 
     def resolve(self, importer_rel: str, specifier: str) -> Optional[str]:
         if self._path_index is None:
@@ -226,25 +232,71 @@ class Resolver:
                 base_rel = str(target.relative_to(self.repo_root)).replace("\\", "/")
             except ValueError:
                 return None
-            return self._path_index.try_resolve(base_rel)
+            hit = self._path_index.try_resolve(base_rel)
+            if hit:
+                return hit
+            # NodeNext: remap .js → .ts when the literal path doesn't exist
+            return self._try_js_remap(base_rel)
 
         # Absolute from repo root — rare
         if spec.startswith("/"):
             return self._path_index.try_resolve(spec.lstrip("/"))
 
-        # Alias lookup
+        # Alias lookup — try importer's own package first, then fall through
+        importer_pkg = self._package_for_file(importer_rel)
+        if importer_pkg and importer_pkg in self._alias_cache:
+            hit = self._try_aliases(spec, self._alias_cache[importer_pkg])
+            if hit:
+                return hit
         for pkg_name, alias_pairs in self._alias_cache.items():
-            for alias, target_dir in alias_pairs:
-                if spec.startswith(alias):
-                    rest = spec[len(alias):]
-                    candidate = (target_dir / rest).resolve() if rest else target_dir
-                    try:
-                        base_rel = str(candidate.relative_to(self.repo_root)).replace("\\", "/")
-                    except ValueError:
-                        continue
-                    hit = self._path_index.try_resolve(base_rel)
-                    if hit:
-                        return hit
+            if pkg_name == importer_pkg:
+                continue  # already tried
+            hit = self._try_aliases(spec, alias_pairs)
+            if hit:
+                return hit
+        return None
+
+    def _try_aliases(self, spec: str, alias_pairs: list[tuple[str, Path]]) -> Optional[str]:
+        """Try resolving *spec* against a list of (alias_prefix, target_dir) pairs."""
+        if self._path_index is None:
+            return None
+        for alias, target_dir in alias_pairs:
+            if spec.startswith(alias):
+                rest = spec[len(alias):]
+                candidate = (target_dir / rest).resolve() if rest else target_dir
+                try:
+                    base_rel = str(candidate.relative_to(self.repo_root)).replace("\\", "/")
+                except ValueError:
+                    continue
+                hit = self._path_index.try_resolve(base_rel)
+                if hit:
+                    return hit
+                # NodeNext: remap .js → .ts for aliased imports too
+                hit = self._try_js_remap(base_rel)
+                if hit:
+                    return hit
+        return None
+
+    def _package_for_file(self, rel: str) -> Optional[str]:
+        """Return the cache key (``str(pkg.root)``) for the package that contains *rel*."""
+        abs_path = (self.repo_root / rel).resolve()
+        for pkg in self.packages:
+            try:
+                abs_path.relative_to(pkg.root)
+                return str(pkg.root)
+            except ValueError:
+                continue
+        return None
+
+    def _try_js_remap(self, base_rel: str) -> Optional[str]:
+        """Remap NodeNext .js/.jsx/.mjs/.cjs extensions to .ts/.tsx/.mts/.cts."""
+        if self._path_index is None:
+            return None
+        for js_ext, ts_ext in _JS_TO_TS_REMAP.items():
+            if base_rel.endswith(js_ext):
+                remapped = base_rel[: -len(js_ext)] + ts_ext
+                if remapped in self._path_index.files:
+                    return remapped
         return None
 
     # ── Python resolution ─────────────────────────────────────────────
@@ -290,13 +342,19 @@ class Resolver:
             return self._resolve_python_module(base, remainder)
 
         # Absolute intra-package import: strip the top-level name.
+        # Try the importer's own package first to avoid basename collisions
+        # when multiple Python packages share the same directory name.
         first = spec.split(".")[0]
-        for pkg in self.packages:
-            if pkg.language != "py":
-                continue
-            if pkg.name == first:
-                remainder = ".".join(spec.split(".")[1:])
-                return self._resolve_python_module(pkg.root, remainder)
+        remainder = ".".join(spec.split(".")[1:])
+        importer_root = self._package_for_file(importer_rel)
+        candidates = sorted(
+            (pkg for pkg in self.packages if pkg.language == "py" and pkg.name == first),
+            key=lambda p: (str(p.root) != importer_root),  # own package sorts first
+        )
+        for pkg in candidates:
+            hit = self._resolve_python_module(pkg.root, remainder)
+            if hit:
+                return hit
 
         # External — the caller emits IMPORTS_EXTERNAL.
         return None

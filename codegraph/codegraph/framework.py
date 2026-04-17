@@ -38,6 +38,10 @@ class FrameworkType(Enum):
     SVELTEKIT = "sveltekit"
     NESTJS = "nestjs"
     ODOO = "odoo"
+    FASTAPI = "fastapi"
+    FLASK = "flask"
+    DJANGO = "django"
+    FASTIFY = "fastify"
     UNKNOWN = "unknown"
 
 
@@ -54,6 +58,10 @@ FRAMEWORK_DISPLAY = {
     FrameworkType.SVELTEKIT: "SvelteKit",
     FrameworkType.NESTJS: "NestJS",
     FrameworkType.ODOO: "Odoo",
+    FrameworkType.FASTAPI: "FastAPI",
+    FrameworkType.FLASK: "Flask",
+    FrameworkType.DJANGO: "Django",
+    FrameworkType.FASTIFY: "Fastify",
     FrameworkType.UNKNOWN: "Unknown",
 }
 
@@ -128,6 +136,42 @@ class FrameworkDetector:
                 r"_name\s*=\s*['\"]\w+\.\w+['\"]",
             ],
         },
+        FrameworkType.FASTAPI: {
+            "files": [],
+            "dependencies": ["fastapi", "uvicorn"],
+            "patterns": [
+                r"@app\.(get|post|put|delete|patch)\s*\(",
+                r"from\s+fastapi\s+import",
+                r"APIRouter",
+            ],
+        },
+        FrameworkType.FLASK: {
+            "files": ["wsgi.py"],
+            "dependencies": ["flask", "Flask"],
+            "patterns": [
+                r"@app\.route\s*\(",
+                r"from\s+flask\s+import",
+                r"Flask\s*\(",
+            ],
+        },
+        FrameworkType.DJANGO: {
+            "files": ["manage.py", "urls.py", "wsgi.py", "asgi.py"],
+            "dependencies": ["django", "Django"],
+            "patterns": [
+                r"from\s+django",
+                r"urlpatterns\s*=",
+                r"INSTALLED_APPS",
+            ],
+        },
+        FrameworkType.FASTIFY: {
+            "files": [],
+            "dependencies": ["fastify"],
+            "patterns": [
+                r"fastify\.(get|post|put|delete|patch)\s*\(",
+                r"from\s+['\"]fastify['\"]",
+                r"import\s+.*Fastify",
+            ],
+        },
     }
 
     STYLING_INDICATORS = {
@@ -191,6 +235,7 @@ class FrameworkDetector:
         self._files_cache: Optional[list[Path]] = None
         self._workspace_deps_cache: Optional[set[str]] = None
         self._workspace_pjs_cache: Optional[list[dict]] = None
+        self._python_deps_cache: Optional[set[str]] = None
 
     # ── monorepo walk-up ────────────────────────────────────────────────
 
@@ -400,6 +445,61 @@ class FrameworkDetector:
                 return "bun"
         return None
 
+    # ── Python dependency reading ────────────────────────────────────────
+
+    @property
+    def _python_dependencies(self) -> set[str]:
+        """Merged dep names from ``pyproject.toml``, ``setup.py``, and ``requirements.txt``."""
+        if self._python_deps_cache is not None:
+            return self._python_deps_cache
+
+        deps: set[str] = set()
+
+        # pyproject.toml — [project.dependencies]
+        pyproject = self.project_path / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                try:
+                    import tomllib  # Python 3.11+
+                except ModuleNotFoundError:
+                    import tomli as tomllib  # type: ignore[no-redef]
+                with open(pyproject, "rb") as f:
+                    data = tomllib.load(f)
+                for dep_str in data.get("project", {}).get("dependencies", []):
+                    # Strip version specifiers: "fastapi>=0.100" → "fastapi"
+                    name = re.split(r"[><=!~;\[\s]", dep_str, maxsplit=1)[0].strip()
+                    if name:
+                        deps.add(name.lower())
+                # Also check optional deps
+                for group_deps in data.get("project", {}).get("optional-dependencies", {}).values():
+                    for dep_str in group_deps:
+                        name = re.split(r"[><=!~;\[\s]", dep_str, maxsplit=1)[0].strip()
+                        if name:
+                            deps.add(name.lower())
+            except Exception:
+                pass
+
+        # requirements.txt
+        for req_name in ("requirements.txt", "requirements-dev.txt", "requirements-test.txt"):
+            req_file = self.project_path / req_name
+            if req_file.exists():
+                try:
+                    for line in req_file.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#") or line.startswith("-"):
+                            continue
+                        name = re.split(r"[><=!~;\[\s]", line, maxsplit=1)[0].strip()
+                        if name:
+                            deps.add(name.lower())
+                except OSError:
+                    pass
+
+        self._python_deps_cache = deps
+        return deps
+
+    def _check_python_dependency(self, dep: str) -> bool:
+        return dep.lower() in self._python_dependencies
+
     # ── Odoo short-circuit ──────────────────────────────────────────────
 
     def _has_odoo_signature(self) -> bool:
@@ -441,15 +541,20 @@ class FrameworkDetector:
                 confidence=0.95,
             )
 
+        _PYTHON_FRAMEWORKS = {FrameworkType.FASTAPI, FrameworkType.FLASK, FrameworkType.DJANGO}
+
         scores: dict[FrameworkType, float] = {ft: 0.0 for ft in FrameworkType}
-        code_extensions = (".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte")
+        code_extensions = (".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".py")
 
         for framework, indicators in self.FRAMEWORK_INDICATORS.items():
             for file_indicator in indicators["files"]:
                 if self._check_file_exists(file_indicator):
                     scores[framework] += 30.0
             for dep in indicators["dependencies"]:
+                # Check both JS (package.json) and Python (pyproject.toml/requirements.txt)
                 if self._check_dependency(dep):
+                    scores[framework] += 25.0
+                elif framework in _PYTHON_FRAMEWORKS and self._check_python_dependency(dep):
                     scores[framework] += 25.0
             for pattern in indicators["patterns"]:
                 if self._check_pattern_in_files(pattern, code_extensions):
@@ -478,6 +583,8 @@ class FrameworkDetector:
             version = self._get_dependency_version("svelte")
         elif best_framework == FrameworkType.NESTJS:
             version = self._get_dependency_version("@nestjs/core")
+        elif best_framework == FrameworkType.FASTIFY:
+            version = self._get_dependency_version("fastify")
 
         return FrameworkInfo(
             framework=best_framework,
