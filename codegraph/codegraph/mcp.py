@@ -299,7 +299,7 @@ def list_packages() -> list[dict]:
 
 
 @mcp.tool()
-def callers_of_class(class_name: str, max_depth: int = 3) -> list[dict]:
+def callers_of_class(class_name: str, max_depth: int = 1) -> list[dict]:
     """Blast-radius traversal: who reaches the given class transitively?
 
     Walks ``INJECTS`` / ``EXTENDS`` / ``IMPLEMENTS`` edges in reverse from the
@@ -308,10 +308,10 @@ def callers_of_class(class_name: str, max_depth: int = 3) -> list[dict]:
 
     Args:
         class_name: Exact ``:Class.name`` to query (e.g. ``"AuthService"``).
-        max_depth: Max hops to traverse (1..10, default 3).
+        max_depth: Max hops to traverse (1..5, default 1).
     """
-    if not isinstance(max_depth, int) or not 1 <= max_depth <= 10:
-        return [{"error": "max_depth must be an integer in 1..10"}]
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or not 1 <= max_depth <= 5:
+        return [{"error": "max_depth must be an integer in 1..5"}]
     # Variable-length path bounds cannot be bind parameters in Cypher; the
     # integer is validated above before we interpolate it.
     cypher = (
@@ -520,7 +520,7 @@ def calls_from(
         max_depth: 1 for direct calls, up to 5 for transitive reach.
         limit: Max rows to return. Integer in 1..1000, default 50.
     """
-    if not isinstance(max_depth, int) or not 1 <= max_depth <= 5:
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or not 1 <= max_depth <= 5:
         return [{"error": "max_depth must be an integer in 1..5"}]
     err = _validate_limit(limit)
     if err:
@@ -556,7 +556,7 @@ def callers_of(
         max_depth: 1 for direct callers, up to 5 for transitive reach.
         limit: Max rows to return. Integer in 1..1000, default 50.
     """
-    if not isinstance(max_depth, int) or not 1 <= max_depth <= 5:
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or not 1 <= max_depth <= 5:
         return [{"error": "max_depth must be an integer in 1..5"}]
     err = _validate_limit(limit)
     if err:
