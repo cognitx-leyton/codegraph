@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-17 after commits `af77cd3` → `fa031dd` (slash commands + arch-check CI + onboarding scaffolder + Python Stage 2 + MCP prompt templates + describe_schema CypherSyntaxError fix).
+> **Last updated:** 2026-04-17 after commits `af77cd3` → `6fe0730` (slash commands + arch-check CI + onboarding scaffolder + Python Stage 2 + MCP prompt templates + describe_schema CypherSyntaxError fix + query_graph bool/limit validation fix).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-29-describe-schema-error`. Working tree clean. Fix for issue #29 committed as `fa031dd`.
-- **Tests:** 278 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-30-query-graph-bool-limit`. Working tree clean. Fix for issue #30 committed as `6fe0730`.
+- **Tests:** 280 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools live + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.2.0 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration).
@@ -22,6 +22,8 @@
 ## Shipped since the last roadmap update (commit `7588522`)
 
 ```
+6fe0730 fix(mcp):       reject bool and out-of-range limit in query_graph (#30)
+11f02cb chore:          bump version to 0.1.4
 fa031dd fix(mcp):       catch CypherSyntaxError in describe_schema before ClientError (#29)
 eaee6a7 chore:          bump version to 0.1.3
 357ad03 feat(mcp):      expose queries.md as MCP prompt templates (#12)
@@ -40,6 +42,9 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 ```
 
 Four sessions' worth of work grouped by theme:
+
+### MCP bug fix: query_graph bool and out-of-range limit validation (issue #30)
+- `6fe0730 fix(mcp)` — `query_graph()` was silently capping `limit=5000` to 1000 instead of rejecting it, and accepted `True`/`False` as valid limits (Python bool is a subclass of int, so the old `isinstance(limit, int)` guard passed). Fixed by replacing the inline `isinstance` check + `min(limit, 1000)` cap with a call to `_validate_limit(limit)`, the same helper already used by all 7 other tools in `mcp.py`. Also fixed the stale docstring ("cap 1000" → "max 1000"). Three test changes in `test_mcp.py`: updated error message in `test_query_graph_rejects_bad_limit`; renamed `test_query_graph_caps_huge_limit` → `test_query_graph_rejects_huge_limit` (now expects rejection for limit=5000); added parametrized `test_query_graph_rejects_bool_limit` covering `True` and `False`. Test count 278 → 280.
 
 ### MCP bug fix: describe_schema CypherSyntaxError (issue #29)
 - `fa031dd fix(mcp)` — `describe_schema()` in `mcp.py` now catches `CypherSyntaxError` before the broader `ClientError` handler, returning `{"error": "Cypher syntax error: ..."}` consistently. Matches the pattern already used in `_run_read()` and `query_graph()`. One new test (`test_describe_schema_surfaces_cypher_syntax_error`) added to `test_mcp.py` — injects a `CypherSyntaxError`, calls `describe_schema()`, asserts the error dict has the correct prefix and original message. Test count 277 → 278.
@@ -85,12 +90,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-29-describe-schema-error` |
+| Current branch | `archon/task-fix-issue-30-query-graph-bool-limit` |
 | Base branch | `main` |
-| Unpushed commits | 0 (working tree clean; `fa031dd` already committed) |
-| Open PR | #8 `dev → main` (the earlier work). Issue #29 fix branch pending merge. |
+| Unpushed commits | 0 (working tree clean; `6fe0730` already committed) |
+| Open PR | Issue #30 fix branch pending merge. |
 | Working tree | Clean |
-| Test count | 278 passing + 1 deselected |
+| Test count | 280 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -435,7 +440,7 @@ asking. Do not merge the open PR #8 without asking.
 | `test_ignore.py` | 19 | `ignore.py` + cli helpers |
 | `test_framework.py` | 18 | `framework.py` (TS) |
 | `test_py_framework.py` | 13 | `framework.py` (Python Stage 2) |
-| `test_mcp.py` | 46 | `mcp.py` (13 tools + 29 prompts + describe_schema error handling) |
+| `test_mcp.py` | 48 | `mcp.py` (13 tools + 29 prompts + describe_schema + query_graph validation) |
 | `test_py_parser.py` | 28 | `py_parser.py` (Stage 1 parsing) |
 | `test_py_parser_calls.py` | 12 | Method-body CALLS emission |
 | `test_py_parser_endpoints.py` | 18 | Python Stage 2 endpoint parsing |
@@ -447,7 +452,7 @@ asking. Do not merge the open PR #8 without asking.
 | `test_arch_config.py` | 20 | `.arch-policies.toml` parser (built-ins + custom + validation errors) |
 | `test_init.py` | 17 | Scaffolder helpers (detection, prompts, render, write) |
 | `test_init_integration.py` | 2 (1 slow) | End-to-end scaffold + optional Docker |
-| **Total** | **278** | |
+| **Total** | **280** | |
 
 ### Key decisions recorded in commit messages
 
@@ -463,6 +468,7 @@ Grep commit bodies for rationale:
 - Why `cognitx-codegraph` as the PyPI name → `d0abe53`
 - Why `queries.md` headings/fenced-blocks drive prompt registration (not hardcoded names) → `357ad03`
 - Why Python Stage 2 uses `framework.py` scored heuristics rather than per-file flags → `6493224`
+- Why `query_graph` rejects bool limits (Python bool ⊂ int — `isinstance(True, int)` is True) → `6fe0730`
 
 ### Git remotes
 
