@@ -1,6 +1,6 @@
 # Architecture-Conformance Policies
 
-Reference for the three built-in policies run by `codegraph arch-check` and the `/arch-check` slash command. Each section covers: what the policy detects, why the invariant matters, the exact Cypher, how to interpret a violation, and common false positives.
+Reference for the four built-in policies run by `codegraph arch-check` and the `/arch-check` slash command. Each section covers: what the policy detects, why the invariant matters, the exact Cypher, how to interpret a violation, and common false positives.
 
 If a policy fires on your PR and you believe it shouldn't, read the "False positives" subsection first — most violations are either load-bearing bugs or one of the known noise patterns, and the doc flags which is which.
 
@@ -129,6 +129,52 @@ The Controller → Service → Repository layering is the default pattern in Nes
 
 ---
 
+## 4. `coupling_ceiling`
+
+### What it detects
+
+Files with more than N distinct file-level imports. A file that `:IMPORTS` many other files has high fan-out — it depends on a wide surface area and is likely a coupling magnet:
+
+```cypher
+MATCH (f:File)-[:IMPORTS]->(g:File)
+WITH f, count(g) AS deps
+WHERE deps > $threshold
+RETURN f.path AS file, deps
+ORDER BY deps DESC
+```
+
+### Why it matters
+
+High fan-out files are expensive: every change to any of their dependencies is a potential break. They're hard to test in isolation, hard to move between packages, and hard to reason about. They tend to accumulate more imports over time (gravity effect) because "it already imports everything, so let's add one more". Catching them early — before they cross 20-30 imports — is much cheaper than untangling them later.
+
+### Interpreting a violation
+
+`file` is the path of the offending file. `deps` is how many distinct files it imports. The violation is "this file depends on `deps` other files, which exceeds the configured ceiling of `max_imports`".
+
+**Typical resolutions**:
+- Split the file into smaller, focused modules with narrower dependency sets
+- Extract a facade or mediator that aggregates the imports, so consumers depend on the facade instead of N direct imports
+- Check if some imports are unused and can be removed (the indexer counts all `import` statements, including dead ones)
+- For barrel / re-export files (`__init__.py`, `index.ts`), consider raising the threshold or disabling the policy for that specific file pattern via a custom policy override
+
+### Configuration
+
+```toml
+[policies.coupling_ceiling]
+enabled     = true   # false disables this policy entirely
+max_imports = 20     # flag files with more than this many distinct IMPORTS edges
+```
+
+Default threshold is 20. Raise it for large monorepo roots or barrel files; lower it for microservice repos where tight coupling matters more.
+
+### False positives
+
+- **Barrel / re-export files**: `__init__.py` and `index.ts` files exist to re-export symbols from submodules. A package `__init__.py` that re-exports 25 submodules will trip the default threshold, but that's its job. Raise `max_imports` or disable the policy if your project relies on deep barrel files.
+- **Test files**: integration test files often import many modules under test plus fixtures. They're not production coupling magnets. Consider raising the threshold or adding a custom policy that excludes `tests/` paths.
+- **Generated files**: auto-generated code (e.g. GraphQL resolvers, ORM models) can legitimately import many dependencies. Exclude them via `.codegraphignore` before indexing.
+
+---
+
 ## Exit codes
 
 `codegraph arch-check` returns:
@@ -168,6 +214,10 @@ repository_suffix = "Repository"      # class name suffix for repos
 service_suffix    = "Service"         # class name suffix for the required intermediate layer
 call_depth        = 3                  # max CALLS hops to traverse
 
+[policies.coupling_ceiling]
+enabled     = true   # false disables this policy entirely
+max_imports = 20     # flag files importing more than this many distinct files
+
 # ── Custom policies: user-authored Cypher ──────────────────────
 
 [[policies.custom]]
@@ -188,7 +238,7 @@ sample_cypher = "MATCH (e:Endpoint) WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e)
 - Every section is optional. Omit to use defaults.
 - Every `count_cypher` must return a single row with column `v` containing an integer ≥ 0.
 - Every `sample_cypher` should return at most 10 rows — each row becomes a dict in the JSON report's `sample` array.
-- Custom policy names must be unique and must not collide with built-in names (`import_cycles`, `cross_package`, `layer_bypass`).
+- Custom policy names must be unique and must not collide with built-in names (`import_cycles`, `cross_package`, `layer_bypass`, `coupling_ceiling`).
 - Malformed TOML or invalid fields → exit code 2 with a clear error message (not exit code 1, which means policy violations).
 
 ### Schema versioning

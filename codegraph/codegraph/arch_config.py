@@ -29,6 +29,10 @@ TOML schema (all sections optional):
     service_suffix    = "Service"
     call_depth        = 3
 
+    [policies.coupling_ceiling]
+    enabled     = true
+    max_imports = 20
+
     [[policies.custom]]
     name          = "no_fat_files"
     description   = "Files over 500 LOC"
@@ -93,6 +97,12 @@ class LayerBypassConfig:
 
 
 @dataclass
+class CouplingCeilingConfig:
+    enabled: bool = True
+    max_imports: int = 20
+
+
+@dataclass
 class CustomPolicy:
     """User-authored policy, identified by a pair of Cypher queries."""
 
@@ -114,6 +124,7 @@ class ArchConfig:
     import_cycles: ImportCyclesConfig = field(default_factory=ImportCyclesConfig)
     cross_package: CrossPackageConfig = field(default_factory=CrossPackageConfig)
     layer_bypass: LayerBypassConfig = field(default_factory=LayerBypassConfig)
+    coupling_ceiling: CouplingCeilingConfig = field(default_factory=CouplingCeilingConfig)
     custom: list[CustomPolicy] = field(default_factory=list)
     schema_version: int = 1
 
@@ -171,6 +182,7 @@ def load_arch_config(repo_root: Path, path: Optional[Path] = None) -> ArchConfig
         import_cycles=_parse_import_cycles(policies.get("import_cycles", {}), config_path),
         cross_package=_parse_cross_package(policies.get("cross_package", {}), config_path),
         layer_bypass=_parse_layer_bypass(policies.get("layer_bypass", {}), config_path),
+        coupling_ceiling=_parse_coupling_ceiling(policies.get("coupling_ceiling", {}), config_path),
         custom=_parse_custom(policies.get("custom", []), config_path),
         schema_version=schema_version,
     )
@@ -254,13 +266,26 @@ def _parse_layer_bypass(raw: dict, path: Path) -> LayerBypassConfig:
     )
 
 
+def _parse_coupling_ceiling(raw: dict, path: Path) -> CouplingCeilingConfig:
+    defaults = CouplingCeilingConfig()
+    cfg = CouplingCeilingConfig(
+        enabled=_bool(raw, "enabled", defaults.enabled, path, "coupling_ceiling"),
+        max_imports=_int(raw, "max_imports", defaults.max_imports, path, "coupling_ceiling"),
+    )
+    if cfg.max_imports < 1:
+        raise ArchConfigError(
+            f"{path}: policies.coupling_ceiling.max_imports must be >= 1 (got {cfg.max_imports})"
+        )
+    return cfg
+
+
 def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:
     if not isinstance(raw, list):
         raise ArchConfigError(
             f"{path}: policies.custom must be an array of tables, got {type(raw).__name__}"
         )
     seen: set[str] = set()
-    builtins = {"import_cycles", "cross_package", "layer_bypass"}
+    builtins = {"import_cycles", "cross_package", "layer_bypass", "coupling_ceiling"}
     out: list[CustomPolicy] = []
     for i, p in enumerate(raw):
         if not isinstance(p, dict):

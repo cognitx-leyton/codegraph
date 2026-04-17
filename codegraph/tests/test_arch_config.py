@@ -46,6 +46,8 @@ def test_missing_file_returns_defaults(tmp_path: Path):
     assert cfg.layer_bypass.repository_suffix == "Repository"
     assert cfg.layer_bypass.service_suffix == "Service"
     assert cfg.layer_bypass.call_depth == 3
+    assert cfg.coupling_ceiling.enabled is True
+    assert cfg.coupling_ceiling.max_imports == 20
     assert cfg.custom == []
     assert cfg.schema_version == 1
 
@@ -216,6 +218,37 @@ def test_layer_bypass_empty_labels_rejected(tmp_path: Path):
 controller_labels = []
 """)
     with pytest.raises(ArchConfigError, match="must not be empty"):
+        load_arch_config(tmp_path)
+
+
+# ── Coupling ceiling ──────────────────────────────────────────
+
+
+def test_tune_coupling_ceiling(tmp_path: Path):
+    _write(tmp_path, """
+[policies.coupling_ceiling]
+max_imports = 10
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.coupling_ceiling.max_imports == 10
+    assert cfg.coupling_ceiling.enabled is True
+
+
+def test_coupling_ceiling_disabled(tmp_path: Path):
+    _write(tmp_path, """
+[policies.coupling_ceiling]
+enabled = false
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.coupling_ceiling.enabled is False
+
+
+def test_coupling_ceiling_max_imports_below_1_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.coupling_ceiling]
+max_imports = 0
+""")
+    with pytest.raises(ArchConfigError, match="max_imports must be >= 1"):
         load_arch_config(tmp_path)
 
 

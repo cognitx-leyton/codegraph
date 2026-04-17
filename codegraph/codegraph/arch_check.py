@@ -13,6 +13,8 @@ Built-in policies:
 - **cross_package** — forbidden import directions (configurable pair list).
 - **layer_bypass** — controllers reaching ``*Repository`` methods without
   traversing a ``*Service`` (suffixes configurable).
+- **coupling_ceiling** — files with more than N distinct file-level imports
+  (configurable threshold).
 
 User-authored policies live under ``[[policies.custom]]`` in
 ``.arch-policies.toml`` (see :mod:`codegraph.arch_config`).
@@ -30,6 +32,7 @@ from rich.table import Table
 
 from .arch_config import (
     ArchConfig,
+    CouplingCeilingConfig,
     CrossPackageConfig,
     CustomPolicy,
     ImportCyclesConfig,
@@ -124,6 +127,11 @@ def _run_all(driver: Driver, config: ArchConfig) -> list[PolicyResult]:
         out.append(_check_layer_bypass(driver, config.layer_bypass))
     else:
         out.append(_disabled("layer_bypass"))
+
+    if config.coupling_ceiling.enabled:
+        out.append(_check_coupling_ceiling(driver, config.coupling_ceiling))
+    else:
+        out.append(_disabled("coupling_ceiling"))
 
     for custom in config.custom:
         if custom.enabled:
@@ -263,6 +271,36 @@ def _check_layer_bypass(driver: Driver, cfg: LayerBypassConfig) -> PolicyResult:
             f"{'/'.join(cfg.controller_labels)} calling *{cfg.repository_suffix} "
             f"methods without a *{cfg.service_suffix} layer in between."
         ),
+    )
+
+
+def _check_coupling_ceiling(driver: Driver, cfg: CouplingCeilingConfig) -> PolicyResult:
+    """Flag files with more than ``cfg.max_imports`` distinct file-level imports."""
+    count_cypher = (
+        "MATCH (f:File)-[:IMPORTS]->(g:File)\n"
+        "WITH f, count(g) AS deps\n"
+        "WHERE deps > $threshold\n"
+        "RETURN count(f) AS v"
+    )
+    sample_cypher = (
+        "MATCH (f:File)-[:IMPORTS]->(g:File)\n"
+        "WITH f, count(g) AS deps\n"
+        "WHERE deps > $threshold\n"
+        "RETURN f.path AS file, deps\n"
+        "ORDER BY deps DESC\n"
+        "LIMIT $limit"
+    )
+    with driver.session() as s:
+        total = int(s.run(count_cypher, threshold=cfg.max_imports).single()["v"] or 0)
+        sample = [dict(r) for r in s.run(
+            sample_cypher, threshold=cfg.max_imports, limit=SAMPLE_LIMIT,
+        )]
+    return PolicyResult(
+        name="coupling_ceiling",
+        passed=(total == 0),
+        violation_count=total,
+        sample=sample,
+        detail=f"Files with more than {cfg.max_imports} distinct file-level imports.",
     )
 
 

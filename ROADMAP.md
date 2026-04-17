@@ -2,26 +2,30 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-17 after commits `dc8fe2e` → `dd17072` (PyPI propagation wait + smoke test added to `release.yml` — polls `pypi.org/pypi/<pkg>/<version>/json` at 10s intervals up to 300s timeout, then verifies `cognitx-codegraph` installs cleanly in a fresh venv; version bumped to 0.1.11; arch-policies versioning PR #79 merged).
+> **Last updated:** 2026-04-17 after commits `ce1d179` → `4213450` (`coupling_ceiling` built-in policy added to `arch_check.py` + `arch_config.py`; PR #82 merged to main; version bumped to 0.1.12).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-chore-issue-24-pypi-propagation-delay`. Working tree clean. PyPI propagation wait + smoke test added to `release.yml` as `dd17072`.
-- **Tests:** 324 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-16-coupling-ceiling`. Working tree has one untracked plan file (`.claude/plans/coupling-ceiling-policy.plan.md`). `coupling_ceiling` built-in policy shipped as `4213450`.
+- **Tests:** 330 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools live + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.11 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.12 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
 - **Python Stage 2:** FastAPI / Flask / Django / SQLAlchemy framework detection + `:Endpoint` nodes. `/trace-endpoint` now works against Python repos.
 
 ---
 
-## Shipped since the last roadmap update (commit `dc8fe2e`)
+## Shipped since the last roadmap update (commit `ce1d179`)
 
 ```
+4213450 feat(arch-check): add coupling_ceiling policy to cap inbound imports (#16)
+6c23313 Merge pull request #82 from cognitx-leyton/archon/task-chore-issue-24-pypi-propagation-delay
+ec54142 chore:          bump version to 0.1.12
+ce1d179 docs(roadmap):  update session handoff
 dd17072 chore(ci):      add PyPI propagation wait and smoke test to release workflow (#24)
 995e47e Merge pull request #79 from cognitx-leyton/archon/task-chore-issue-19-arch-policies-versioning
 732ce1d chore:          bump version to 0.1.11
@@ -59,7 +63,15 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Seven sessions' worth of work grouped by theme:
+Eight sessions' worth of work grouped by theme:
+
+### Coupling ceiling — fourth built-in arch-check policy (issue #16)
+
+- `4213450 feat(arch-check)` — `arch_check.py` gains `_check_coupling_ceiling()`: counts inbound `IMPORTS` edges per file using a Cypher aggregation query, flags any file whose fan-in exceeds `max_imports` (default 20), samples up to 5 offending importers per violating file for actionable output. The result is a standard `PolicyResult` wired into `_run_all()` after `layer_bypass`. `arch_config.py` gains `CouplingCeilingConfig` dataclass (`enabled: bool`, `max_imports: int ≥ 1`) and a `coupling_ceiling` field on `ArchConfig`; `_parse_coupling_ceiling()` validates that `max_imports` is ≥ 1 (rejects 0 and negatives); the `builtins` collision-guard set is updated so a custom policy cannot shadow `coupling_ceiling`. Module docstrings in both files updated. `docs/arch-policies.md` gets a full section 4 documenting the policy (what, why, interpreting results, TOML config, false-positive guidance) and the intro updated from "three" to "four" built-in policies. **6 new tests**: 3 in `test_arch_check.py` (clean graph, violations detected, threshold respected) + 3 in `test_arch_config.py` (tune `max_imports`, disable the policy, reject `max_imports < 1`); 3 orchestrator tests updated for the now-4-policy `_run_all()`. Test count: 324 → 330.
+
+### Version bump + PyPI propagation PR merged
+
+- `ec54142 chore` + `6c23313 merge` — bumped `pyproject.toml` to v0.1.12 and merged PR #82 (PyPI propagation wait + smoke test for the release workflow, issue #24) to `main`.
 
 ### PyPI propagation wait + smoke test in release workflow (issue #24)
 - `dd17072 chore(ci)` — `release.yml` gains two post-publish steps. Step 1 (`id: version`) reads the version from `codegraph/pyproject.toml` via Python `tomllib` and writes it to `$GITHUB_OUTPUT`. Step 2 (`wait-for-pypi`) polls `https://pypi.org/pypi/cognitx-codegraph/<version>/json` at 10-second intervals with a 300-second timeout, exiting with a `::error::` annotation if the package never appears. Step 3 (`smoke-test`) creates a fresh venv in `/tmp`, installs the exact published version, and runs `codegraph --help` as a smoke test. Both consuming steps pass the version through `env:` rather than direct `${{ }}` interpolation in `run:` blocks (defense-in-depth against injection).
@@ -129,12 +141,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-chore-issue-24-pypi-propagation-delay` |
+| Current branch | `archon/task-feat-issue-16-coupling-ceiling` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`dd17072` — PyPI propagation wait + smoke test, pending PR) |
-| Open PR | Issue #24 PyPI propagation delay branch pending merge. PR #79 (arch-policies versioning) merged. |
-| Working tree | Clean |
-| Test count | 324 passing + 1 deselected |
+| Unpushed commits | 1 (`4213450` — coupling_ceiling policy, pending PR) |
+| Open PR | Issue #16 coupling_ceiling branch pending PR. PR #82 (PyPI propagation delay) merged. |
+| Working tree | 1 untracked file (`.claude/plans/coupling-ceiling-policy.plan.md`) |
+| Test count | 330 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -337,7 +349,8 @@ The ranking assumes the same `plan → implement → e2e validate → commit` cy
 
 Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch-policies.toml`. Worth shipping a few more **built-ins** for common needs:
 
-- **Coupling ceiling** — any file with >N distinct IMPORTS edges is flagged.
+~~- **Coupling ceiling** — any file with >N distinct IMPORTS edges is flagged.~~ **SHIPPED** (`4213450`)
+
 - **Orphan detection** — functions/classes/endpoints with zero inbound references AND no framework-entry-point decorator. Already possible via the existing `/dead-code` slash command; promoting to a policy means it blocks merges.
 - **Endpoint auth coverage** — every `:Endpoint` with `method IN ('POST','PUT','PATCH','DELETE')` must have a DECORATED_BY to an auth-guard. Requires knowing which decorators count as auth — configurable.
 - **Public-API stability** — breaking changes to exported symbols detected by diffing graph state between commits (needs graph persistence beyond CI).
@@ -405,6 +418,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-container-name-collision.plan.md` — shipped as `ee2ac35`.
 - `arch-policies-versioning.plan.md` — shipped as `bc70d01`.
 - `pypi-propagation-delay.plan.md` — shipped as `dd17072`.
+- `coupling-ceiling-policy.plan.md` — shipped as `4213450`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -464,8 +478,8 @@ asking. Do not merge the open PR #8 without asking.
 | `loader.py` | Neo4j batch writer, constraints, indexes, `LoadStats` | ~815 |
 | `schema.py` | Node + edge dataclasses shared across parser → loader (+ shared test-pairing constants) | ~390 |
 | `config.py` | `codegraph.toml` / `pyproject.toml` config loader | ~190 |
-| `arch_check.py` | Architecture-conformance runner + 3 built-in policies + custom policy support | ~290 |
-| `arch_config.py` | `.arch-policies.toml` parser → typed `ArchConfig` | ~275 |
+| `arch_check.py` | Architecture-conformance runner + 4 built-in policies + custom policy support | ~310 |
+| `arch_config.py` | `.arch-policies.toml` parser → typed `ArchConfig` | ~295 |
 | `ignore.py` | `.codegraphignore` parser + `IgnoreFilter` | ~180 |
 | `framework.py` | Per-package framework detection (`FrameworkDetector`) | ~510 |
 | `mcp.py` | FastMCP stdio server with 13 tools + 29 prompt templates | ~610 |
@@ -491,11 +505,11 @@ asking. Do not merge the open PR #8 without asking.
 | `test_resolver_bugs.py` | 13 | Resolver edge-case regression tests |
 | `test_loader_partitioning.py` | 3 | Function DECORATED_BY routing |
 | `test_loader_pairing.py` | 6 | TS + Python test-file pairing |
-| `test_arch_check.py` | 19 | Policies + orchestrator + custom policy runner |
-| `test_arch_config.py` | 27 | `.arch-policies.toml` parser (built-ins + custom + validation errors + schema_version validation) |
+| `test_arch_check.py` | 22 | Policies + orchestrator + custom policy runner (including coupling_ceiling: clean, detected, threshold) |
+| `test_arch_config.py` | 30 | `.arch-policies.toml` parser (built-ins + custom + validation errors + schema_version + coupling_ceiling config) |
 | `test_init.py` | 19 | Scaffolder helpers (detection, prompts, render, write, container name uniqueness) |
 | `test_init_integration.py` | 2 (1 slow) | End-to-end scaffold + optional Docker |
-| **Total** | **324** | |
+| **Total** | **330** | |
 
 ### Key decisions recorded in commit messages
 
@@ -518,6 +532,8 @@ Grep commit bodies for rationale:
 - Why schema versioning defaults to 1 (not error) when `[meta]` is absent (backwards compatibility — all existing `.arch-policies.toml` files predate versioning; treating them as v1 is correct and avoids breaking CI for repos that don't adopt `[meta]` immediately) → `bc70d01`
 - Why release.yml polls the JSON API (not the CDN file) for propagation wait (JSON API is updated by PyPI's warehouse immediately; CDN is a separate propagation step — JSON API positive means the package is in PyPI's DB; the smoke test install step then catches CDN lag if it exists) → `dd17072`
 - Why `${{ steps.version.outputs.version }}` flows through `env:` not direct `run:` interpolation (defense-in-depth: GitHub recommends avoiding direct `${{ }}` in `run:` blocks to prevent injection if a version string ever contained shell metacharacters) → `dd17072`
+- Why `coupling_ceiling` uses a two-query approach (count query + sample query) rather than embedding the sample in the count query (two small focused queries are cleaner and faster than a combined aggregation + `COLLECT` that materialises all importers before slicing; the sample is only needed when there's a violation, so the count query acts as a fast guard) → `4213450`
+- Why `max_imports` must be ≥ 1 (a ceiling of 0 would flag every file with any imports, which is never useful and almost certainly a config mistake; the validator raises a descriptive `ValueError` rather than silently clamping) → `4213450`
 
 ### Git remotes
 

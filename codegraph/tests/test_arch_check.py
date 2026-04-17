@@ -17,6 +17,7 @@ from codegraph import arch_check
 from codegraph.arch_check import (
     ArchReport,
     PolicyResult,
+    _check_coupling_ceiling,
     _check_cross_package,
     _check_custom,
     _check_import_cycles,
@@ -25,6 +26,7 @@ from codegraph.arch_check import (
 )
 from codegraph.arch_config import (
     ArchConfig,
+    CouplingCeilingConfig,
     CrossPackageConfig,
     CrossPackagePair,
     CustomPolicy,
@@ -253,6 +255,46 @@ def test_layer_bypass_uses_config_suffixes():
     assert captured_params["svc_suffix"] == "Manager"
 
 
+# ── coupling_ceiling ───────────────────────────────────────────────
+
+
+def test_coupling_ceiling_clean():
+    driver = _constant_driver({
+        "count(f) AS v": [{"v": 0}],
+    })
+    result = _check_coupling_ceiling(driver, CouplingCeilingConfig())
+    assert result.name == "coupling_ceiling"
+    assert result.passed is True
+    assert result.violation_count == 0
+    assert result.sample == []
+
+
+def test_coupling_ceiling_detected():
+    sample = [{"file": "src/god_object.ts", "deps": 35}]
+    driver = _constant_driver({
+        "count(f) AS v": [{"v": 1}],
+        "f.path AS file, deps": sample,
+    })
+    result = _check_coupling_ceiling(driver, CouplingCeilingConfig())
+    assert result.passed is False
+    assert result.violation_count == 1
+    assert result.sample == sample
+    assert "file" in result.sample[0]
+    assert "deps" in result.sample[0]
+
+
+def test_coupling_ceiling_uses_config_threshold():
+    captured_params: dict = {}
+
+    def resolver(cypher: str, **params):
+        captured_params.update(params)
+        return [{"v": 0}] if "count(f)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_coupling_ceiling(driver, CouplingCeilingConfig(max_imports=42))
+    assert captured_params["threshold"] == 42
+
+
 # ── custom policies ─────────────────────────────────────────────────
 
 
@@ -301,12 +343,13 @@ def test_custom_policy_detects_violations():
 # ── Orchestrator ────────────────────────────────────────────────────
 
 
-def test_run_arch_check_aggregates_three_policies(monkeypatch):
-    """``run_arch_check`` opens a driver, runs all 3 built-in policies, closes it."""
+def test_run_arch_check_aggregates_four_policies(monkeypatch):
+    """``run_arch_check`` opens a driver, runs all 4 built-in policies, closes it."""
     fake_driver = _constant_driver({
         "count(DISTINCT path) AS v": [{"v": 0}],
         "count(*) AS v": [{"v": 0}],
         "count(DISTINCT ctrl) AS v": [{"v": 0}],
+        "count(f) AS v": [{"v": 0}],
     })
 
     def _fake_driver_factory(uri, auth):
@@ -319,7 +362,9 @@ def test_run_arch_check_aggregates_three_policies(monkeypatch):
     )
     assert fake_driver.closed is True
     assert report.ok is True
-    assert [p.name for p in report.policies] == ["import_cycles", "cross_package", "layer_bypass"]
+    assert [p.name for p in report.policies] == [
+        "import_cycles", "cross_package", "layer_bypass", "coupling_ceiling",
+    ]
 
 
 def test_run_arch_check_with_disabled_policy_emits_skip_marker(monkeypatch):
@@ -327,6 +372,7 @@ def test_run_arch_check_with_disabled_policy_emits_skip_marker(monkeypatch):
     fake_driver = _constant_driver({
         "count(*) AS v": [{"v": 0}],
         "count(DISTINCT ctrl) AS v": [{"v": 0}],
+        "count(f) AS v": [{"v": 0}],
     })
     monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
 
@@ -347,6 +393,8 @@ def test_run_arch_check_runs_custom_policies(monkeypatch):
             return [{"v": 0}]
         if "count(DISTINCT ctrl)" in cypher:
             return [{"v": 0}]
+        if "count(f) AS v" in cypher:
+            return [{"v": 0}]
         if "count(custom_node)" in cypher:
             return [{"v": 1}]
         return [{"x": "violation"}]
@@ -364,7 +412,7 @@ def test_run_arch_check_runs_custom_policies(monkeypatch):
     report = run_arch_check("bolt://fake:7687", "neo4j", "pw", console=None, config=config)
 
     policy_names = [p.name for p in report.policies]
-    assert policy_names == ["import_cycles", "cross_package", "layer_bypass", "my_rule"]
+    assert policy_names == ["import_cycles", "cross_package", "layer_bypass", "coupling_ceiling", "my_rule"]
     my_rule = report.policies[-1]
     assert my_rule.passed is False
     assert my_rule.violation_count == 1
