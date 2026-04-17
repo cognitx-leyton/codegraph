@@ -2,26 +2,29 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-17 after commits `af77cd3` → `6b74617` (slash commands + arch-check CI + onboarding scaffolder + Python Stage 2 + MCP prompt templates + describe_schema CypherSyntaxError fix + query_graph bool/limit validation fix + max_depth bounds + bool bypass fix for all three traversal tools).
+> **Last updated:** 2026-04-17 after commits `af77cd3` → `939dfc3` (slash commands + arch-check CI + onboarding scaffolder + Python Stage 2 + MCP prompt templates + describe_schema CypherSyntaxError fix + query_graph bool/limit validation fix + max_depth bounds + bool bypass fix for all three traversal tools + 15 missing MCP tool tests for full coverage).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-33-max-depth-bounds`. Working tree clean. Fix for issue #33 committed as `6b74617`.
-- **Tests:** 300 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-chore-issue-31-missing-mcp-tests`. Working tree clean. 15 missing MCP tool tests added as `939dfc3`.
+- **Tests:** 315 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools live + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.6 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration).
+- **Package:** `cognitx-codegraph` v0.1.7 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration).
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
 - **Python Stage 2:** FastAPI / Flask / Django / SQLAlchemy framework detection + `:Endpoint` nodes. `/trace-endpoint` now works against Python repos.
 
 ---
 
-## Shipped since the last roadmap update (commit `7588522`)
+## Shipped since the last roadmap update (commit `72bdecb`)
 
 ```
+939dfc3 test(mcp):      add 15 missing MCP tool tests for full coverage (#31)
+8556630 chore:          bump version to 0.1.7
+e500554 Merge pull request #66 from cognitx-leyton/archon/task-fix-issue-33-max-depth-bounds
 6b74617 fix(mcp):       reject bool values for max_depth in callers_of_class, calls_from, callers_of (#33)
 619923e chore:          bump version to 0.1.6
 87623d9 chore:          bump version to 0.1.5
@@ -45,6 +48,9 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 ```
 
 Five sessions' worth of work grouped by theme:
+
+### MCP test coverage: 15 missing tool tests (issue #31)
+- `939dfc3 test(mcp)` — Added 15 unit tests to `tests/test_mcp.py` (94 → 109 in that file; suite 300 → 315 overall). Covered three previously untested tools: `calls_from` (happy-path, file-filter, bad-limit), `callers_of` (happy-path, file-filter, bad-limit), `describe_function` (happy-path, file-filter, no-decorators). Also extended the two error-path parametrized tests (`test_new_tools_surface_client_error`, `test_new_tools_surface_service_unavailable`) with three entries each for the new tools. Each test verifies output data shape, Cypher query structure, parameter binding, and error handling — matching the established `_FakeDriver` pattern.
 
 ### MCP bug fix: max_depth bounds + bool bypass in traversal tools (issue #33)
 - `6b74617 fix(mcp)` — `callers_of_class`, `calls_from`, and `callers_of` had mismatched `max_depth` bounds and all three let `max_depth=True` / `False` slip through validation (Python `bool` is a subclass of `int`). Fixed in two passes: (1) aligned all three tools to `default=1`, `max=5` (was: `callers_of_class` had `default=3`, `max=10`; the other two were already `default=1`, `max=5`); (2) added `or isinstance(max_depth, bool)` guard to each validator, matching the `_validate_limit` pattern already in use for `limit` parameters. Docstrings and error messages updated to reflect the new bounds. `tests/test_mcp.py` changes: 3 existing `callers_of_class` tests updated for new bounds; 6 new tests added for `calls_from` (default, custom, bad); 6 new tests added for `callers_of` (default, custom, bad); `True` and `False` added to all three `bad` parametrize lists (6 more test cases). Test count 280 → 300.
@@ -96,12 +102,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-33-max-depth-bounds` |
+| Current branch | `archon/task-chore-issue-31-missing-mcp-tests` |
 | Base branch | `main` |
-| Unpushed commits | 0 (working tree clean; `6b74617` already committed) |
-| Open PR | Issue #33 fix branch pending merge. |
+| Unpushed commits | 0 (working tree clean; `939dfc3` already committed) |
+| Open PR | Issue #31 test coverage branch pending merge. |
 | Working tree | Clean |
-| Test count | 300 passing + 1 deselected |
+| Test count | 315 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -370,6 +376,7 @@ Repo-local plans under `.claude/plans/`:
 - `glimmering-painting-yao.md` (in `~/.claude/plans/`) — the most recent "one-command onboarding" plan, shipped as `d0abe53`.
 
 - `fix-issue-33-max-depth-bounds.plan.md` — shipped as `6b74617`.
+- `issue-31-missing-mcp-tests.plan.md` — shipped as `939dfc3`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -448,7 +455,7 @@ asking. Do not merge the open PR #8 without asking.
 | `test_ignore.py` | 19 | `ignore.py` + cli helpers |
 | `test_framework.py` | 18 | `framework.py` (TS) |
 | `test_py_framework.py` | 13 | `framework.py` (Python Stage 2) |
-| `test_mcp.py` | 68 | `mcp.py` (13 tools + 29 prompts + describe_schema + query_graph + depth validation for all three traversal tools) |
+| `test_mcp.py` | 109 | `mcp.py` (13 tools + 29 prompts + describe_schema + query_graph + depth/bool validation + full coverage for calls_from, callers_of, describe_function) |
 | `test_py_parser.py` | 28 | `py_parser.py` (Stage 1 parsing) |
 | `test_py_parser_calls.py` | 12 | Method-body CALLS emission |
 | `test_py_parser_endpoints.py` | 18 | Python Stage 2 endpoint parsing |
@@ -460,7 +467,7 @@ asking. Do not merge the open PR #8 without asking.
 | `test_arch_config.py` | 20 | `.arch-policies.toml` parser (built-ins + custom + validation errors) |
 | `test_init.py` | 17 | Scaffolder helpers (detection, prompts, render, write) |
 | `test_init_integration.py` | 2 (1 slow) | End-to-end scaffold + optional Docker |
-| **Total** | **300** | |
+| **Total** | **315** | |
 
 ### Key decisions recorded in commit messages
 
