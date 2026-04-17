@@ -269,6 +269,8 @@ def describe_schema() -> dict:
             count_rows = list(s.run(
                 "MATCH (n) RETURN labels(n)[0] AS label, count(*) AS n"
             ))
+    except CypherSyntaxError as e:
+        return {"error": f"Cypher syntax error: {_err_msg(e)}"}
     except ClientError as e:
         return {"error": f"Neo4j rejected query: {_err_msg(e)}"}
     except ServiceUnavailable as e:

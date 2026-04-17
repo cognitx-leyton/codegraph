@@ -161,6 +161,14 @@ def test_describe_schema_surfaces_client_error(monkeypatch):
     assert "read-only" in out["error"]
 
 
+def test_describe_schema_surfaces_cypher_syntax_error(monkeypatch):
+    _patch(monkeypatch, CypherSyntaxError("Invalid input 'MATC'"))
+    out = mcp_mod.describe_schema()
+    assert "error" in out
+    assert "Cypher syntax error" in out["error"]
+    assert "MATC" in out["error"]
+
+
 def test_describe_schema_surfaces_service_unavailable(monkeypatch):
     import warnings
     with warnings.catch_warnings():
