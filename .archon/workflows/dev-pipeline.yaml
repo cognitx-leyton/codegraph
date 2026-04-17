@@ -256,11 +256,6 @@ nodes:
       4. Fix any failures before moving to the next task
 
       After ALL tasks are done, output a summary of what was implemented.
-    hooks:
-      PostToolUse:
-        - matcher: "Write|Edit"
-          response:
-            systemMessage: "Run byte-compile and tests NOW to catch errors early."
 
   # ═══════════════════════════════════════════════════════════════
   # Step 5: Review (MANDATORY — separate node guarantees it runs)
@@ -473,11 +468,6 @@ nodes:
         REPO=$(git rev-parse --show-toplevel)
         cd "$REPO/codegraph"
         python -m compileall codegraph/ -q 2>&1 && .venv/bin/python -m pytest tests/ -q 2>&1
-    hooks:
-      PostToolUse:
-        - matcher: "Write|Edit"
-          response:
-            systemMessage: "Run byte-compile and tests NOW to catch errors early."
 
   # ═══════════════════════════════════════════════════════════════
   # Final gate — independent verification (fan-in from both paths)
