@@ -87,31 +87,69 @@ nodes:
     effort: high
     prompt: |
       You are researching a codegraph issue/feature before planning implementation.
+      Working directory: /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
 
       User request: $USER_MESSAGE
 
       ## Instructions
 
-      1. If the input contains a GitHub issue number, fetch it:
-         ```bash
-         gh issue view <number>
-         ```
+      ### 1. Fetch the GitHub issue
+      If the input contains a GitHub issue number:
+      ```bash
+      gh issue view <number>
+      ```
 
-      2. Use codegraph to understand the codebase impact:
-         - Query the graph for affected symbols, files, and dependencies
-         - Run `/blast-radius` on key symbols
-         - Check `/arch-check` for existing violations
+      ### 2. Query the codegraph (MANDATORY)
+      The codegraph CLI is at `.venv/bin/codegraph`. Use it to understand what the change touches.
 
-      3. Read the affected source files to understand current patterns.
+      Find affected symbols:
+      ```bash
+      .venv/bin/codegraph query "MATCH (c:Class) WHERE c.name CONTAINS '<keyword>' RETURN c.name, c.file"
+      .venv/bin/codegraph query "MATCH (f:Function) WHERE f.name CONTAINS '<keyword>' RETURN f.name, f.file"
+      ```
 
-      4. If external library docs are needed, use context7 MCP to fetch them.
+      Check blast radius (who depends on affected symbols):
+      ```bash
+      .venv/bin/codegraph query "MATCH (f:File)-[r:IMPORTS_SYMBOL]->(g:File) WHERE r.symbol = '<symbol>' RETURN f.path, g.path"
+      .venv/bin/codegraph query "MATCH (m:Method)-[:CALLS]->(t:Method) WHERE t.name = '<method>' RETURN m.name, m.file"
+      ```
 
-      5. Write a research summary to `$ARTIFACTS_DIR/research.md` with:
-         - Issue context
-         - Affected files and symbols
-         - Blast radius
-         - Risks and edge cases
-         - Recommended approach
+      Check architecture conformance:
+      ```bash
+      .venv/bin/codegraph arch-check
+      ```
+
+      Check for related endpoints, decorators, edges:
+      ```bash
+      .venv/bin/codegraph query "MATCH (e:Endpoint) WHERE e.path CONTAINS '<keyword>' RETURN e.method, e.path, e.handler"
+      .venv/bin/codegraph query "MATCH (n)-[r:DECORATED_BY]->(d) WHERE d.id CONTAINS '<decorator>' RETURN n.name, n.file, d.id"
+      ```
+
+      ### 3. Read affected source files
+      Read the files identified by codegraph queries. Understand existing patterns, conventions, and test coverage.
+
+      ### 4. External documentation research
+      If the issue involves external libraries or APIs:
+
+      **NotebookLM CLI** (for deep research with sources):
+      ```bash
+      nlm notebook list                              # list existing notebooks
+      nlm notebook query <notebook-id> "<question>"  # query a notebook
+      nlm source add <notebook-id> --url "<doc-url>" # add a source to research
+      nlm research start "<topic>"                   # start a new research session
+      ```
+
+      **Context7 MCP** (for library documentation):
+      Use the context7 MCP tools to fetch current docs for any library mentioned in the issue.
+
+      ### 5. Write research summary
+      Write to `$ARTIFACTS_DIR/research.md` with:
+      - Issue context (title, description, key requirements)
+      - Affected files and symbols (from codegraph queries)
+      - Blast radius (who depends on what's changing)
+      - External context (library docs, API details)
+      - Risks and edge cases
+      - Recommended approach
 
       When done, output the research summary.
 
