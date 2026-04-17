@@ -22,6 +22,7 @@ Templates live in :mod:`codegraph.templates` and use ``string.Template``
 """
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 import time
@@ -142,6 +143,7 @@ def _prompt_config(
     default_packages = detected.package_candidates or ["."]
     default_pkg_str = ",".join(default_packages)
     repo_name = detected.root.name
+    path_hash = hashlib.sha1(str(detected.root.resolve()).encode()).hexdigest()[:8]
 
     if non_interactive:
         return InitConfig(
@@ -150,7 +152,7 @@ def _prompt_config(
             install_claude=True,
             install_ci=True,
             setup_neo4j=True,
-            container_name=f"cognitx-codegraph-{repo_name}",
+            container_name=f"cognitx-codegraph-{repo_name}-{path_hash}",
             default_package_prefix=default_packages[0] + "/" if default_packages[0] != "." else "",
         )
 
@@ -196,7 +198,7 @@ def _prompt_config(
         install_claude=install_claude,
         install_ci=install_ci,
         setup_neo4j=setup_neo4j,
-        container_name=f"cognitx-codegraph-{repo_name}",
+        container_name=f"cognitx-codegraph-{repo_name}-{path_hash}",
         default_package_prefix=packages[0] + "/" if packages and packages[0] != "." else "",
     )
 

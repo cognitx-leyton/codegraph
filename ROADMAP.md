@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-17 after commits `af77cd3` → `6d9205b` (slash commands + arch-check CI + onboarding scaffolder + Python Stage 2 + MCP prompt templates + describe_schema CypherSyntaxError fix + query_graph bool/limit validation fix + max_depth bounds + bool bypass fix for all three traversal tools + 15 missing MCP tool tests for full coverage + query_graph error-handling dedup into _run_read).
+> **Last updated:** 2026-04-17 after commits `af77cd3` → `ee2ac35` (slash commands + arch-check CI + onboarding scaffolder + Python Stage 2 + MCP prompt templates + describe_schema CypherSyntaxError fix + query_graph bool/limit validation fix + max_depth bounds + bool bypass fix for all three traversal tools + 15 missing MCP tool tests for full coverage + query_graph error-handling dedup into _run_read + container name collision fix via project-path hash suffix).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-chore-issue-32-query-graph-dedup`. Working tree clean. `query_graph` error-handling deduplicated into `_run_read` as `6d9205b`.
-- **Tests:** 315 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-18-container-name-collision`. Working tree clean. Container name collision fix landed as `ee2ac35`.
+- **Tests:** 317 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools live + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.8 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration).
@@ -22,6 +22,9 @@
 ## Shipped since the last roadmap update (commit `edd53cb`)
 
 ```
+ee2ac35 fix(init):      prevent container name collision via project-path hash suffix (#18)
+8c5396c Merge pull request #72 from cognitx-leyton/archon/task-chore-issue-32-query-graph-dedup
+0cad8af chore:          bump version to 0.1.9
 6d9205b chore(mcp):     deduplicate query_graph error-handling into _run_read (#32)
 27d4fec chore:          bump version to 0.1.8
 e77e3cd Merge pull request #70 from cognitx-leyton/archon/task-chore-issue-31-missing-mcp-tests
@@ -51,6 +54,12 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 ```
 
 Six sessions' worth of work grouped by theme:
+
+### Init fix: container name collision via project-path hash suffix (issue #18)
+- `ee2ac35 fix(init)` — `codegraph init` previously derived the Docker container name solely from the repo directory basename (`cognitx-codegraph-{repo_name}`). Two worktrees with the same basename (e.g. two repos both named `app`) would collide on the container name, causing the second `init --yes` to silently reuse or clobber the first container. Fixed in `init.py` by computing an 8-character SHA-1 hex digest of the resolved absolute repo path (`hashlib.sha1(str(detected.root.resolve()).encode()).hexdigest()[:8]`) and appending it: `cognitx-codegraph-{repo_name}-{path_hash}`. The hash is deterministic — same path always produces the same suffix — so re-running `init` on the same repo continues to reference the correct container. Two new unit tests in `test_init.py`: `test_container_name_includes_path_hash` (two `app`-named repos → distinct names, valid 8-char hex suffixes) and `test_container_name_is_deterministic` (same path → identical name across two calls). Integration test in `test_init_integration.py` updated to compute the expected hash and match the full `cognitx-codegraph-{name}-{hash}` pattern. Review also added `.resolve()` defensively so the hash is stable even if `_prompt_config` is called before path resolution. Test count: 315 → 317.
+
+### Version bump
+- `0cad8af chore` — bumped `pyproject.toml` to v0.1.9 after PR #72 merged.
 
 ### MCP code deduplication: query_graph error-handling into _run_read (issue #32)
 - `6d9205b chore(mcp)` — Replaced the 10-line duplicated `try/except` block inside `query_graph()` (lines 234–243) with a single delegation: `return _run_read(cypher)[:limit]`. The `_run_read` helper already owns driver acquisition, session management, and all error handling (`CypherSyntaxError`, `ClientError`, `ServiceUnavailable`). The old inline copy was an exact duplicate. Post-dedup: `query_graph` is now 4 lines of pure input validation + delegation, same output contract. All 8 `query_graph` tests pass unchanged — error handling, limit slicing, and row serialisation all work identically through `_run_read`. One subtle trade-off accepted: the new code calls `clean_row()` on all rows before slicing (whereas the old code sliced raw records first), but `clean_row()` is trivially cheap and Cypher-level `LIMIT` in the user's query bounds the set in practice.
@@ -108,12 +117,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-chore-issue-32-query-graph-dedup` |
+| Current branch | `archon/task-fix-issue-18-container-name-collision` |
 | Base branch | `main` |
-| Unpushed commits | 0 (working tree clean; `6d9205b` already committed) |
-| Open PR | Issue #32 query_graph dedup branch pending merge. |
+| Unpushed commits | 1 (`ee2ac35` — container name collision fix, pending PR) |
+| Open PR | Issue #18 container-name-collision branch pending merge. |
 | Working tree | Clean |
-| Test count | 315 passing + 1 deselected |
+| Test count | 317 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -344,11 +353,9 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 
 4. **Init's first-index timeout on huge repos** — `codegraph init --yes` runs the first index synchronously. Twenty's 3-minute index is fine; a 20k+ file repo (e.g. Babel, TypeScript compiler, monorepo-of-monorepos) would time out the user's patience. Should init have a `--skip-index` nudge for giant repos, or detect and prompt? Currently the user can pass `--skip-index` manually.
 
-5. **Container-name uniqueness in `docker-compose.yml`** — init derives the container name from the repo dir basename. If a user has two worktrees with the same basename, the second `init` will collide on the container name. Low-severity; fix by appending a short hash of the repo path.
+5. **`.arch-policies.toml` schema versioning** — no version field today. If we evolve the schema, old repos silently misbehave. Consider adding `[meta] schema_version = 1` and erroring on unknown versions.
 
-6. **`.arch-policies.toml` schema versioning** — no version field today. If we evolve the schema, old repos silently misbehave. Consider adding `[meta] schema_version = 1` and erroring on unknown versions.
-
-7. **Twenty's 184,809 import cycles** — surfaced by the e2e run. Are these real architectural problems or an artefact of the cycle detection (e.g. barrel files counting twice)? Needs a quick sample-and-validate. If the heuristic is over-reporting, cap the cycle length or dedupe by node set.
+6. **Twenty's 184,809 import cycles** — surfaced by the e2e run. Are these real architectural problems or an artefact of the cycle detection (e.g. barrel files counting twice)? Needs a quick sample-and-validate. If the heuristic is over-reporting, cap the cycle length or dedupe by node set.
 
 ---
 
@@ -384,6 +391,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-issue-33-max-depth-bounds.plan.md` — shipped as `6b74617`.
 - `issue-31-missing-mcp-tests.plan.md` — shipped as `939dfc3`.
 - `query-graph-dedup.plan.md` — shipped as `6d9205b`.
+- `fix-container-name-collision.plan.md` — shipped as `ee2ac35`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -472,9 +480,9 @@ asking. Do not merge the open PR #8 without asking.
 | `test_loader_pairing.py` | 6 | TS + Python test-file pairing |
 | `test_arch_check.py` | 19 | Policies + orchestrator + custom policy runner |
 | `test_arch_config.py` | 20 | `.arch-policies.toml` parser (built-ins + custom + validation errors) |
-| `test_init.py` | 17 | Scaffolder helpers (detection, prompts, render, write) |
+| `test_init.py` | 19 | Scaffolder helpers (detection, prompts, render, write, container name uniqueness) |
 | `test_init_integration.py` | 2 (1 slow) | End-to-end scaffold + optional Docker |
-| **Total** | **315** | |
+| **Total** | **317** | |
 
 ### Key decisions recorded in commit messages
 
@@ -493,6 +501,7 @@ Grep commit bodies for rationale:
 - Why `query_graph` rejects bool limits (Python bool ⊂ int — `isinstance(True, int)` is True) → `6fe0730`
 - Why all three traversal tools use `default=1, max=5` for `max_depth` (consistent bounds; bool bypass was the same root cause as #30; `or isinstance(max_depth, bool)` guard matches `_validate_limit` pattern) → `6b74617`
 - Why `query_graph` delegates to `_run_read` instead of owning its own try/except (DRY: `_run_read` already handles all three error types; the 10-line inline copy was an exact duplicate; one accepted trade-off is that `clean_row()` now runs before slicing rather than after, which is negligible) → `6d9205b`
+- Why container name uses `sha1(resolved_path)[:8]` rather than a random suffix (deterministic — re-running `init` on the same repo always references the same container; SHA-1 hex chars are Docker-safe; `.resolve()` ensures symlinks don't produce diverging hashes) → `ee2ac35`
 
 ### Git remotes
 

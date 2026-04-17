@@ -7,6 +7,7 @@ in environments without Docker.
 """
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -69,7 +70,9 @@ def test_init_scaffold_only_no_docker(fake_monorepo: Path):
     # Compose file (even though we skipped starting it)
     compose = fake_monorepo / "docker-compose.yml"
     assert compose.exists()
-    assert f"cognitx-codegraph-{fake_monorepo.name}" in compose.read_text()
+    expected_hash = hashlib.sha1(str(fake_monorepo.resolve()).encode()).hexdigest()[:8]
+    expected_name = f"cognitx-codegraph-{fake_monorepo.name}-{expected_hash}"
+    assert expected_name in compose.read_text()
 
     # CLAUDE.md
     claude_md = fake_monorepo / "CLAUDE.md"
@@ -94,7 +97,8 @@ def test_init_full_flow_with_docker(fake_monorepo: Path):
             ["docker", "ps", "--format", "{{.Names}}"],
             capture_output=True, text=True,
         )
-        assert f"cognitx-codegraph-{fake_monorepo.name}" in ps.stdout
+        expected_hash = hashlib.sha1(str(fake_monorepo.resolve()).encode()).hexdigest()[:8]
+        assert f"cognitx-codegraph-{fake_monorepo.name}-{expected_hash}" in ps.stdout
     finally:
         # Always tear down, even if the assertions above fail
         subprocess.run(

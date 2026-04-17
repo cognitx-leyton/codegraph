@@ -7,6 +7,7 @@ so the tests stay fast and pure. The end-to-end Docker path is covered by
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from codegraph.init import (
     RepoShape,
     _detect_repo_shape,
     _find_git_root,
+    _prompt_config,
     _render,
     _scaffold_files,
     _template_vars,
@@ -110,6 +112,40 @@ def test_template_vars_no_cross_pairs():
     )
     vars_ = _template_vars(config)
     assert vars_["CROSS_PAIRS_TOML"] == ""
+
+
+# ── _prompt_config container name ──────────────────────────
+
+
+def test_container_name_includes_path_hash(tmp_path: Path):
+    """Two repos with the same basename but different paths get different names."""
+    path_a = tmp_path / "a" / "app"
+    path_b = tmp_path / "b" / "app"
+    path_a.mkdir(parents=True)
+    path_b.mkdir(parents=True)
+
+    cfg_a = _prompt_config(
+        RepoShape(root=path_a), non_interactive=True, console=_silent_console(),
+    )
+    cfg_b = _prompt_config(
+        RepoShape(root=path_b), non_interactive=True, console=_silent_console(),
+    )
+
+    assert cfg_a.container_name.startswith("cognitx-codegraph-app-")
+    assert cfg_b.container_name.startswith("cognitx-codegraph-app-")
+    assert cfg_a.container_name != cfg_b.container_name
+
+    # Suffix is exactly 8 hex characters.
+    suffix_a = cfg_a.container_name.rsplit("-", 1)[-1]
+    assert re.fullmatch(r"[0-9a-f]{8}", suffix_a)
+
+
+def test_container_name_is_deterministic(tmp_path: Path):
+    """Same path produces the same container name on repeated calls."""
+    shape = RepoShape(root=tmp_path)
+    cfg1 = _prompt_config(shape, non_interactive=True, console=_silent_console())
+    cfg2 = _prompt_config(shape, non_interactive=True, console=_silent_console())
+    assert cfg1.container_name == cfg2.container_name
 
 
 # ── _render (template smoke) ────────────────────────────────
