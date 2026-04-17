@@ -15,7 +15,7 @@ git branch --show-current
 git status -s
 git log --oneline -3
 ```
-- Must be on `dev` branch
+- Must be on a feature branch (feat/, fix/, chore/) — NOT on main, release, hotfix, or dev
 - Working tree should be clean (untracked `.claude/` files are OK)
 
 ### 2. Neo4j container
@@ -48,7 +48,7 @@ docker ps --format '{{.Names}} {{.Status}}' | grep codegraph-neo4j
 ```
 Pre-flight Report
 -----------------
-Git branch:    dev ✅ / ❌ (on {branch})
+Git branch:    feat/issue-N-slug ✅ / ❌ (on {protected branch})
 Working tree:  clean ✅ / dirty ❌
 Neo4j:         running ✅ / down ❌ (fixed ✅)
 Python venv:   OK ✅ / missing ❌ (fixed ✅)

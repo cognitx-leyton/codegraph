@@ -1,58 +1,67 @@
 ---
-description: Merge PR and sync all branches (main, dev, release, hotfix)
+description: Sync branches after a PR is merged — propagate hotfix to dev, main, release
 argument-hint: [PR-number]
 allowed-tools: Bash(git:*), Bash(gh:*)
 ---
 
-# Sync Branches (Step 13)
+# Sync Branches (standalone utility — not part of the workflow)
 
-**PR**: $ARGUMENTS (if empty, finds the most recent open PR)
+**PR**: $ARGUMENTS (if empty, finds the most recent merged PR)
 
-Merge the PR and bring all protected branches up to date.
+After you approve and merge a PR into hotfix, run this to propagate changes to the other branches.
+
+## Branch flow
+
+```
+hotfix (receives PRs from feature branches)
+  ↓ sync
+dev (development branch)
+  ↓ sync
+main (stable reference)
+  ↓ sync
+release (release branch)
+```
 
 ## Process
 
-### 1. Find PR
+### 1. Find the merged PR
 
 ```bash
-# If argument given, use it. Otherwise find most recent.
-gh pr list --base main --state open --limit 1
+# If argument given, use it. Otherwise find most recent merged PR to hotfix.
+gh pr list --base hotfix --state merged --limit 1
 ```
 
-### 2. Merge PR
-
-```bash
-gh pr merge <N> --merge --admin
-```
-
-Uses `--admin` to bypass branch protection (repo admin required).
-
-### 3. Sync dev to main
+### 2. Fetch latest
 
 ```bash
 git fetch origin
+```
+
+### 3. Sync dev to hotfix
+
+```bash
 git checkout dev
 git pull origin dev
-git merge origin/main --ff-only
+git merge origin/hotfix --no-edit
 git push origin dev
 ```
 
-### 4. Sync release
+### 4. Sync main to dev
+
+```bash
+git checkout main
+git pull origin main
+git merge origin/dev --no-edit
+git push origin main
+```
+
+### 5. Sync release to main
 
 ```bash
 git checkout release
-git pull origin release --no-rebase --no-edit
+git pull origin release
 git merge origin/main --no-edit
 git push origin release
-```
-
-### 5. Sync hotfix
-
-```bash
-git checkout hotfix
-git pull origin hotfix --no-rebase --no-edit
-git merge origin/main --no-edit
-git push origin hotfix
 ```
 
 ### 6. Return to dev
@@ -69,10 +78,10 @@ Branches Synced
 ┌──────────┬──────────┬─────────────────┐
 │ Branch   │   SHA    │     State       │
 ├──────────┼──────────┼─────────────────┤
-│ main     │ {sha}    │ ← merged PR    │
-│ dev      │ {sha}    │ ← in sync      │
-│ release  │ {sha}    │ ← merged main  │
-│ hotfix   │ {sha}    │ ← merged main  │
+│ hotfix   │ {sha}    │ ← PR merged    │
+│ dev      │ {sha}    │ ← synced       │
+│ main     │ {sha}    │ ← synced       │
+│ release  │ {sha}    │ ← synced       │
 └──────────┴──────────┴─────────────────┘
 
 Done. All branches contain the latest work.
