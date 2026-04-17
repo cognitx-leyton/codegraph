@@ -499,9 +499,36 @@ nodes:
          curl -s https://pypi.org/pypi/cognitx-codegraph/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])"
          ```
 
-      4. Create the PR:
+      4. If the input mentioned an issue number, add a comment to the issue
+         explaining what was implemented:
+         ```bash
+         gh issue comment <N> --body "$(cat <<'EOF'
+         ## Implementation Complete
+
+         **PR:** <PR will be linked below>
+         **Package:** cognitx-codegraph=={version}
+
+         ### What was done
+         - <summary of changes>
+
+         ### Files changed
+         - <list of files>
+
+         ### Tests
+         - {N} tests passing ({M} new)
+
+         This issue will be automatically closed when the PR is merged.
+         EOF
+         )"
+         ```
+
+      5. Create the PR. If an issue number was mentioned, include `Closes #N`
+         in the PR body — GitHub will auto-close the issue when the PR is merged.
+         Do NOT manually close the issue — let GitHub handle it via the PR merge.
          ```bash
          gh pr create --base release --head dev --title "<type>: <description>" --body "$(cat <<'EOF'
+         Closes #<N>
+
          ## Summary
          - <what changed>
 
@@ -519,11 +546,6 @@ nodes:
          Generated with [Claude Code](https://claude.com/claude-code)
          EOF
          )"
-         ```
-
-      5. Close the source issue (if the input mentioned an issue number):
-         ```bash
-         gh issue close <N> --comment "Implemented in <PR URL>"
          ```
 
       Output the PR URL.
