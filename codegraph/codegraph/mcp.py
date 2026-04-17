@@ -231,16 +231,7 @@ def query_graph(cypher: str, limit: int = 20) -> list[dict]:
     err = _validate_limit(limit)
     if err:
         return [{"error": err}]
-    try:
-        with _read_session() as s:
-            records = list(s.run(cypher))[:limit]
-    except CypherSyntaxError as e:
-        return [{"error": f"Cypher syntax error: {_err_msg(e)}"}]
-    except ClientError as e:
-        return [{"error": f"Neo4j rejected query: {_err_msg(e)}"}]
-    except ServiceUnavailable as e:
-        return [{"error": f"Neo4j is unreachable: {e}"}]
-    return [clean_row(r) for r in records]
+    return _run_read(cypher)[:limit]
 
 
 @mcp.tool()
