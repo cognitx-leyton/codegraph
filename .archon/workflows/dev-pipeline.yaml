@@ -250,7 +250,7 @@ nodes:
       2. Implement the change
       3. Validate immediately after EVERY file change:
          ```bash
-         python -m compileall codegraph/ -q
+         python3 -m compileall codegraph/ -q
          .venv/bin/python -m pytest tests/ -q
          ```
       4. Fix any failures before moving to the next task
@@ -467,7 +467,7 @@ nodes:
       until_bash: |
         REPO=$(git rev-parse --show-toplevel)
         cd "$REPO/codegraph"
-        python -m compileall codegraph/ -q 2>&1 && .venv/bin/python -m pytest tests/ -q 2>&1
+        python3 -m compileall codegraph/ -q 2>&1 && .venv/bin/python -m pytest tests/ -q 2>&1
 
   # ═══════════════════════════════════════════════════════════════
   # Final gate — independent verification (fan-in from both paths)
@@ -480,7 +480,7 @@ nodes:
       REPO=$(git rev-parse --show-toplevel)
       cd "$REPO/codegraph"
       echo "=== Final Gate ==="
-      python -m compileall codegraph/ -q 2>&1 && echo "PASS: byte-compile" || exit 1
+      python3 -m compileall codegraph/ -q 2>&1 && echo "PASS: byte-compile" || exit 1
       .venv/bin/python -m pytest tests/ -q 2>&1 && echo "PASS: tests" || exit 1
       echo "FINAL_GATE_PASS"
     timeout: 120000
@@ -656,7 +656,7 @@ nodes:
         ### Stage 1: Unit tests
         ```bash
         .venv/bin/python -m pytest tests/ -q
-        python -m compileall codegraph/ -q
+        python3 -m compileall codegraph/ -q
         ```
 
         ### Stage 2: Install test
@@ -708,7 +708,7 @@ nodes:
       until_bash: |
         REPO=$(git rev-parse --show-toplevel)
         cd "$REPO/codegraph"
-        .venv/bin/python -m pytest tests/ -q 2>&1 && python -m compileall codegraph/ -q 2>&1
+        .venv/bin/python -m pytest tests/ -q 2>&1 && python3 -m compileall codegraph/ -q 2>&1
 
   # ═══════════════════════════════════════════════════════════════
   # Step 11: File issues for discoveries
