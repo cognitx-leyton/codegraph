@@ -100,13 +100,20 @@ def test_query_graph_respects_limit(monkeypatch):
 def test_query_graph_rejects_bad_limit(monkeypatch):
     _patch(monkeypatch, [[{"n": 1}]])
     result = mcp_mod.query_graph("MATCH (n) RETURN n", limit=0)
-    assert result == [{"error": "limit must be a positive integer"}]
+    assert result == [{"error": "limit must be an integer in 1..1000"}]
 
 
-def test_query_graph_caps_huge_limit(monkeypatch):
-    _patch(monkeypatch, [[{"n": i} for i in range(2000)]])
-    out = mcp_mod.query_graph("MATCH (n) RETURN n", limit=5000)
-    assert len(out) == 1000  # capped
+@pytest.mark.parametrize("bad", [True, False])
+def test_query_graph_rejects_bool_limit(monkeypatch, bad):
+    _patch(monkeypatch, [[{"n": 1}]])
+    result = mcp_mod.query_graph("MATCH (n) RETURN n", limit=bad)
+    assert result == [{"error": "limit must be an integer in 1..1000"}]
+
+
+def test_query_graph_rejects_huge_limit(monkeypatch):
+    _patch(monkeypatch, [[{"n": 1}]])
+    result = mcp_mod.query_graph("MATCH (n) RETURN n", limit=5000)
+    assert result == [{"error": "limit must be an integer in 1..1000"}]
 
 
 def test_query_graph_surfaces_client_error(monkeypatch):
