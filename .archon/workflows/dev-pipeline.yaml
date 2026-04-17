@@ -162,25 +162,34 @@ nodes:
     model: opus
     effort: high
     prompt: |
-      Create an implementation plan based on the research.
+      Create an implementation plan based on the research. Do NOT enter plan mode.
+      Do NOT use /plan or any interactive planning mode. Just write a plan file directly.
+
+      Working directory: /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
 
       Research findings:
       $research.output
 
       ## Instructions
 
-      Use the /plan_local skill to create a plan. The plan MUST include:
+      Read the file `.claude/commands/plan_local.md` for the full plan template and follow
+      its structure exactly. Write the plan directly to a file — do NOT invoke any skills
+      or slash commands.
 
-      1. **Tasks** — ordered, atomic, verifiable
-      2. **Files to Change** — CREATE/UPDATE with purpose
-      3. **Patterns to Mirror** — file:line references
-      4. **Acceptance Criteria** — SPECIFIC and VERIFIABLE per feature area:
+      The plan MUST include:
+
+      1. **Summary** — what we're building
+      2. **Reuse Inventory** — existing code to reuse (file:line references)
+      3. **Patterns to Mirror** — code snippets to follow
+      4. **Files to Change** — CREATE/UPDATE with purpose
+      5. **Tasks** — ordered, atomic, verifiable with Mirror references
+      6. **Acceptance Criteria** — SPECIFIC and VERIFIABLE per feature area:
          - Each criterion states WHAT to check and HOW to verify
          - Include codegraph queries where structural changes are expected
          - Include expected test counts
          - NO vague criteria like "tests pass" or "feature works"
 
-      Save the plan to `.claude/plans/` with a descriptive name.
+      Save the plan to `.claude/plans/` with a descriptive kebab-case name.
 
       Output the plan file path when done.
 
