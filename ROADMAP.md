@@ -2,26 +2,29 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-17 after commits `5d5943e` → `bc70d01` (schema versioning for `.arch-policies.toml` via `[meta] schema_version` field — `CURRENT_SCHEMA_VERSION = 1` constant, forward-compat guard, 7 new tests, docs update, scaffold template update).
+> **Last updated:** 2026-04-17 after commits `dc8fe2e` → `dd17072` (PyPI propagation wait + smoke test added to `release.yml` — polls `pypi.org/pypi/<pkg>/<version>/json` at 10s intervals up to 300s timeout, then verifies `cognitx-codegraph` installs cleanly in a fresh venv; version bumped to 0.1.11; arch-policies versioning PR #79 merged).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-chore-issue-19-arch-policies-versioning`. Working tree clean. Schema versioning for `.arch-policies.toml` landed as `bc70d01`.
+- **Branch:** `archon/task-chore-issue-24-pypi-propagation-delay`. Working tree clean. PyPI propagation wait + smoke test added to `release.yml` as `dd17072`.
 - **Tests:** 324 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools live + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.8 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration).
+- **Package:** `cognitx-codegraph` v0.1.11 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
 - **Python Stage 2:** FastAPI / Flask / Django / SQLAlchemy framework detection + `:Endpoint` nodes. `/trace-endpoint` now works against Python repos.
 
 ---
 
-## Shipped since the last roadmap update (commit `5d5943e`)
+## Shipped since the last roadmap update (commit `dc8fe2e`)
 
 ```
+dd17072 chore(ci):      add PyPI propagation wait and smoke test to release workflow (#24)
+995e47e Merge pull request #79 from cognitx-leyton/archon/task-chore-issue-19-arch-policies-versioning
+732ce1d chore:          bump version to 0.1.11
 bc70d01 chore(arch-config): add schema_version field to arch-policies config (#19)
 5d88fac chore:          bump version to 0.1.10
 3f8551c Merge pull request #76 from cognitx-leyton/archon/task-fix-issue-18-container-name-collision
@@ -57,6 +60,9 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 ```
 
 Seven sessions' worth of work grouped by theme:
+
+### PyPI propagation wait + smoke test in release workflow (issue #24)
+- `dd17072 chore(ci)` — `release.yml` gains two post-publish steps. Step 1 (`id: version`) reads the version from `codegraph/pyproject.toml` via Python `tomllib` and writes it to `$GITHUB_OUTPUT`. Step 2 (`wait-for-pypi`) polls `https://pypi.org/pypi/cognitx-codegraph/<version>/json` at 10-second intervals with a 300-second timeout, exiting with a `::error::` annotation if the package never appears. Step 3 (`smoke-test`) creates a fresh venv in `/tmp`, installs the exact published version, and runs `codegraph --help` as a smoke test. Both consuming steps pass the version through `env:` rather than direct `${{ }}` interpolation in `run:` blocks (defense-in-depth against injection).
 
 ### Arch-policies schema versioning (issue #19)
 - `bc70d01 chore(arch-config)` — `arch_config.py` gains `CURRENT_SCHEMA_VERSION = 1` constant and a `schema_version: int` field on `ArchConfig` (defaults to 1). `load_arch_config()` now parses a `[meta]` table from `.arch-policies.toml`: validates the value is an integer (rejects bools), rejects zero, and raises a descriptive `ValueError` with an upgrade message for any version greater than `CURRENT_SCHEMA_VERSION`. Files without `[meta]` are silently treated as version 1 — full backwards compatibility. `codegraph/codegraph/templates/arch-policies.toml` gains `[meta]\nschema_version = 1` so scaffolded repos start version-aware. `codegraph/docs/arch-policies.md` documents the new `[meta]` section and "Schema versioning" subsection. 7 new tests added: `test_missing_meta_defaults_to_version_1`, `test_explicit_version_1_accepted`, `test_future_version_rejected`, `test_zero_version_rejected`, `test_wrong_type_rejected`, `test_meta_not_a_table_rejected`, `test_version_bool_rejected`. Test count: 317 → 324.
@@ -123,10 +129,10 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-chore-issue-19-arch-policies-versioning` |
+| Current branch | `archon/task-chore-issue-24-pypi-propagation-delay` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`bc70d01` — arch-policies schema versioning, pending PR) |
-| Open PR | Issue #19 arch-policies schema versioning branch pending merge. |
+| Unpushed commits | 1 (`dd17072` — PyPI propagation wait + smoke test, pending PR) |
+| Open PR | Issue #24 PyPI propagation delay branch pending merge. PR #79 (arch-policies versioning) merged. |
 | Working tree | Clean |
 | Test count | 324 passing + 1 deselected |
 | Test runtime | ~16 s |
@@ -260,23 +266,22 @@ The ranking assumes the same `plan → implement → e2e validate → commit` cy
 
 ### Tier A — operational (must-do before the v0.2.0 story is complete)
 
-#### A1. Push `dev` + merge PR #8 + publish to PyPI
+#### A1. Push `dev` + publish to PyPI
 
-**What:** `git push origin dev`, bring PR #8 up to date, merge it, register `cognitx-codegraph` on pypi.org with Trusted Publisher config, push `v0.2.0` tag to trigger `release.yml`.
+**What:** Merge the open PyPI propagation wait PR (#24), register `cognitx-codegraph` on pypi.org with Trusted Publisher config, push a version tag to trigger `release.yml`.
 
-**Why:** Everything is built and verified. Only thing left is the one-time ops setup. Until this happens, "easiest possible onboarding" is blocked on users building the wheel locally.
+**Why:** Everything is built and verified — including the post-publish propagation wait and smoke test (shipped `dd17072`). Only thing left is the one-time ops setup. Until this happens, "easiest possible onboarding" is blocked on users building the wheel locally.
 
 **Scope:** ~30 min operational.
-- `git push origin dev` — 5 unpushed commits land.
-- PR #8 is already open; rebase or merge depending on how stale it is.
+- Merge PR for issue #24 (pypi-propagation-delay).
 - PyPI: create the `cognitx-codegraph` project on pypi.org. Go to Project → Publishing → add Trusted Publisher with owner `cognitx-leyton`, repo `graphrag-code`, workflow `release.yml`, environment `release`.
 - GitHub: Settings → Environments → create a `release` environment (required for Trusted Publishers to accept the OIDC token).
-- `git tag v0.2.0 && git push origin v0.2.0` — `release.yml` auto-builds + publishes.
+- `git tag v0.1.11 && git push origin v0.1.11` — `release.yml` auto-builds, publishes, waits for propagation, and runs the install smoke test.
 - Verify: fresh machine, `pipx install cognitx-codegraph` works.
 
-**Gotchas:** If the PyPI project name `cognitx-codegraph` is also taken by the time you try (unlikely), rename in `pyproject.toml` and bump to 0.2.1.
+**Gotchas:** If the PyPI project name `cognitx-codegraph` is also taken by the time you try (unlikely), rename in `pyproject.toml` and bump the version.
 
-**Delivers:** The "easiest possible" quickstart is truly live. `README.md` quickstart ships working.
+**Delivers:** The "easiest possible" quickstart is truly live. `README.md` quickstart ships working. `release.yml` now self-validates via the smoke test on every publish.
 
 #### A2. Live Claude Code client verification of the 10 MCP tools
 
@@ -399,6 +404,7 @@ Repo-local plans under `.claude/plans/`:
 - `query-graph-dedup.plan.md` — shipped as `6d9205b`.
 - `fix-container-name-collision.plan.md` — shipped as `ee2ac35`.
 - `arch-policies-versioning.plan.md` — shipped as `bc70d01`.
+- `pypi-propagation-delay.plan.md` — shipped as `dd17072`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -510,6 +516,8 @@ Grep commit bodies for rationale:
 - Why `query_graph` delegates to `_run_read` instead of owning its own try/except (DRY: `_run_read` already handles all three error types; the 10-line inline copy was an exact duplicate; one accepted trade-off is that `clean_row()` now runs before slicing rather than after, which is negligible) → `6d9205b`
 - Why container name uses `sha1(resolved_path)[:8]` rather than a random suffix (deterministic — re-running `init` on the same repo always references the same container; SHA-1 hex chars are Docker-safe; `.resolve()` ensures symlinks don't produce diverging hashes) → `ee2ac35`
 - Why schema versioning defaults to 1 (not error) when `[meta]` is absent (backwards compatibility — all existing `.arch-policies.toml` files predate versioning; treating them as v1 is correct and avoids breaking CI for repos that don't adopt `[meta]` immediately) → `bc70d01`
+- Why release.yml polls the JSON API (not the CDN file) for propagation wait (JSON API is updated by PyPI's warehouse immediately; CDN is a separate propagation step — JSON API positive means the package is in PyPI's DB; the smoke test install step then catches CDN lag if it exists) → `dd17072`
+- Why `${{ steps.version.outputs.version }}` flows through `env:` not direct `run:` interpolation (defense-in-depth: GitHub recommends avoiding direct `${{ }}` in `run:` blocks to prevent injection if a version string ever contained shell metacharacters) → `dd17072`
 
 ### Git remotes
 
