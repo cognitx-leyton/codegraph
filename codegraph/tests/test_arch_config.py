@@ -48,6 +48,9 @@ def test_missing_file_returns_defaults(tmp_path: Path):
     assert cfg.layer_bypass.call_depth == 3
     assert cfg.coupling_ceiling.enabled is True
     assert cfg.coupling_ceiling.max_imports == 20
+    assert cfg.orphan_detection.enabled is True
+    assert cfg.orphan_detection.path_prefix == ""
+    assert cfg.orphan_detection.kinds == ["function", "class", "atom", "endpoint"]
     assert cfg.custom == []
     assert cfg.schema_version == 1
 
@@ -316,6 +319,17 @@ sample_cypher = "MATCH (n) RETURN n"
         load_arch_config(tmp_path)
 
 
+def test_custom_collides_with_orphan_detection_builtin(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "orphan_detection"
+count_cypher  = "MATCH (n) RETURN count(n) AS v"
+sample_cypher = "MATCH (n) RETURN n"
+""")
+    with pytest.raises(ArchConfigError, match="collides with a built-in"):
+        load_arch_config(tmp_path)
+
+
 def test_custom_empty_count_cypher_rejected(tmp_path: Path):
     _write(tmp_path, """
 [[policies.custom]]
@@ -334,6 +348,62 @@ name          = "bad"
 count_cypher  = "MATCH (n) RETURN count(n) AS v"
 """)
     with pytest.raises(ArchConfigError, match="sample_cypher"):
+        load_arch_config(tmp_path)
+
+
+# ── Orphan detection ──────────────────────────────────────────
+
+
+def test_orphan_detection_defaults(tmp_path: Path):
+    _write(tmp_path, "")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.enabled is True
+    assert cfg.orphan_detection.path_prefix == ""
+    assert cfg.orphan_detection.kinds == ["function", "class", "atom", "endpoint"]
+
+
+def test_orphan_detection_disabled(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+enabled = false
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.enabled is False
+
+
+def test_orphan_detection_custom_prefix(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+path_prefix = "src/core/"
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.path_prefix == "src/core/"
+
+
+def test_orphan_detection_custom_kinds(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+kinds = ["function", "class"]
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.kinds == ["function", "class"]
+
+
+def test_orphan_detection_invalid_kind_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+kinds = ["bogus"]
+""")
+    with pytest.raises(ArchConfigError, match="is not valid"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_empty_kinds_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+kinds = []
+""")
+    with pytest.raises(ArchConfigError, match="must not be empty"):
         load_arch_config(tmp_path)
 
 

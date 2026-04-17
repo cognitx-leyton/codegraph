@@ -15,6 +15,8 @@ Built-in policies:
   traversing a ``*Service`` (suffixes configurable).
 - **coupling_ceiling** — files with more than N distinct file-level imports
   (configurable threshold).
+- **orphan_detection** — functions, classes, atoms, or endpoints with zero
+  inbound references and no framework-entry-point decorator.
 
 User-authored policies live under ``[[policies.custom]]`` in
 ``.arch-policies.toml`` (see :mod:`codegraph.arch_config`).
@@ -37,6 +39,7 @@ from .arch_config import (
     CustomPolicy,
     ImportCyclesConfig,
     LayerBypassConfig,
+    OrphanDetectionConfig,
     load_arch_config,
 )
 
@@ -132,6 +135,11 @@ def _run_all(driver: Driver, config: ArchConfig) -> list[PolicyResult]:
         out.append(_check_coupling_ceiling(driver, config.coupling_ceiling))
     else:
         out.append(_disabled("coupling_ceiling"))
+
+    if config.orphan_detection.enabled:
+        out.append(_check_orphans(driver, config.orphan_detection))
+    else:
+        out.append(_disabled("orphan_detection"))
 
     for custom in config.custom:
         if custom.enabled:
@@ -301,6 +309,80 @@ def _check_coupling_ceiling(driver: Driver, cfg: CouplingCeilingConfig) -> Polic
         violation_count=total,
         sample=sample,
         detail=f"Files with more than {cfg.max_imports} distinct file-level imports.",
+    )
+
+
+def _check_orphans(driver: Driver, cfg: OrphanDetectionConfig) -> PolicyResult:
+    """Flag functions/classes/atoms/endpoints with zero inbound references."""
+    # Build sub-queries for each requested kind.
+    _kind_queries = {
+        "function": (
+            "MATCH (f:Function)\n"
+            "WHERE NOT EXISTS { ()-[:CALLS]->(f) }\n"
+            "  AND NOT EXISTS { ()-[:RENDERS]->(f) }\n"
+            "  AND NOT EXISTS { (f)-[:DECORATED_BY]->(:Decorator) }\n"
+            "{prefix_filter}"
+            "RETURN 'orphan_function' AS kind, f.name AS name, f.file AS file"
+        ),
+        "class": (
+            "MATCH (c:Class)\n"
+            "WHERE NOT EXISTS { ()-[:EXTENDS]->(c) }\n"
+            "  AND NOT EXISTS { ()-[:INJECTS]->(c) }\n"
+            "  AND NOT EXISTS { ()-[:RESOLVES]->(c) }\n"
+            "  AND NOT EXISTS { (:File)-[:IMPORTS_SYMBOL {symbol: c.name}]->(:File) }\n"
+            "{prefix_filter}"
+            "RETURN 'orphan_class' AS kind, c.name AS name, c.file AS file"
+        ),
+        "atom": (
+            "MATCH (a:Atom)\n"
+            "WHERE NOT EXISTS { ()-[:READS_ATOM]->(a) }\n"
+            "  AND NOT EXISTS { ()-[:WRITES_ATOM]->(a) }\n"
+            "{prefix_filter}"
+            "RETURN 'orphan_atom' AS kind, a.name AS name, a.file AS file"
+        ),
+        "endpoint": (
+            "MATCH (e:Endpoint)\n"
+            "WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e) }\n"
+            "{prefix_filter}"
+            "RETURN 'orphan_endpoint' AS kind, "
+            "(e.method + ' ' + e.path) AS name, e.file AS file"
+        ),
+    }
+    # Variable used in the prefix filter differs per kind.
+    _kind_var = {"function": "f", "class": "c", "atom": "a", "endpoint": "e"}
+
+    parts: list[str] = []
+    for kind in cfg.kinds:
+        tmpl = _kind_queries[kind]
+        if cfg.path_prefix:
+            pf = f"  AND {_kind_var[kind]}.file STARTS WITH $prefix\n"
+        else:
+            pf = ""
+        parts.append(tmpl.replace("{prefix_filter}", pf))
+
+    union = "\nUNION ALL\n".join(parts)
+    count_cypher = f"CALL () {{\n{union}\n}}\nRETURN count(*) AS v"
+    sample_cypher = (
+        f"{union}\n"
+        f"ORDER BY kind, file, name\n"
+        f"LIMIT $limit"
+    )
+
+    params: dict = {"limit": SAMPLE_LIMIT}
+    if cfg.path_prefix:
+        params["prefix"] = cfg.path_prefix
+
+    with driver.session() as s:
+        total = int(s.run(count_cypher, **params).single()["v"] or 0)
+        sample = [dict(r) for r in s.run(sample_cypher, **params)]
+
+    kinds_str = ", ".join(cfg.kinds)
+    return PolicyResult(
+        name="orphan_detection",
+        passed=(total == 0),
+        violation_count=total,
+        sample=sample,
+        detail=f"Symbols with zero inbound references (kinds: {kinds_str}).",
     )
 
 
