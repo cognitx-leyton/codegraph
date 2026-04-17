@@ -116,7 +116,7 @@ nodes:
       When done, output the research summary.
 
   # ═══════════════════════════════════════════════════════════════
-  # Step 3: Create plan (with user approval)
+  # Step 3: Create plan
   # ═══════════════════════════════════════════════════════════════
 
   - id: plan
@@ -146,27 +146,13 @@ nodes:
 
       Output the plan file path when done.
 
-  - id: plan-approval
-    depends_on: [plan]
-    approval:
-      message: |
-        Review the plan above. Approve to proceed with implementation, or reject with feedback.
-      capture_response: true
-      on_reject:
-        prompt: |
-          The user rejected the plan with this feedback: $REJECTION_REASON
-
-          Revise the plan based on the feedback. Update the plan file.
-          Output the revised plan file path.
-        max_attempts: 3
-
   # ═══════════════════════════════════════════════════════════════
   # Steps 4-7: Implementation cycle (implement → review → commit → critique)
   # Loops until critique passes
   # ═══════════════════════════════════════════════════════════════
 
   - id: dev-cycle
-    depends_on: [plan-approval]
+    depends_on: [plan]
     model: opus
     effort: high
     idle_timeout: 600000
