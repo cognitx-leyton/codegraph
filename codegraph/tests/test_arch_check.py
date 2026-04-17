@@ -357,6 +357,21 @@ def test_orphan_detection_respects_kinds_config():
     assert "orphan_endpoint" not in all_cypher
 
 
+def test_orphan_detection_excludes_pytest_entry_points():
+    """test_* functions and xunit setup/teardown helpers must not be flagged."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **_params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(driver, OrphanDetectionConfig(kinds=["function"]))
+    all_cypher = "\n".join(captured)
+    assert "test_" in all_cypher
+    assert "setup_module" in all_cypher
+
+
 # ── custom policies ─────────────────────────────────────────────────
 
 

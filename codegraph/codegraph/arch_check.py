@@ -321,6 +321,11 @@ def _check_orphans(driver: Driver, cfg: OrphanDetectionConfig) -> PolicyResult:
             "WHERE NOT EXISTS { ()-[:CALLS]->(f) }\n"
             "  AND NOT EXISTS { ()-[:RENDERS]->(f) }\n"
             "  AND NOT EXISTS { (f)-[:DECORATED_BY]->(:Decorator) }\n"
+            "  AND NOT f.name STARTS WITH 'test_'\n"
+            "  AND NOT f.name IN ['setup_module', 'teardown_module',\n"
+            "                     'setup_function', 'teardown_function',\n"
+            "                     'setup_class', 'teardown_class',\n"
+            "                     'setup_method', 'teardown_method']\n"
             "{prefix_filter}"
             "RETURN 'orphan_function' AS kind, f.name AS name, f.file AS file"
         ),
