@@ -217,22 +217,72 @@ def test_callers_of_class_default_depth(monkeypatch):
     driver = _patch(monkeypatch, [[]])
     mcp_mod.callers_of_class("AuthService")
     cypher, params = driver.session_obj.calls[0]
-    assert "*1..3" in cypher
+    assert "*1..1" in cypher
     assert params == {"class_name": "AuthService"}
 
 
 def test_callers_of_class_custom_depth(monkeypatch):
     driver = _patch(monkeypatch, [[]])
-    mcp_mod.callers_of_class("AuthService", max_depth=7)
+    mcp_mod.callers_of_class("AuthService", max_depth=4)
     cypher, _ = driver.session_obj.calls[0]
-    assert "*1..7" in cypher
+    assert "*1..4" in cypher
 
 
-@pytest.mark.parametrize("bad", [0, -1, 11, 100, "3"])
+@pytest.mark.parametrize("bad", [0, -1, 6, 100, "3", True, False])
 def test_callers_of_class_rejects_bad_depth(monkeypatch, bad):
     _patch(monkeypatch, [[]])
     out = mcp_mod.callers_of_class("AuthService", max_depth=bad)
-    assert out == [{"error": "max_depth must be an integer in 1..10"}]
+    assert out == [{"error": "max_depth must be an integer in 1..5"}]
+
+
+# ── calls_from ─────────────────────────────────────────────────────
+
+
+def test_calls_from_default_depth(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.calls_from("parse")
+    cypher, params = driver.session_obj.calls[0]
+    assert "*1..1" in cypher
+    assert params["name"] == "parse"
+
+
+def test_calls_from_custom_depth(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.calls_from("parse", max_depth=3)
+    cypher, _ = driver.session_obj.calls[0]
+    assert "*1..3" in cypher
+
+
+@pytest.mark.parametrize("bad", [0, -1, 6, 100, "3", True, False])
+def test_calls_from_rejects_bad_depth(monkeypatch, bad):
+    _patch(monkeypatch, [[]])
+    out = mcp_mod.calls_from("parse", max_depth=bad)
+    assert out == [{"error": "max_depth must be an integer in 1..5"}]
+
+
+# ── callers_of ─────────────────────────────────────────────────────
+
+
+def test_callers_of_default_depth(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.callers_of("parse")
+    cypher, params = driver.session_obj.calls[0]
+    assert "*1..1" in cypher
+    assert params["name"] == "parse"
+
+
+def test_callers_of_custom_depth(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.callers_of("parse", max_depth=4)
+    cypher, _ = driver.session_obj.calls[0]
+    assert "*1..4" in cypher
+
+
+@pytest.mark.parametrize("bad", [0, -1, 6, 100, "3", True, False])
+def test_callers_of_rejects_bad_depth(monkeypatch, bad):
+    _patch(monkeypatch, [[]])
+    out = mcp_mod.callers_of("parse", max_depth=bad)
+    assert out == [{"error": "max_depth must be an integer in 1..5"}]
 
 
 # ── endpoints_for_controller ────────────────────────────────────────

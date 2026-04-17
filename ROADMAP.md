@@ -2,17 +2,17 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-17 after commits `af77cd3` → `6fe0730` (slash commands + arch-check CI + onboarding scaffolder + Python Stage 2 + MCP prompt templates + describe_schema CypherSyntaxError fix + query_graph bool/limit validation fix).
+> **Last updated:** 2026-04-17 after commits `af77cd3` → `6b74617` (slash commands + arch-check CI + onboarding scaffolder + Python Stage 2 + MCP prompt templates + describe_schema CypherSyntaxError fix + query_graph bool/limit validation fix + max_depth bounds + bool bypass fix for all three traversal tools).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-30-query-graph-bool-limit`. Working tree clean. Fix for issue #30 committed as `6fe0730`.
-- **Tests:** 280 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-33-max-depth-bounds`. Working tree clean. Fix for issue #33 committed as `6b74617`.
+- **Tests:** 300 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools live + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.2.0 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration).
+- **Package:** `cognitx-codegraph` v0.1.6 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration).
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
 - **Python Stage 2:** FastAPI / Flask / Django / SQLAlchemy framework detection + `:Endpoint` nodes. `/trace-endpoint` now works against Python repos.
@@ -22,6 +22,9 @@
 ## Shipped since the last roadmap update (commit `7588522`)
 
 ```
+6b74617 fix(mcp):       reject bool values for max_depth in callers_of_class, calls_from, callers_of (#33)
+619923e chore:          bump version to 0.1.6
+87623d9 chore:          bump version to 0.1.5
 6fe0730 fix(mcp):       reject bool and out-of-range limit in query_graph (#30)
 11f02cb chore:          bump version to 0.1.4
 fa031dd fix(mcp):       catch CypherSyntaxError in describe_schema before ClientError (#29)
@@ -41,7 +44,10 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Four sessions' worth of work grouped by theme:
+Five sessions' worth of work grouped by theme:
+
+### MCP bug fix: max_depth bounds + bool bypass in traversal tools (issue #33)
+- `6b74617 fix(mcp)` — `callers_of_class`, `calls_from`, and `callers_of` had mismatched `max_depth` bounds and all three let `max_depth=True` / `False` slip through validation (Python `bool` is a subclass of `int`). Fixed in two passes: (1) aligned all three tools to `default=1`, `max=5` (was: `callers_of_class` had `default=3`, `max=10`; the other two were already `default=1`, `max=5`); (2) added `or isinstance(max_depth, bool)` guard to each validator, matching the `_validate_limit` pattern already in use for `limit` parameters. Docstrings and error messages updated to reflect the new bounds. `tests/test_mcp.py` changes: 3 existing `callers_of_class` tests updated for new bounds; 6 new tests added for `calls_from` (default, custom, bad); 6 new tests added for `callers_of` (default, custom, bad); `True` and `False` added to all three `bad` parametrize lists (6 more test cases). Test count 280 → 300.
 
 ### MCP bug fix: query_graph bool and out-of-range limit validation (issue #30)
 - `6fe0730 fix(mcp)` — `query_graph()` was silently capping `limit=5000` to 1000 instead of rejecting it, and accepted `True`/`False` as valid limits (Python bool is a subclass of int, so the old `isinstance(limit, int)` guard passed). Fixed by replacing the inline `isinstance` check + `min(limit, 1000)` cap with a call to `_validate_limit(limit)`, the same helper already used by all 7 other tools in `mcp.py`. Also fixed the stale docstring ("cap 1000" → "max 1000"). Three test changes in `test_mcp.py`: updated error message in `test_query_graph_rejects_bad_limit`; renamed `test_query_graph_caps_huge_limit` → `test_query_graph_rejects_huge_limit` (now expects rejection for limit=5000); added parametrized `test_query_graph_rejects_bool_limit` covering `True` and `False`. Test count 278 → 280.
@@ -90,12 +96,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-30-query-graph-bool-limit` |
+| Current branch | `archon/task-fix-issue-33-max-depth-bounds` |
 | Base branch | `main` |
-| Unpushed commits | 0 (working tree clean; `6fe0730` already committed) |
-| Open PR | Issue #30 fix branch pending merge. |
+| Unpushed commits | 0 (working tree clean; `6b74617` already committed) |
+| Open PR | Issue #33 fix branch pending merge. |
 | Working tree | Clean |
-| Test count | 280 passing + 1 deselected |
+| Test count | 300 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -363,6 +369,8 @@ Repo-local plans under `.claude/plans/`:
 - `arch-check-ci.plan.md` — shipped as `55789fd` + `b12520a`.
 - `glimmering-painting-yao.md` (in `~/.claude/plans/`) — the most recent "one-command onboarding" plan, shipped as `d0abe53`.
 
+- `fix-issue-33-max-depth-bounds.plan.md` — shipped as `6b74617`.
+
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
 ---
@@ -440,7 +448,7 @@ asking. Do not merge the open PR #8 without asking.
 | `test_ignore.py` | 19 | `ignore.py` + cli helpers |
 | `test_framework.py` | 18 | `framework.py` (TS) |
 | `test_py_framework.py` | 13 | `framework.py` (Python Stage 2) |
-| `test_mcp.py` | 48 | `mcp.py` (13 tools + 29 prompts + describe_schema + query_graph validation) |
+| `test_mcp.py` | 68 | `mcp.py` (13 tools + 29 prompts + describe_schema + query_graph + depth validation for all three traversal tools) |
 | `test_py_parser.py` | 28 | `py_parser.py` (Stage 1 parsing) |
 | `test_py_parser_calls.py` | 12 | Method-body CALLS emission |
 | `test_py_parser_endpoints.py` | 18 | Python Stage 2 endpoint parsing |
@@ -452,7 +460,7 @@ asking. Do not merge the open PR #8 without asking.
 | `test_arch_config.py` | 20 | `.arch-policies.toml` parser (built-ins + custom + validation errors) |
 | `test_init.py` | 17 | Scaffolder helpers (detection, prompts, render, write) |
 | `test_init_integration.py` | 2 (1 slow) | End-to-end scaffold + optional Docker |
-| **Total** | **280** | |
+| **Total** | **300** | |
 
 ### Key decisions recorded in commit messages
 
@@ -469,6 +477,7 @@ Grep commit bodies for rationale:
 - Why `queries.md` headings/fenced-blocks drive prompt registration (not hardcoded names) → `357ad03`
 - Why Python Stage 2 uses `framework.py` scored heuristics rather than per-file flags → `6493224`
 - Why `query_graph` rejects bool limits (Python bool ⊂ int — `isinstance(True, int)` is True) → `6fe0730`
+- Why all three traversal tools use `default=1, max=5` for `max_depth` (consistent bounds; bool bypass was the same root cause as #30; `or isinstance(max_depth, bool)` guard matches `_validate_limit` pattern) → `6b74617`
 
 ### Git remotes
 
