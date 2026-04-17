@@ -260,6 +260,39 @@ def test_calls_from_rejects_bad_depth(monkeypatch, bad):
     assert out == [{"error": "max_depth must be an integer in 1..5"}]
 
 
+def test_calls_from_happy_path(monkeypatch):
+    driver = _patch(
+        monkeypatch,
+        [[
+            {"kind": "Function", "name": "helper", "file": "src/utils.py",
+             "docstring": "A helper"},
+        ]],
+    )
+    out = mcp_mod.calls_from("parse")
+    assert len(out) == 1
+    assert out[0]["kind"] == "Function"
+    assert out[0]["name"] == "helper"
+    assert out[0]["file"] == "src/utils.py"
+    assert out[0]["docstring"] == "A helper"
+    cypher, params = driver.session_obj.calls[0]
+    assert "src:Function OR src:Method" in cypher
+    assert "CALLS*1..1" in cypher
+    assert params == {"name": "parse", "file": None}
+
+
+def test_calls_from_with_file_filter(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.calls_from("parse", file="src/parser.py")
+    _, params = driver.session_obj.calls[0]
+    assert params["file"] == "src/parser.py"
+
+
+def test_calls_from_rejects_bad_limit(monkeypatch):
+    _patch(monkeypatch, [[]])
+    out = mcp_mod.calls_from("parse", limit=0)
+    assert out == [{"error": "limit must be an integer in 1..1000"}]
+
+
 # ── callers_of ─────────────────────────────────────────────────────
 
 
@@ -283,6 +316,86 @@ def test_callers_of_rejects_bad_depth(monkeypatch, bad):
     _patch(monkeypatch, [[]])
     out = mcp_mod.callers_of("parse", max_depth=bad)
     assert out == [{"error": "max_depth must be an integer in 1..5"}]
+
+
+def test_callers_of_happy_path(monkeypatch):
+    driver = _patch(
+        monkeypatch,
+        [[
+            {"kind": "Method", "name": "run_pipeline", "file": "src/pipeline.py"},
+        ]],
+    )
+    out = mcp_mod.callers_of("parse")
+    assert len(out) == 1
+    assert out[0]["kind"] == "Method"
+    assert out[0]["name"] == "run_pipeline"
+    assert out[0]["file"] == "src/pipeline.py"
+    cypher, params = driver.session_obj.calls[0]
+    assert "src:Function OR src:Method" in cypher
+    assert "CALLS*1..1" in cypher
+    assert params == {"name": "parse", "file": None}
+
+
+def test_callers_of_with_file_filter(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.callers_of("parse", file="src/parser.py")
+    _, params = driver.session_obj.calls[0]
+    assert params["file"] == "src/parser.py"
+
+
+def test_callers_of_rejects_bad_limit(monkeypatch):
+    _patch(monkeypatch, [[]])
+    out = mcp_mod.callers_of("parse", limit=0)
+    assert out == [{"error": "limit must be an integer in 1..1000"}]
+
+
+# ── describe_function ──────────────────────────────────────────────
+
+
+def test_describe_function_happy_path(monkeypatch):
+    driver = _patch(
+        monkeypatch,
+        [[
+            {"kind": "Function", "name": "parse", "file": "src/parser.py",
+             "docstring": "Parse source.", "params_json": '[{"name": "source"}]',
+             "return_type": "ParseResult", "decorators": ["mcp.tool"]},
+        ]],
+    )
+    out = mcp_mod.describe_function("parse")
+    assert len(out) == 1
+    assert out[0]["kind"] == "Function"
+    assert out[0]["name"] == "parse"
+    assert out[0]["file"] == "src/parser.py"
+    assert out[0]["docstring"] == "Parse source."
+    assert out[0]["return_type"] == "ParseResult"
+    assert out[0]["decorators"] == ["mcp.tool"]
+    cypher, params = driver.session_obj.calls[0]
+    assert "n:Function OR n:Method" in cypher
+    assert "OPTIONAL MATCH (n)-[:DECORATED_BY]->(d:Decorator)" in cypher
+    assert "collect(DISTINCT d.name)" in cypher
+    assert params == {"name": "parse", "file": None}
+
+
+def test_describe_function_with_file_filter(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.describe_function("parse", file="src/parser.py")
+    _, params = driver.session_obj.calls[0]
+    assert params["file"] == "src/parser.py"
+
+
+def test_describe_function_no_decorators(monkeypatch):
+    _patch(
+        monkeypatch,
+        [[
+            {"kind": "Function", "name": "helper", "file": "src/utils.py",
+             "docstring": "", "params_json": "[]",
+             "return_type": None, "decorators": []},
+        ]],
+    )
+    out = mcp_mod.describe_function("helper")
+    assert len(out) == 1
+    assert out[0]["decorators"] == []
+    assert out[0]["return_type"] is None
 
 
 # ── endpoints_for_controller ────────────────────────────────────────
@@ -528,6 +641,9 @@ def test_find_class_rejects_bad_limit(monkeypatch):
         lambda: mcp_mod.gql_operation_callers("findManyUsers"),
         lambda: mcp_mod.most_injected_services(),
         lambda: mcp_mod.find_class("Auth"),
+        lambda: mcp_mod.calls_from("parse"),
+        lambda: mcp_mod.callers_of("parse"),
+        lambda: mcp_mod.describe_function("parse"),
     ],
 )
 def test_new_tools_surface_client_error(monkeypatch, call):
@@ -545,6 +661,9 @@ def test_new_tools_surface_client_error(monkeypatch, call):
         lambda: mcp_mod.gql_operation_callers("findManyUsers"),
         lambda: mcp_mod.most_injected_services(),
         lambda: mcp_mod.find_class("Auth"),
+        lambda: mcp_mod.calls_from("parse"),
+        lambda: mcp_mod.callers_of("parse"),
+        lambda: mcp_mod.describe_function("parse"),
     ],
 )
 def test_new_tools_surface_service_unavailable(monkeypatch, call):
