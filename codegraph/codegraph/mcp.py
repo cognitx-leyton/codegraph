@@ -33,13 +33,101 @@ the graph.
 from __future__ import annotations
 
 import os
-from typing import Any, Optional
+import re
+from pathlib import Path
+from typing import Any, NamedTuple, Optional
 
 from mcp.server.fastmcp import FastMCP
 from neo4j import READ_ACCESS, Driver, GraphDatabase
 from neo4j.exceptions import ClientError, CypherSyntaxError, ServiceUnavailable
 
 from .utils.neo4j_json import clean_row
+
+
+# ── Query prompt helpers ─────────────────────────────────────────────
+
+_QUERIES_MD = Path(__file__).resolve().parent.parent / "queries.md"
+
+
+class _QueryEntry(NamedTuple):
+    name: str
+    description: str
+    cypher: str
+
+
+def _slugify(text: str) -> str:
+    """Convert a heading string to a URL-safe slug."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _parse_queries_md(text: str) -> list[_QueryEntry]:
+    """Parse fenced ```cypher blocks from *text* into a list of _QueryEntry objects.
+
+    Rules:
+    - Each ``## `` heading sets the current section name.
+    - Each ` ```cypher ` block under that heading becomes one entry.
+    - If multiple blocks share a heading, the second gets suffix ``-2``, etc.
+    - The first ``//`` comment line inside a block becomes the description;
+      otherwise the heading text is used.
+    """
+    entries: list[_QueryEntry] = []
+    heading: str = ""
+    heading_counts: dict[str, int] = {}
+    in_block = False
+    block_lines: list[str] = []
+
+    for line in text.splitlines():
+        if line.startswith("## "):
+            heading = line[3:].strip()
+        elif line.startswith("```cypher") and not in_block:
+            in_block = True
+            block_lines = []
+        elif line.startswith("```") and in_block:
+            in_block = False
+            cypher = "\n".join(block_lines).strip()
+            if not cypher or not heading:
+                continue
+            slug = _slugify(heading)
+            count = heading_counts.get(slug, 0) + 1
+            heading_counts[slug] = count
+            name = slug if count == 1 else f"{slug}-{count}"
+            # First // comment becomes description; fall back to heading
+            description = heading
+            for bl in block_lines:
+                stripped = bl.strip()
+                if stripped.startswith("//"):
+                    description = stripped.lstrip("/").strip()
+                    break
+            entries.append(_QueryEntry(name=name, description=description, cypher=cypher))
+        elif in_block:
+            block_lines.append(line)
+
+    return entries
+
+
+def _register_query_prompts(server: FastMCP) -> None:
+    """Register each Cypher block from queries.md as a FastMCP prompt."""
+    from mcp.server.fastmcp.prompts.base import Prompt
+
+    if not _QUERIES_MD.exists():
+        return
+
+    entries = _parse_queries_md(_QUERIES_MD.read_text(encoding="utf-8"))
+    for entry in entries:
+        cypher = entry.cypher
+        description = entry.description
+
+        def _make_fn(q: str):
+            def fn() -> str:
+                return q
+            return fn
+
+        prompt = Prompt.from_function(
+            _make_fn(cypher),
+            name=entry.name,
+            description=description,
+        )
+        server.add_prompt(prompt)
 
 
 # ── Configuration ───────────────────────────────────────────────────
@@ -123,6 +211,7 @@ def _run_read(cypher: str, **params: Any) -> list[dict]:
 # ── FastMCP server + tools ──────────────────────────────────────────
 
 mcp = FastMCP("codegraph")
+_register_query_prompts(mcp)
 
 
 @mcp.tool()

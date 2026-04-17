@@ -490,3 +490,75 @@ def test_new_tools_surface_service_unavailable(monkeypatch, call):
         out = call()
     assert len(out) == 1 and "error" in out[0]
     assert "Neo4j is unreachable" in out[0]["error"]
+
+
+# ── query prompt parsing ─────────────────────────────────────────────
+
+
+def test_parse_queries_md_extracts_all_blocks():
+    """Real queries.md should yield exactly 29 entries."""
+    text = mcp_mod._QUERIES_MD.read_text(encoding="utf-8")
+    entries = mcp_mod._parse_queries_md(text)
+    assert len(entries) == 29
+
+
+def test_parse_queries_md_single_block_section():
+    md = "## My Section\n\n```cypher\n// My description\nMATCH (n) RETURN n\n```\n"
+    entries = mcp_mod._parse_queries_md(md)
+    assert len(entries) == 1
+    assert entries[0].name == "my-section"
+    assert entries[0].description == "My description"
+    assert "MATCH (n) RETURN n" in entries[0].cypher
+
+
+def test_parse_queries_md_multi_block_naming():
+    md = "## Foo\n\n```cypher\nRETURN 1\n```\n\n```cypher\nRETURN 2\n```\n\n```cypher\nRETURN 3\n```\n"
+    entries = mcp_mod._parse_queries_md(md)
+    assert [e.name for e in entries] == ["foo", "foo-2", "foo-3"]
+
+
+def test_parse_queries_md_comment_as_description():
+    md = "## Section\n\n```cypher\n// Explicit description\nMATCH (n) RETURN n\n```\n"
+    entries = mcp_mod._parse_queries_md(md)
+    assert entries[0].description == "Explicit description"
+
+
+def test_parse_queries_md_heading_fallback_when_no_comment():
+    md = "## My Heading\n\n```cypher\nMATCH (n) RETURN n\n```\n"
+    entries = mcp_mod._parse_queries_md(md)
+    assert entries[0].description == "My Heading"
+
+
+def test_parse_queries_md_empty_input():
+    assert mcp_mod._parse_queries_md("") == []
+
+
+def test_slugify():
+    assert mcp_mod._slugify("4. Impact analysis: who depends on X?") == "4-impact-analysis-who-depends-on-x"
+    assert mcp_mod._slugify("Schema overview") == "schema-overview"
+    assert mcp_mod._slugify("  Leading & trailing  ") == "leading-trailing"
+
+
+# ── query prompt registration ────────────────────────────────────────
+
+
+def test_query_prompts_registered_on_server():
+    prompts = mcp_mod.mcp._prompt_manager._prompts
+    assert len(prompts) >= 29
+
+
+def test_query_prompt_renders_cypher():
+    prompts = mcp_mod.mcp._prompt_manager._prompts
+    schema_prompt = prompts.get("schema-overview")
+    assert schema_prompt is not None
+    # Calling the underlying function returns the Cypher string
+    result = schema_prompt.fn()
+    assert "CALL db.labels()" in result
+
+
+def test_register_query_prompts_skips_missing_file(monkeypatch, tmp_path):
+    from mcp.server.fastmcp import FastMCP as _FastMCP
+    monkeypatch.setattr(mcp_mod, "_QUERIES_MD", tmp_path / "nonexistent.md")
+    fresh = _FastMCP("test")
+    mcp_mod._register_query_prompts(fresh)
+    assert len(fresh._prompt_manager._prompts) == 0
