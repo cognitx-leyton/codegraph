@@ -2,26 +2,30 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-17 after commits `ce1d179` → `4213450` (`coupling_ceiling` built-in policy added to `arch_check.py` + `arch_config.py`; PR #82 merged to main; version bumped to 0.1.12).
+> **Last updated:** 2026-04-18 after commits `62ded5a` → `2dd72b7` (`orphan_detection` fifth built-in policy added to `arch_check.py` + `arch_config.py`; PR #85 merged to main; version bumped to 0.1.13).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-16-coupling-ceiling`. Working tree has one untracked plan file (`.claude/plans/coupling-ceiling-policy.plan.md`). `coupling_ceiling` built-in policy shipped as `4213450`.
-- **Tests:** 330 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-17-orphan-detection`. Working tree has one untracked plan file (`.claude/plans/feat-orphan-detection-policy.plan.md`). `orphan_detection` built-in policy shipped as `2dd72b7`; PR #85 merged to main.
+- **Tests:** 341 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools live + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.12 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.13 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
 - **Python Stage 2:** FastAPI / Flask / Django / SQLAlchemy framework detection + `:Endpoint` nodes. `/trace-endpoint` now works against Python repos.
 
 ---
 
-## Shipped since the last roadmap update (commit `ce1d179`)
+## Shipped since the last roadmap update (commit `62ded5a`)
 
 ```
+2dd72b7 feat(arch-check): add orphan_detection policy to surface unreachable nodes
+9c4130d Merge pull request #85 from cognitx-leyton/archon/task-feat-issue-16-coupling-ceiling
+ad9ccac chore:          bump version to 0.1.13
+62ded5a docs(roadmap):  update session handoff
 4213450 feat(arch-check): add coupling_ceiling policy to cap inbound imports (#16)
 6c23313 Merge pull request #82 from cognitx-leyton/archon/task-chore-issue-24-pypi-propagation-delay
 ec54142 chore:          bump version to 0.1.12
@@ -63,7 +67,15 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Eight sessions' worth of work grouped by theme:
+Nine sessions' worth of work grouped by theme:
+
+### Orphan detection — fifth built-in arch-check policy (issue #17)
+
+- `2dd72b7 feat(arch-check)` — `arch_check.py` gains `_check_orphans()`: reuses the dead-code Cypher from `/dead-code` to find functions, classes, atoms, and endpoints with zero inbound references and no framework-entry-point decorator. Supports an optional `path_prefix` to scope the check and a `kinds` list to restrict which node types are flagged. Result is a standard `PolicyResult` wired into `_run_all()` after `coupling_ceiling`. `arch_config.py` gains `VALID_ORPHAN_KINDS = {"function", "class", "atom", "endpoint"}`, `OrphanDetectionConfig` dataclass (`enabled: bool`, `path_prefix: str`, `kinds: list[str]`), `orphan_detection` field on `ArchConfig`, and `_parse_orphan_detection()` that validates kind values and rejects empty lists; `"orphan_detection"` added to the builtins collision-guard set. Fixed `CALL {}` → `CALL () {}` to suppress Neo4j 5.x deprecation warning. `docs/arch-policies.md` gets section 5 documenting the policy; intro updated from "four" to "five" built-in policies; `orphan_detection` added to the reserved names list and the full TOML schema example; duplicate Exit codes section removed. **11 new tests**: 4 in `test_arch_check.py` (clean graph, violations detected, path-prefix scope, kinds config) + 7 in `test_arch_config.py` (defaults, disabled, custom prefix, custom kinds, invalid kind rejected, empty kinds rejected, builtin collision); 3 orchestrator tests updated for the now-5-policy `_run_all()`. Test count: 330 → 341.
+
+### Version bump + coupling_ceiling PR merged to main
+
+- `ad9ccac chore` + `9c4130d merge` — bumped `pyproject.toml` to v0.1.13 and merged PR #85 (coupling_ceiling policy, issue #16) to `main`.
 
 ### Coupling ceiling — fourth built-in arch-check policy (issue #16)
 
@@ -141,12 +153,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-16-coupling-ceiling` |
+| Current branch | `archon/task-feat-issue-17-orphan-detection` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`4213450` — coupling_ceiling policy, pending PR) |
-| Open PR | Issue #16 coupling_ceiling branch pending PR. PR #82 (PyPI propagation delay) merged. |
-| Working tree | 1 untracked file (`.claude/plans/coupling-ceiling-policy.plan.md`) |
-| Test count | 330 passing + 1 deselected |
+| Unpushed commits | 1 (`2dd72b7` — orphan_detection policy, pending PR) |
+| Open PR | Issue #17 orphan_detection branch pending PR. PR #85 (coupling_ceiling) merged to main. |
+| Working tree | 1 untracked file (`.claude/plans/feat-orphan-detection-policy.plan.md`) |
+| Test count | 341 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -351,7 +363,7 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 
 ~~- **Coupling ceiling** — any file with >N distinct IMPORTS edges is flagged.~~ **SHIPPED** (`4213450`)
 
-- **Orphan detection** — functions/classes/endpoints with zero inbound references AND no framework-entry-point decorator. Already possible via the existing `/dead-code` slash command; promoting to a policy means it blocks merges.
+~~- **Orphan detection** — functions/classes/endpoints with zero inbound references AND no framework-entry-point decorator.~~ **SHIPPED** (`2dd72b7`)
 - **Endpoint auth coverage** — every `:Endpoint` with `method IN ('POST','PUT','PATCH','DELETE')` must have a DECORATED_BY to an auth-guard. Requires knowing which decorators count as auth — configurable.
 - **Public-API stability** — breaking changes to exported symbols detected by diffing graph state between commits (needs graph persistence beyond CI).
 
@@ -419,6 +431,7 @@ Repo-local plans under `.claude/plans/`:
 - `arch-policies-versioning.plan.md` — shipped as `bc70d01`.
 - `pypi-propagation-delay.plan.md` — shipped as `dd17072`.
 - `coupling-ceiling-policy.plan.md` — shipped as `4213450`.
+- `feat-orphan-detection-policy.plan.md` — shipped as `2dd72b7`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -478,8 +491,8 @@ asking. Do not merge the open PR #8 without asking.
 | `loader.py` | Neo4j batch writer, constraints, indexes, `LoadStats` | ~815 |
 | `schema.py` | Node + edge dataclasses shared across parser → loader (+ shared test-pairing constants) | ~390 |
 | `config.py` | `codegraph.toml` / `pyproject.toml` config loader | ~190 |
-| `arch_check.py` | Architecture-conformance runner + 4 built-in policies + custom policy support | ~310 |
-| `arch_config.py` | `.arch-policies.toml` parser → typed `ArchConfig` | ~295 |
+| `arch_check.py` | Architecture-conformance runner + 5 built-in policies + custom policy support | ~360 |
+| `arch_config.py` | `.arch-policies.toml` parser → typed `ArchConfig` | ~320 |
 | `ignore.py` | `.codegraphignore` parser + `IgnoreFilter` | ~180 |
 | `framework.py` | Per-package framework detection (`FrameworkDetector`) | ~510 |
 | `mcp.py` | FastMCP stdio server with 13 tools + 29 prompt templates | ~610 |
@@ -505,11 +518,11 @@ asking. Do not merge the open PR #8 without asking.
 | `test_resolver_bugs.py` | 13 | Resolver edge-case regression tests |
 | `test_loader_partitioning.py` | 3 | Function DECORATED_BY routing |
 | `test_loader_pairing.py` | 6 | TS + Python test-file pairing |
-| `test_arch_check.py` | 22 | Policies + orchestrator + custom policy runner (including coupling_ceiling: clean, detected, threshold) |
-| `test_arch_config.py` | 30 | `.arch-policies.toml` parser (built-ins + custom + validation errors + schema_version + coupling_ceiling config) |
+| `test_arch_check.py` | 26 | Policies + orchestrator + custom policy runner (including coupling_ceiling + orphan_detection) |
+| `test_arch_config.py` | 37 | `.arch-policies.toml` parser (built-ins + custom + validation errors + schema_version + coupling_ceiling + orphan_detection config) |
 | `test_init.py` | 19 | Scaffolder helpers (detection, prompts, render, write, container name uniqueness) |
 | `test_init_integration.py` | 2 (1 slow) | End-to-end scaffold + optional Docker |
-| **Total** | **330** | |
+| **Total** | **341** | |
 
 ### Key decisions recorded in commit messages
 
@@ -534,6 +547,9 @@ Grep commit bodies for rationale:
 - Why `${{ steps.version.outputs.version }}` flows through `env:` not direct `run:` interpolation (defense-in-depth: GitHub recommends avoiding direct `${{ }}` in `run:` blocks to prevent injection if a version string ever contained shell metacharacters) → `dd17072`
 - Why `coupling_ceiling` uses a two-query approach (count query + sample query) rather than embedding the sample in the count query (two small focused queries are cleaner and faster than a combined aggregation + `COLLECT` that materialises all importers before slicing; the sample is only needed when there's a violation, so the count query acts as a fast guard) → `4213450`
 - Why `max_imports` must be ≥ 1 (a ceiling of 0 would flag every file with any imports, which is never useful and almost certainly a config mistake; the validator raises a descriptive `ValueError` rather than silently clamping) → `4213450`
+- Why `orphan_detection` reuses the `/dead-code` Cypher verbatim rather than writing a new query (the slash command already encodes the correct framework-entry-point exclusion list — `@mcp.tool`, `@app.command`, `@pytest.fixture`, `@router.*`, `@app.*`; reusing it keeps the policy and the interactive command consistent) → `2dd72b7`
+- Why `CALL {}` was changed to `CALL () {}` (Neo4j 5.x deprecated the form without parentheses; the new form is required in Neo4j 6.x and the warning was appearing in test output) → `2dd72b7`
+- Why `kinds` defaults to all four types rather than just `["function", "class"]` (the policy is meant to surface all unreachable code; users who want narrower coverage explicitly opt in via config; rejecting an empty list rather than silently defaulting is consistent with `max_imports ≥ 1`) → `2dd72b7`
 
 ### Git remotes
 

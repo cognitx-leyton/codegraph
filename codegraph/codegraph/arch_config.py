@@ -33,6 +33,11 @@ TOML schema (all sections optional):
     enabled     = true
     max_imports = 20
 
+    [policies.orphan_detection]
+    enabled     = true
+    path_prefix = ""
+    kinds       = ["function", "class", "atom", "endpoint"]
+
     [[policies.custom]]
     name          = "no_fat_files"
     description   = "Files over 500 LOC"
@@ -54,6 +59,7 @@ else:  # pragma: no cover
 
 DEFAULT_CONFIG_FILENAME = ".arch-policies.toml"
 CURRENT_SCHEMA_VERSION = 1
+VALID_ORPHAN_KINDS = frozenset({"function", "class", "atom", "endpoint"})
 
 
 class ArchConfigError(ValueError):
@@ -103,6 +109,15 @@ class CouplingCeilingConfig:
 
 
 @dataclass
+class OrphanDetectionConfig:
+    enabled: bool = True
+    path_prefix: str = ""
+    kinds: list[str] = field(default_factory=lambda: [
+        "function", "class", "atom", "endpoint",
+    ])
+
+
+@dataclass
 class CustomPolicy:
     """User-authored policy, identified by a pair of Cypher queries."""
 
@@ -125,6 +140,7 @@ class ArchConfig:
     cross_package: CrossPackageConfig = field(default_factory=CrossPackageConfig)
     layer_bypass: LayerBypassConfig = field(default_factory=LayerBypassConfig)
     coupling_ceiling: CouplingCeilingConfig = field(default_factory=CouplingCeilingConfig)
+    orphan_detection: OrphanDetectionConfig = field(default_factory=OrphanDetectionConfig)
     custom: list[CustomPolicy] = field(default_factory=list)
     schema_version: int = 1
 
@@ -183,6 +199,7 @@ def load_arch_config(repo_root: Path, path: Optional[Path] = None) -> ArchConfig
         cross_package=_parse_cross_package(policies.get("cross_package", {}), config_path),
         layer_bypass=_parse_layer_bypass(policies.get("layer_bypass", {}), config_path),
         coupling_ceiling=_parse_coupling_ceiling(policies.get("coupling_ceiling", {}), config_path),
+        orphan_detection=_parse_orphan_detection(policies.get("orphan_detection", {}), config_path),
         custom=_parse_custom(policies.get("custom", []), config_path),
         schema_version=schema_version,
     )
@@ -279,13 +296,39 @@ def _parse_coupling_ceiling(raw: dict, path: Path) -> CouplingCeilingConfig:
     return cfg
 
 
+def _parse_orphan_detection(raw: dict, path: Path) -> OrphanDetectionConfig:
+    defaults = OrphanDetectionConfig()
+    enabled = _bool(raw, "enabled", defaults.enabled, path, "orphan_detection")
+    path_prefix = _str(raw, "path_prefix", defaults.path_prefix, path, "orphan_detection")
+    kinds_raw = raw.get("kinds", defaults.kinds)
+    if not isinstance(kinds_raw, list):
+        raise ArchConfigError(
+            f"{path}: policies.orphan_detection.kinds must be a list of strings"
+        )
+    if not kinds_raw:
+        raise ArchConfigError(
+            f"{path}: policies.orphan_detection.kinds must not be empty"
+        )
+    for i, k in enumerate(kinds_raw):
+        if not isinstance(k, str):
+            raise ArchConfigError(
+                f"{path}: policies.orphan_detection.kinds[{i}] must be a string"
+            )
+        if k not in VALID_ORPHAN_KINDS:
+            raise ArchConfigError(
+                f"{path}: policies.orphan_detection.kinds[{i}] = '{k}' is not valid "
+                f"(choose from: {', '.join(sorted(VALID_ORPHAN_KINDS))})"
+            )
+    return OrphanDetectionConfig(enabled=enabled, path_prefix=path_prefix, kinds=list(kinds_raw))
+
+
 def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:
     if not isinstance(raw, list):
         raise ArchConfigError(
             f"{path}: policies.custom must be an array of tables, got {type(raw).__name__}"
         )
     seen: set[str] = set()
-    builtins = {"import_cycles", "cross_package", "layer_bypass", "coupling_ceiling"}
+    builtins = {"import_cycles", "cross_package", "layer_bypass", "coupling_ceiling", "orphan_detection"}
     out: list[CustomPolicy] = []
     for i, p in enumerate(raw):
         if not isinstance(p, dict):

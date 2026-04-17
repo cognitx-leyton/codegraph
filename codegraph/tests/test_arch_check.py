@@ -22,6 +22,7 @@ from codegraph.arch_check import (
     _check_custom,
     _check_import_cycles,
     _check_layer_bypass,
+    _check_orphans,
     run_arch_check,
 )
 from codegraph.arch_config import (
@@ -32,6 +33,7 @@ from codegraph.arch_config import (
     CustomPolicy,
     ImportCyclesConfig,
     LayerBypassConfig,
+    OrphanDetectionConfig,
 )
 
 
@@ -295,6 +297,81 @@ def test_coupling_ceiling_uses_config_threshold():
     assert captured_params["threshold"] == 42
 
 
+# ── orphan_detection ───────────────────────────────────────────────
+
+
+def test_orphan_detection_clean():
+    driver = _constant_driver({
+        "count(*) AS v": [{"v": 0}],
+    })
+    result = _check_orphans(driver, OrphanDetectionConfig())
+    assert result.name == "orphan_detection"
+    assert result.passed is True
+    assert result.violation_count == 0
+    assert result.sample == []
+
+
+def test_orphan_detection_detected():
+    sample = [
+        {"kind": "orphan_function", "name": "dead_fn", "file": "src/utils.py"},
+        {"kind": "orphan_class", "name": "UnusedClass", "file": "src/models.py"},
+    ]
+    driver = _constant_driver({
+        "count(*) AS v": [{"v": 2}],
+        "ORDER BY kind, file, name": sample,
+    })
+    result = _check_orphans(driver, OrphanDetectionConfig())
+    assert result.passed is False
+    assert result.violation_count == 2
+    assert len(result.sample) == 2
+    assert result.sample[0]["kind"] == "orphan_function"
+    assert result.sample[1]["kind"] == "orphan_class"
+
+
+def test_orphan_detection_uses_path_prefix():
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(driver, OrphanDetectionConfig(path_prefix="src/core/"))
+    assert any(p.get("prefix") == "src/core/" for p in captured_params)
+
+
+def test_orphan_detection_respects_kinds_config():
+    captured: list[str] = []
+
+    def resolver(cypher: str, **_params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(driver, OrphanDetectionConfig(kinds=["function"]))
+    # Only function sub-query should appear; class/atom/endpoint should not.
+    all_cypher = "\n".join(captured)
+    assert "orphan_function" in all_cypher
+    assert "orphan_class" not in all_cypher
+    assert "orphan_atom" not in all_cypher
+    assert "orphan_endpoint" not in all_cypher
+
+
+def test_orphan_detection_excludes_pytest_entry_points():
+    """test_* functions and xunit setup/teardown helpers must not be flagged."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **_params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(driver, OrphanDetectionConfig(kinds=["function"]))
+    all_cypher = "\n".join(captured)
+    assert "test_" in all_cypher
+    assert "setup_module" in all_cypher
+
+
 # ── custom policies ─────────────────────────────────────────────────
 
 
@@ -343,8 +420,8 @@ def test_custom_policy_detects_violations():
 # ── Orchestrator ────────────────────────────────────────────────────
 
 
-def test_run_arch_check_aggregates_four_policies(monkeypatch):
-    """``run_arch_check`` opens a driver, runs all 4 built-in policies, closes it."""
+def test_run_arch_check_aggregates_five_policies(monkeypatch):
+    """``run_arch_check`` opens a driver, runs all 5 built-in policies, closes it."""
     fake_driver = _constant_driver({
         "count(DISTINCT path) AS v": [{"v": 0}],
         "count(*) AS v": [{"v": 0}],
@@ -364,6 +441,7 @@ def test_run_arch_check_aggregates_four_policies(monkeypatch):
     assert report.ok is True
     assert [p.name for p in report.policies] == [
         "import_cycles", "cross_package", "layer_bypass", "coupling_ceiling",
+        "orphan_detection",
     ]
 
 
@@ -412,7 +490,10 @@ def test_run_arch_check_runs_custom_policies(monkeypatch):
     report = run_arch_check("bolt://fake:7687", "neo4j", "pw", console=None, config=config)
 
     policy_names = [p.name for p in report.policies]
-    assert policy_names == ["import_cycles", "cross_package", "layer_bypass", "coupling_ceiling", "my_rule"]
+    assert policy_names == [
+        "import_cycles", "cross_package", "layer_bypass", "coupling_ceiling",
+        "orphan_detection", "my_rule",
+    ]
     my_rule = report.policies[-1]
     assert my_rule.passed is False
     assert my_rule.violation_count == 1

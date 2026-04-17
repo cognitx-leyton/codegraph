@@ -1,6 +1,6 @@
 # Architecture-Conformance Policies
 
-Reference for the four built-in policies run by `codegraph arch-check` and the `/arch-check` slash command. Each section covers: what the policy detects, why the invariant matters, the exact Cypher, how to interpret a violation, and common false positives.
+Reference for the five built-in policies run by `codegraph arch-check` and the `/arch-check` slash command. Each section covers: what the policy detects, why the invariant matters, the exact Cypher, how to interpret a violation, and common false positives.
 
 If a policy fires on your PR and you believe it shouldn't, read the "False positives" subsection first — most violations are either load-bearing bugs or one of the known noise patterns, and the doc flags which is which.
 
@@ -175,13 +175,54 @@ Default threshold is 20. Raise it for large monorepo roots or barrel files; lowe
 
 ---
 
-## Exit codes
+## 5. `orphan_detection`
 
-`codegraph arch-check` returns:
-- **0** — every policy passed.
-- **1** — one or more policies reported violations.
+### What it detects
 
-CI job fails on non-zero. Report artifact (`arch-report.json`) is always uploaded, even on failure, so you can inspect the samples without re-running.
+Functions, classes, atoms, and endpoints with zero inbound references — symbols that nothing in the graph calls, extends, imports, or handles. Framework entry points (anything with a `DECORATED_BY` edge) are excluded automatically.
+
+Four orphan categories are checked:
+
+| Kind | What it means |
+|---|---|
+| `orphan_function` | `:Function` with no incoming `CALLS` / `RENDERS` and no outgoing `DECORATED_BY` (not a Typer / MCP / pytest entry point) |
+| `orphan_class` | `:Class` with no incoming `EXTENDS`, `INJECTS`, `RESOLVES`, or `IMPORTS_SYMBOL` |
+| `orphan_atom` | `:Atom` with no `READS_ATOM` or `WRITES_ATOM` consumers (React state defined but never used) |
+| `orphan_endpoint` | `:Endpoint` with no `HANDLES` method (route declared but unhooked) |
+
+### Why it matters
+
+Dead code is a maintenance tax: it confuses readers, inflates bundle sizes, and drifts silently until someone tries to refactor around it. Catching orphans at PR time — rather than during periodic cleanup — prevents accumulation and keeps the codebase honest. The `/dead-code` slash command has always been available for advisory scans; this policy makes the same check a merge gate.
+
+### Configuration
+
+```toml
+[policies.orphan_detection]
+enabled     = true                                       # false disables entirely
+path_prefix = ""                                         # scope to a sub-path (e.g. "src/core/")
+kinds       = ["function", "class", "atom", "endpoint"]  # which categories to check
+```
+
+- **`path_prefix`**: when non-empty, only symbols whose `file` starts with this prefix are scanned. Useful for focusing on a specific package in a monorepo.
+- **`kinds`**: choose which orphan categories to enforce. For example, a pure backend project with no React state can set `kinds = ["function", "class", "endpoint"]` to skip atom checks.
+
+### Interpreting a violation
+
+Each row in the sample has three columns: `kind` (which category), `name` (the symbol name), and `file` (where it's defined). The violation means "this symbol has no consumer in the graph".
+
+**Typical resolutions**:
+- Delete the dead symbol if it's genuinely unused
+- Add the missing caller, import, or wiring that should reference it
+- If the symbol is a legitimate entry point invoked via reflection or external dispatch (e.g. registered in `pyproject.toml [console_scripts]`), add a decorator so it gets a `DECORATED_BY` edge
+
+### False positives
+
+- **Decorator exclusion is broad**: any function with *any* decorator (`@staticmethod`, `@property`, `@dataclass`, etc.) is excluded, not just framework entry points. This is intentionally conservative — it may hide a genuinely dead decorated function, but it eliminates most false positives from framework dispatchers.
+- **Python module-level callers**: the Python parser (Stage 1) doesn't emit `CALLS` edges from top-level code. A function called only from `if __name__ == "__main__":` blocks will appear as orphan. Spot-check before deleting.
+- **Protocol / duck-typed implementations**: a class that satisfies a protocol without an explicit `EXTENDS` edge (no `class Foo(Protocol)` base) will show as `orphan_class`. Use `/graph` to double-check inheritance.
+- **CLI entry points in `pyproject.toml`**: functions registered as `[console_scripts]` or `[gui_scripts]` entry points aren't in the graph. They'll appear as orphans unless they also have a decorator.
+
+---
 
 ## Configuring policies — `.arch-policies.toml`
 
@@ -218,6 +259,11 @@ call_depth        = 3                  # max CALLS hops to traverse
 enabled     = true   # false disables this policy entirely
 max_imports = 20     # flag files importing more than this many distinct files
 
+[policies.orphan_detection]
+enabled     = true                                       # false disables entirely
+path_prefix = ""                                         # scope to a sub-path (e.g. "src/core/")
+kinds       = ["function", "class", "atom", "endpoint"]  # which categories to check
+
 # ── Custom policies: user-authored Cypher ──────────────────────
 
 [[policies.custom]]
@@ -238,7 +284,7 @@ sample_cypher = "MATCH (e:Endpoint) WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e)
 - Every section is optional. Omit to use defaults.
 - Every `count_cypher` must return a single row with column `v` containing an integer ≥ 0.
 - Every `sample_cypher` should return at most 10 rows — each row becomes a dict in the JSON report's `sample` array.
-- Custom policy names must be unique and must not collide with built-in names (`import_cycles`, `cross_package`, `layer_bypass`, `coupling_ceiling`).
+- Custom policy names must be unique and must not collide with built-in names (`import_cycles`, `cross_package`, `layer_bypass`, `coupling_ceiling`, `orphan_detection`).
 - Malformed TOML or invalid fields → exit code 2 with a clear error message (not exit code 1, which means policy violations).
 
 ### Schema versioning
