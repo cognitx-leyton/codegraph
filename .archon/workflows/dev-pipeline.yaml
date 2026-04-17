@@ -1,0 +1,474 @@
+name: dev-pipeline
+description: |
+  Use when: implementing a feature, fixing a bug, or working on a GitHub issue for codegraph.
+  Triggers: "start workflow", "implement issue", "dev pipeline", "work on issue"
+  Does: preflight -> research -> plan -> implement/review/commit/critique loop -> roadmap -> package -> test -> file-issues -> create-pr
+  NOT for: quick one-off fixes, documentation-only changes, manual exploration
+
+provider: claude
+model: sonnet
+effort: high
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # Step 0: Pre-flight checks
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: preflight
+    bash: |
+      set -e
+      cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+
+      PASS=true
+      echo "=== Pre-flight Checks ==="
+
+      # Git branch
+      BRANCH=$(git branch --show-current)
+      if [ "$BRANCH" = "dev" ]; then
+        echo "PASS: on dev branch"
+      else
+        echo "FAIL: on $BRANCH, expected dev"
+        PASS=false
+      fi
+
+      # Working tree
+      DIRTY=$(git status --porcelain | grep -v '^\?\?' | head -1)
+      if [ -z "$DIRTY" ]; then
+        echo "PASS: working tree clean"
+      else
+        echo "FAIL: uncommitted changes"
+        PASS=false
+      fi
+
+      # Neo4j
+      if docker ps --format '{{.Names}}' | grep -q codegraph-neo4j; then
+        echo "PASS: Neo4j running"
+      else
+        echo "WARN: Neo4j not running — starting..."
+        docker compose up -d
+        sleep 5
+        echo "PASS: Neo4j started"
+      fi
+
+      # Venv
+      if .venv/bin/codegraph --help > /dev/null 2>&1; then
+        echo "PASS: venv OK"
+      else
+        echo "FAIL: venv missing or broken"
+        PASS=false
+      fi
+
+      # Tests
+      TEST_OUT=$(.venv/bin/python -m pytest tests/ -q 2>&1)
+      TEST_EXIT=$?
+      PASS_COUNT=$(echo "$TEST_OUT" | tail -1)
+      if [ $TEST_EXIT -eq 0 ]; then
+        echo "PASS: tests — $PASS_COUNT"
+      else
+        echo "FAIL: tests — $PASS_COUNT"
+        PASS=false
+      fi
+
+      if [ "$PASS" = "true" ]; then
+        echo "READY"
+      else
+        echo "NOT_READY"
+        exit 1
+      fi
+    timeout: 120000
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 1+2: Research the issue
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: research
+    depends_on: [preflight]
+    model: opus
+    effort: high
+    prompt: |
+      You are researching a codegraph issue/feature before planning implementation.
+
+      User request: $USER_MESSAGE
+
+      ## Instructions
+
+      1. If the input contains a GitHub issue number, fetch it:
+         ```bash
+         gh issue view <number>
+         ```
+
+      2. Use codegraph to understand the codebase impact:
+         - Query the graph for affected symbols, files, and dependencies
+         - Run `/blast-radius` on key symbols
+         - Check `/arch-check` for existing violations
+
+      3. Read the affected source files to understand current patterns.
+
+      4. If external library docs are needed, use context7 MCP to fetch them.
+
+      5. Write a research summary to `$ARTIFACTS_DIR/research.md` with:
+         - Issue context
+         - Affected files and symbols
+         - Blast radius
+         - Risks and edge cases
+         - Recommended approach
+
+      When done, output the research summary.
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 3: Create plan (with user approval)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: plan
+    depends_on: [research]
+    model: opus
+    effort: high
+    prompt: |
+      Create an implementation plan based on the research.
+
+      Research findings:
+      $research.output
+
+      ## Instructions
+
+      Use the /plan_local skill to create a plan. The plan MUST include:
+
+      1. **Tasks** — ordered, atomic, verifiable
+      2. **Files to Change** — CREATE/UPDATE with purpose
+      3. **Patterns to Mirror** — file:line references
+      4. **Acceptance Criteria** — SPECIFIC and VERIFIABLE per feature area:
+         - Each criterion states WHAT to check and HOW to verify
+         - Include codegraph queries where structural changes are expected
+         - Include expected test counts
+         - NO vague criteria like "tests pass" or "feature works"
+
+      Save the plan to `.claude/plans/` with a descriptive name.
+
+      Output the plan file path when done.
+
+  - id: plan-approval
+    depends_on: [plan]
+    approval:
+      message: |
+        Review the plan above. Approve to proceed with implementation, or reject with feedback.
+      capture_response: true
+      on_reject:
+        prompt: |
+          The user rejected the plan with this feedback: $REJECTION_REASON
+
+          Revise the plan based on the feedback. Update the plan file.
+          Output the revised plan file path.
+        max_attempts: 3
+
+  # ═══════════════════════════════════════════════════════════════
+  # Steps 4-7: Implementation cycle (implement → review → commit → critique)
+  # Loops until critique passes
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: dev-cycle
+    depends_on: [plan-approval]
+    model: opus
+    effort: high
+    idle_timeout: 600000
+    loop:
+      prompt: |
+        You are in the implementation cycle for codegraph.
+
+        Plan from previous step:
+        $plan.output
+
+        User's original request:
+        $USER_MESSAGE
+
+        ## Cycle: Implement → Review → Commit → Critique
+
+        ### Step 4: IMPLEMENT
+
+        Read the plan file. For each task not yet completed:
+        1. Read the Mirror/context files referenced in the task
+        2. Implement the change
+        3. Validate immediately:
+           ```bash
+           cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+           python -m compileall codegraph/ -q
+           .venv/bin/python -m pytest tests/ -q
+           ```
+        4. Fix any failures before moving to next task
+
+        ### Step 5: REVIEW
+
+        After all tasks are implemented:
+        1. Spawn the built-in `feature-dev:code-reviewer` agent on changed files
+           - Only report issues with >80% confidence
+        2. Run architecture check:
+           ```bash
+           .venv/bin/codegraph arch-check
+           ```
+        3. If issues found: fix them and re-run the reviewer
+        4. Repeat until reviewer finds 0 issues AND arch-check passes AND tests pass
+
+        ### Step 6: COMMIT
+
+        Once review is clean:
+        ```bash
+        git add <changed files>
+        git commit -m "$(cat <<'COMMITEOF'
+        <type>(<scope>): <description>
+
+        <body>
+
+        Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+        COMMITEOF
+        )"
+        ```
+
+        ### Step 7: CRITIQUE
+
+        Read the plan's acceptance criteria. For each criterion:
+        - Verify it's met by checking code, tests, or running verification commands
+        - Use codegraph queries for structural verification if specified
+
+        Run the full test suite one more time:
+        ```bash
+        .venv/bin/python -m pytest tests/ -q
+        ```
+
+        **If ALL criteria pass**: Signal completion with <promise>CYCLE_COMPLETE</promise>
+
+        **If ANY criteria fail**: List the gaps, then loop back to implement the fixes.
+        Do NOT signal completion until all acceptance criteria are met.
+
+      until: CYCLE_COMPLETE
+      max_iterations: 10
+      until_bash: |
+        cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+        python -m compileall codegraph/ -q 2>&1 && .venv/bin/python -m pytest tests/ -q 2>&1
+    hooks:
+      PostToolUse:
+        - matcher: "Write|Edit"
+          response:
+            systemMessage: "Run byte-compile and tests NOW to catch errors early."
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 8: Update ROADMAP.md
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: roadmap
+    depends_on: [dev-cycle]
+    context: fresh
+    prompt: |
+      Update ROADMAP.md at the repo root to reflect what was just implemented.
+
+      Implementation summary:
+      $dev-cycle.output
+
+      ## Instructions
+
+      1. Read the current ROADMAP.md
+      2. Run `git log --oneline -10` to see recent commits
+      3. Update these sections:
+         - "TL;DR — where we are" — branch state, test count, package version
+         - "Shipped since the last roadmap update" — add new commits
+         - "Repository state" — update table
+         - "What's next (ranked)" — move completed items, re-rank remaining
+         - "Known open questions" — remove resolved, add new
+      4. Update the "Last updated" header with today's date and commit range
+
+      Do NOT rewrite sections that haven't changed.
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 9: Package and publish
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: package
+    depends_on: [roadmap]
+    context: fresh
+    prompt: |
+      Bump the version, build, and publish to PyPI.
+
+      ## Instructions
+
+      1. Read current version: `grep '^version' pyproject.toml`
+      2. Bump patch: 0.1.X → 0.1.X+1
+      3. Edit pyproject.toml with the new version
+      4. Commit the version bump:
+         ```bash
+         cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+         git add pyproject.toml
+         git commit -m "chore: bump version to 0.1.X
+
+         Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+         ```
+      5. Build: `rm -f dist/* && .venv/bin/python -m build`
+      6. Upload: `.venv/bin/twine upload dist/*`
+      7. Verify: check PyPI JSON API for the new version
+
+      Output the version number and PyPI URL.
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 10: Test (unit + real-world)
+  # Loops until all tests pass
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: test-cycle
+    depends_on: [package]
+    model: opus
+    context: fresh
+    idle_timeout: 600000
+    loop:
+      prompt: |
+        Run progressive validation on the codegraph package.
+
+        Package version from previous step: $package.output
+
+        ## Test Stages
+
+        ### Stage 1: Unit tests
+        ```bash
+        cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+        .venv/bin/python -m pytest tests/ -q
+        python -m compileall codegraph/ -q
+        ```
+
+        ### Stage 2: Install test
+        ```bash
+        LATEST=$(grep '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
+        TMPVENV=$(mktemp -d)/venv
+        python3 -m venv "$TMPVENV"
+        "$TMPVENV/bin/pip" install "cognitx-codegraph[python]==$LATEST" -q
+        "$TMPVENV/bin/codegraph" --help > /dev/null && echo "Install OK" || echo "Install FAILED"
+        rm -rf "$(dirname $TMPVENV)"
+        ```
+
+        ### Stage 3: Self-index (dogfood)
+        ```bash
+        .venv/bin/codegraph index . -p codegraph -p tests --no-wipe --skip-ownership
+        .venv/bin/codegraph query "MATCH (f:File) RETURN count(f) AS files"
+        .venv/bin/codegraph query "MATCH (c:Class) RETURN count(c) AS classes"
+        ```
+
+        ### Stage 4: Real-world test (leytongo)
+        ```bash
+        LEYTONGO="$HOME/Obsidian/SecondBrain/Leyton/by-country/Spain/by-product/leytongo/leytongo-mvp"
+        if [ -d "$LEYTONGO" ]; then
+          .venv/bin/codegraph index "$LEYTONGO" -p "$LEYTONGO/leytongo-back" -p "$LEYTONGO/leytongo-front" --no-wipe --skip-ownership
+        else
+          echo "SKIP: leytongo not found"
+        fi
+        ```
+
+        ### Stage 5: Arch check
+        ```bash
+        .venv/bin/codegraph arch-check
+        ```
+
+        ## Evaluation
+
+        If ALL stages pass: <promise>TESTS_PASS</promise>
+
+        If ANY stage fails:
+        1. Diagnose the failure
+        2. Fix the code (implement the fix, run code review, commit)
+        3. Re-package if code changed (`python -m build && twine upload dist/*`)
+        4. Re-run all test stages
+
+        Do NOT signal completion until all stages pass.
+
+      until: TESTS_PASS
+      max_iterations: 10
+      until_bash: |
+        cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+        .venv/bin/python -m pytest tests/ -q 2>&1 && python -m compileall codegraph/ -q 2>&1
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 11: File issues for discoveries
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: file-issues
+    depends_on: [test-cycle]
+    context: fresh
+    model: sonnet
+    prompt: |
+      Review the implementation and testing for any enhancement ideas, bugs in
+      unrelated code, or technical debt worth tracking.
+
+      Implementation output: $dev-cycle.output
+      Test output: $test-cycle.output
+
+      ## Instructions
+
+      For each discovery that is OUT OF SCOPE for the current work:
+
+      ```bash
+      gh issue create --title "<type>: <title>" --body "$(cat <<'EOF'
+      ## Context
+      Discovered during implementation of the current feature.
+
+      ## Description
+      <what the issue is>
+
+      ## Suggested approach
+      <brief idea>
+      EOF
+      )" --label "<enhancement|bug|tech-debt>"
+      ```
+
+      If nothing was discovered, that's fine — just say "No new issues to file."
+
+      List all issues created with their numbers and titles.
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 12: Create PR to release
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-pr
+    depends_on: [file-issues]
+    context: fresh
+    prompt: |
+      Create a pull request from dev to release.
+
+      Package version: $package.output
+      Test results: $test-cycle.output
+
+      ## Instructions
+
+      1. Push dev:
+         ```bash
+         git push origin dev
+         ```
+
+      2. Get commit list:
+         ```bash
+         git log --oneline release..dev
+         ```
+
+      3. Get PyPI version:
+         ```bash
+         curl -s https://pypi.org/pypi/cognitx-codegraph/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])"
+         ```
+
+      4. Create the PR:
+         ```bash
+         gh pr create --base release --head dev --title "<type>: <description>" --body "$(cat <<'EOF'
+         ## Summary
+         - <what changed>
+
+         ## Test plan
+         - [x] Unit tests passed
+         - [x] Code review clean
+         - [x] Critique PASS
+         - [x] Self-index verified
+         - [x] Leytongo real-world test
+
+         ## Package
+         PyPI: cognitx-codegraph=={version}
+         Install: pip install cognitx-codegraph=={version}
+
+         Generated with [Claude Code](https://claude.com/claude-code)
+         EOF
+         )"
+         ```
+
+      Output the PR URL.
+
+      Workflow complete.
