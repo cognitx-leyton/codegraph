@@ -11,14 +11,13 @@
   table { border-collapse: collapse; width: 100%; margin: 20px 0; }
   th, td { border: 1px solid #30363d; padding: 8px 12px; text-align: left; }
   th { background: #161b22; color: #58a6ff; }
-  tr:nth-child(even) { background: #161b2211; }
   code { background: #161b22; padding: 2px 6px; border-radius: 4px; color: #79c0ff; }
 </style>
 </head>
 <body>
 
-<h1>Dev Pipeline Workflow</h1>
-<p>Run with: <code>archon workflow run dev-pipeline "implement issue #N"</code></p>
+<h1>Dev Pipeline Workflow (v2 — split nodes)</h1>
+<p><code>archon workflow run dev-pipeline --from hotfix --branch feat/issue-N-slug "implement issue #N"</code></p>
 
 <div class="mermaid">
 flowchart TD
@@ -28,114 +27,96 @@ flowchart TD
     PF -->|"exit 0"| R
     PF -->|"exit 1"| STOP(["WORKFLOW STOPS"])
 
-    R["1-2. RESEARCH<br/>gh issue view<br/>codegraph queries<br/>nlm CLI / context7"]
+    R["1-2. RESEARCH<br/>gh issue view<br/>codegraph queries (MANDATORY)<br/>nlm CLI / context7"]
     R --> P
 
     P["3. PLAN<br/>Read plan_local template<br/>Write plan file"]
-    P --> DC
+    P --> I
 
-    subgraph LOOP1 ["dev-cycle — loop node (max 10 iters, 10min idle timeout)"]
-        direction TB
-        I["4. IMPLEMENT<br/>Execute plan tasks<br/>pytest after each change"]
-        I --> RV
+    I["4. IMPLEMENT<br/>Execute plan tasks<br/>pytest after each change"]
+    I --> RV
 
-        RV["5. REVIEW<br/>feature-dev:code-reviewer<br/>codegraph arch-check"]
-        RV -->|"issues"| FX["FIX issues"]
-        FX --> RV
-        RV -->|"0 issues"| CM
+    RV["5. REVIEW<br/>feature-dev:code-reviewer<br/>codegraph arch-check<br/>MANDATORY — separate node"]
+    RV --> CM
 
-        CM["6. COMMIT<br/>feat/fix/...(scope): why<br/>Co-Authored-By"]
-        CM --> CR
+    CM["6. COMMIT<br/>feat/fix/...(scope): why<br/>Co-Authored-By"]
+    CM --> CR
 
-        CR["7. CRITIQUE<br/>Check acceptance criteria<br/>codegraph structural verify"]
-        CR -->|"FAIL"| I
-    end
+    CR["7. CRITIQUE<br/>output_format: JSON<br/>verdict: pass/fail + gaps"]
+    CR -->|"verdict: pass"| FG
+    CR -->|"verdict: fail"| IF
 
-    DC --> LOOP1
-    LOOP1 -->|"CYCLE_COMPLETE +<br/>until_bash: pytest=0"| RM
+    IF["7b. IMPLEMENT-FIX<br/>loop max 5 iters<br/>Fix gaps + review + commit"]
+    IF --> FG
+
+    FG["FINAL GATE<br/>bash: pytest + compileall<br/>trigger_rule: one_success"]
+    FG --> RM
 
     RM["8. ROADMAP<br/>Update ROADMAP.md"]
-    RM --> PK
+    RM --> RMV
+
+    RMV["8b. ROADMAP VERIFY<br/>loop max 3 — self-heals<br/>Commits if agent forgot"]
+    RMV --> PK
 
     PK["9. PACKAGE<br/>Bump 0.1.X+1<br/>python -m build<br/>twine upload"]
     PK --> TC
 
-    subgraph LOOP2 ["test-cycle — loop node (max 10 iters, 10min idle timeout)"]
-        direction TB
-        T1["Unit tests + compileall"]
-        T1 --> T2["Install test (fresh venv)"]
-        T2 --> T3["Self-index (dogfood)"]
-        T3 --> T4["Leytongo (real-world TS)"]
-        T4 --> T5["Arch check"]
-        T5 -->|"fail"| TF["Fix + re-package"]
-        TF --> T1
-    end
-
-    TC --> LOOP2
-    LOOP2 -->|"TESTS_PASS +<br/>until_bash: pytest=0"| FI
+    TC["10. TEST CYCLE<br/>loop max 10 iters<br/>unit + install + self-index<br/>+ leytongo + arch-check"]
+    TC --> FI
 
     FI["11. FILE ISSUES<br/>gh issue create<br/>for discoveries"]
     FI --> PR
 
-    PR["12. CREATE PR<br/>feature to hotfix<br/>+ PyPI version link"]
+    PR["12. CREATE PR<br/>feature to hotfix<br/>Closes #N + issue comment"]
     PR --> DONE(["DONE"])
 
     style PF fill:#1a472a,color:#fff,stroke:#2ea043
     style STOP fill:#6e1212,color:#fff,stroke:#da3633
     style DONE fill:#1a472a,color:#fff,stroke:#2ea043
-    style LOOP1 fill:#0d1b2a22,stroke:#1f6feb,stroke-width:2px,color:#c9d1d9
-    style LOOP2 fill:#0d1b2a22,stroke:#1f6feb,stroke-width:2px,color:#c9d1d9
-    style CR fill:#3d2200,color:#fff,stroke:#d29922
-    style T5 fill:#3d2200,color:#fff,stroke:#d29922
-    style I fill:#1a1a3d,color:#fff,stroke:#8957e5
     style RV fill:#1a1a3d,color:#fff,stroke:#8957e5
+    style CR fill:#3d2200,color:#fff,stroke:#d29922
+    style IF fill:#3d2200,color:#fff,stroke:#d29922
+    style FG fill:#1a472a,color:#fff,stroke:#2ea043
+    style RMV fill:#3d2200,color:#fff,stroke:#d29922
+    style I fill:#1a1a3d,color:#fff,stroke:#8957e5
     style CM fill:#1a1a3d,color:#fff,stroke:#8957e5
 </div>
 
-<h2>Safety Mechanisms</h2>
+<h2>Key Improvements (v2)</h2>
 
-<div class="mermaid">
-flowchart LR
-    subgraph "Each loop exits when ANY of these fire"
-        A["Agent signals<br/>promise COMPLETE"]
-        B["until_bash<br/>pytest exit 0"]
-        C["max_iterations: 10"]
-        D["idle_timeout: 10min"]
-    end
-    A & B --> AND{"BOTH<br/>required"}
-    AND --> EXIT["Loop exits"]
-    C --> EXIT
-    D --> EXIT
-
-    style AND fill:#3d2200,color:#fff,stroke:#d29922
-    style EXIT fill:#1a472a,color:#fff,stroke:#2ea043
-</div>
+<table>
+<tr><th>Issue</th><th>v1 (broken)</th><th>v2 (fixed)</th></tr>
+<tr><td>Code reviewer</td><td>Instruction inside loop prompt — agent skipped it</td><td>Separate <code>review</code> node — cannot be skipped</td></tr>
+<tr><td>Critique</td><td>Buried in loop, no structured output</td><td>Separate node with <code>output_format</code> JSON — verdict drives routing</td></tr>
+<tr><td>ROADMAP commit</td><td>Agent edited but didn't commit</td><td><code>roadmap-verify</code> loop self-heals — commits if forgotten</td></tr>
+<tr><td>Package paths</td><td>Hardcoded to main checkout</td><td><code>$(git rev-parse --show-toplevel)</code> — works in worktrees</td></tr>
+<tr><td>Critique fail</td><td>Loop re-iterated entire cycle</td><td>Conditional <code>implement-fix</code> node with specific gaps</td></tr>
+</table>
 
 <h2>Node Details</h2>
 
 <table>
-<tr><th>Step</th><th>Node ID</th><th>Type</th><th>Model</th><th>Key Tools</th></tr>
+<tr><th>Step</th><th>Node ID</th><th>Type</th><th>Model</th><th>Key Feature</th></tr>
 <tr><td>0</td><td><code>preflight</code></td><td>bash</td><td>-</td><td>docker, pytest, codegraph</td></tr>
-<tr><td>1-2</td><td><code>research</code></td><td>prompt</td><td>opus</td><td>gh, codegraph CLI, nlm CLI, context7</td></tr>
-<tr><td>3</td><td><code>plan</code></td><td>prompt</td><td>opus</td><td>Read, Write (plan file)</td></tr>
-<tr><td>4-7</td><td><code>dev-cycle</code></td><td>loop</td><td>workflow default</td><td>All tools, code-reviewer agent</td></tr>
-<tr><td>8</td><td><code>roadmap</code></td><td>prompt</td><td>workflow default</td><td>Read, Edit</td></tr>
-<tr><td>9</td><td><code>package</code></td><td>prompt</td><td>workflow default</td><td>build, twine, curl</td></tr>
-<tr><td>10</td><td><code>test-cycle</code></td><td>loop</td><td>workflow default</td><td>pytest, codegraph, pip</td></tr>
-<tr><td>11</td><td><code>file-issues</code></td><td>prompt</td><td>workflow default</td><td>gh issue create</td></tr>
-<tr><td>12</td><td><code>create-pr</code></td><td>prompt</td><td>workflow default</td><td>gh pr create</td></tr>
+<tr><td>1-2</td><td><code>research</code></td><td>prompt</td><td>opus</td><td>MANDATORY codegraph queries</td></tr>
+<tr><td>3</td><td><code>plan</code></td><td>prompt</td><td>opus</td><td>Writes plan to repo, not ~/</td></tr>
+<tr><td>4</td><td><code>implement</code></td><td>prompt</td><td>opus</td><td>PostToolUse hooks for validation</td></tr>
+<tr><td>5</td><td><code>review</code></td><td>prompt</td><td>opus</td><td>MANDATORY code-reviewer + arch-check</td></tr>
+<tr><td>6</td><td><code>commit</code></td><td>prompt</td><td>sonnet</td><td>Fresh context, conventional format</td></tr>
+<tr><td>7</td><td><code>critique</code></td><td>prompt</td><td>opus</td><td>output_format: {verdict, gaps}</td></tr>
+<tr><td>7b</td><td><code>implement-fix</code></td><td>loop</td><td>inherit</td><td>Conditional on verdict==fail, max 5</td></tr>
+<tr><td>-</td><td><code>final-gate</code></td><td>bash</td><td>-</td><td>Independent test verification</td></tr>
+<tr><td>8</td><td><code>roadmap</code></td><td>prompt</td><td>inherit</td><td>MANDATORY edit + commit</td></tr>
+<tr><td>8b</td><td><code>roadmap-verify</code></td><td>loop</td><td>inherit</td><td>Self-heals if commit missing</td></tr>
+<tr><td>9</td><td><code>package</code></td><td>prompt</td><td>inherit</td><td>Dynamic paths, commit on branch</td></tr>
+<tr><td>10</td><td><code>test-cycle</code></td><td>loop</td><td>opus</td><td>5-stage validation, max 10 iters</td></tr>
+<tr><td>11</td><td><code>file-issues</code></td><td>prompt</td><td>sonnet</td><td>gh issue create for discoveries</td></tr>
+<tr><td>12</td><td><code>create-pr</code></td><td>prompt</td><td>inherit</td><td>Closes #N, issue comment, PR to hotfix</td></tr>
 </table>
-
-<h2>How to Run</h2>
-<p><code>archon workflow run dev-pipeline "implement issue #12 — expose queries.md as @mcp.prompt() templates"</code></p>
 
 <script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-mermaid.initialize({
-  startOnLoad: true,
-  theme: 'dark',
-  flowchart: { curve: 'basis', padding: 15 }
-});
+mermaid.initialize({ startOnLoad: true, theme: 'dark', flowchart: { curve: 'basis', padding: 15 } });
 </script>
 </body>
 </html>

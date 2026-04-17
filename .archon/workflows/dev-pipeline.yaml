@@ -2,7 +2,7 @@ name: dev-pipeline
 description: |
   Use when: implementing a feature, fixing a bug, or working on a GitHub issue for codegraph.
   Triggers: "start workflow", "implement issue", "dev pipeline", "work on issue"
-  Does: preflight -> research -> plan -> implement/review/commit/critique loop -> roadmap -> package -> test -> file-issues -> create-pr
+  Does: preflight -> research -> plan -> implement -> review -> commit -> critique -> roadmap -> package -> test -> file-issues -> create-pr
   NOT for: quick one-off fixes, documentation-only changes, manual exploration
 
   Run with:
@@ -28,7 +28,8 @@ nodes:
   - id: preflight
     bash: |
       set -e
-      cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
 
       PASS=true
       echo "=== Pre-flight Checks ==="
@@ -101,7 +102,9 @@ nodes:
     effort: high
     prompt: |
       You are researching a codegraph issue/feature before planning implementation.
-      Working directory: /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+
+      Find the repo root with: REPO=$(git rev-parse --show-toplevel)
+      The codegraph package is at: $REPO/codegraph
 
       User request: $USER_MESSAGE
 
@@ -114,12 +117,14 @@ nodes:
       ```
 
       ### 2. Query the codegraph (MANDATORY — do NOT skip this)
-      The codegraph CLI is at `.venv/bin/codegraph`. You MUST run at least 3 codegraph
-      queries below before proceeding. Do NOT substitute with Read/Grep — the graph
+      The codegraph CLI is at `$REPO/codegraph/.venv/bin/codegraph`. You MUST run at least 3
+      codegraph queries below before proceeding. Do NOT substitute with Read/Grep — the graph
       has cross-file relationships that file reading cannot reveal.
 
       Find affected symbols:
       ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
       .venv/bin/codegraph query "MATCH (c:Class) WHERE c.name CONTAINS '<keyword>' RETURN c.name, c.file"
       .venv/bin/codegraph query "MATCH (f:Function) WHERE f.name CONTAINS '<keyword>' RETURN f.name, f.file"
       ```
@@ -149,10 +154,10 @@ nodes:
 
       **NotebookLM CLI** (for deep research with sources):
       ```bash
-      nlm notebook list                              # list existing notebooks
-      nlm notebook query <notebook-id> "<question>"  # query a notebook
-      nlm source add <notebook-id> --url "<doc-url>" # add a source to research
-      nlm research start "<topic>"                   # start a new research session
+      nlm notebook list
+      nlm notebook query <notebook-id> "<question>"
+      nlm source add <notebook-id> --url "<doc-url>"
+      nlm research start "<topic>"
       ```
 
       **Context7 MCP** (for library documentation):
@@ -181,14 +186,14 @@ nodes:
       Create an implementation plan based on the research. Do NOT enter plan mode.
       Do NOT use /plan or any interactive planning mode. Just write a plan file directly.
 
-      Working directory: /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+      Find the repo with: REPO=$(git rev-parse --show-toplevel)
 
       Research findings:
       $research.output
 
       ## Instructions
 
-      Read the file `.claude/commands/plan_local.md` for the full plan template and follow
+      Read the file `$REPO/.claude/commands/plan_local.md` for the full plan template and follow
       its structure exactly. Write the plan directly to a file — do NOT invoke any skills
       or slash commands.
 
@@ -205,94 +210,261 @@ nodes:
          - Include expected test counts
          - NO vague criteria like "tests pass" or "feature works"
 
-      Save the plan to `codegraph/.claude/plans/` with a descriptive kebab-case name.
+      Save the plan to `$REPO/.claude/plans/` with a descriptive kebab-case name.
       Use the FULL path from the working directory, not ~/.claude/plans/.
       The plan MUST be inside the repo, not in your home directory.
 
       Output the plan file path when done.
 
   # ═══════════════════════════════════════════════════════════════
-  # Steps 4-7: Implementation cycle (implement → review → commit → critique)
-  # Loops until critique passes
+  # Step 4: Implement
   # ═══════════════════════════════════════════════════════════════
 
-  - id: dev-cycle
+  - id: implement
     depends_on: [plan]
+    model: opus
+    effort: high
+    idle_timeout: 600000
+    prompt: |
+      Read the plan and implement ALL tasks.
+
+      Plan: $plan.output
+      User request: $USER_MESSAGE
+
+      ## Instructions
+
+      ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
+      ```
+
+      For each task in the plan, in order:
+      1. Read the Mirror/context files referenced in the task
+      2. Implement the change
+      3. Validate immediately after EVERY file change:
+         ```bash
+         python -m compileall codegraph/ -q
+         .venv/bin/python -m pytest tests/ -q
+         ```
+      4. Fix any failures before moving to the next task
+
+      After ALL tasks are done, output a summary of what was implemented.
+    hooks:
+      PostToolUse:
+        - matcher: "Write|Edit"
+          response:
+            systemMessage: "Run byte-compile and tests NOW to catch errors early."
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 5: Review (MANDATORY — separate node guarantees it runs)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: review
+    depends_on: [implement]
+    model: opus
+    effort: high
+    idle_timeout: 300000
+    prompt: |
+      You MUST run a code review on all changed files. This is a mandatory step.
+
+      Implementation summary: $implement.output
+
+      ## Instructions
+
+      ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
+      ```
+
+      ### 1. Get the list of changed files
+      ```bash
+      git diff --name-only HEAD
+      git diff --cached --name-only
+      ```
+
+      ### 2. Spawn the code reviewer (MANDATORY)
+      Use the built-in `feature-dev:code-reviewer` agent to review all changed files.
+      Focus on: logic bugs, edge cases, security, inconsistencies with codebase patterns.
+      Only report issues with >80% confidence.
+
+      ### 3. Run architecture check
+      ```bash
+      .venv/bin/codegraph arch-check
+      ```
+
+      ### 4. Run tests
+      ```bash
+      .venv/bin/python -m pytest tests/ -q
+      ```
+
+      ### 5. Fix and re-review
+      If the code reviewer found issues:
+      - Fix each issue
+      - Re-run the code reviewer on the fixed files
+      - Repeat until 0 issues remain
+
+      If arch-check found violations:
+      - Fix them
+      - Re-run arch-check
+
+      ### 6. Exit condition
+      Only finish when ALL of these are true:
+      - Code reviewer reports 0 high-confidence issues
+      - arch-check passes (exit 0)
+      - All tests pass
+
+      Output: list of files reviewed, issues found, issues fixed, final status.
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 6: Commit
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: commit
+    depends_on: [review]
+    model: sonnet
+    context: fresh
+    prompt: |
+      Commit all changes with a conventional commit message.
+
+      Review summary: $review.output
+
+      ## Instructions
+
+      ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
+      ```
+
+      1. Stage the changed files (NOT .claude/ local files, NOT .env):
+         ```bash
+         git add <specific changed files>
+         ```
+
+      2. Commit with conventional format and Co-Authored-By:
+         ```bash
+         git commit -m "$(cat <<'EOF'
+         <type>(<scope>): <concise description of WHY>
+
+         <Detailed body>
+
+         Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+         EOF
+         )"
+         ```
+
+      3. Verify:
+         ```bash
+         git log --oneline -1
+         git branch --show-current  # must be feature branch, NOT main/hotfix/dev
+         ```
+
+      Output the commit SHA and message.
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 7: Critique (structured output for routing)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: critique
+    depends_on: [commit]
+    model: opus
+    effort: high
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        verdict:
+          type: string
+          enum: ["pass", "fail"]
+        criteria_results:
+          type: array
+          items:
+            type: object
+            properties:
+              criterion:
+                type: string
+              met:
+                type: boolean
+              evidence:
+                type: string
+            required: [criterion, met, evidence]
+        gaps:
+          type: array
+          items:
+            type: string
+      required: [verdict, criteria_results, gaps]
+    prompt: |
+      Verify the plan's acceptance criteria are ALL met.
+
+      Plan: $plan.output
+      Commit: $commit.output
+
+      ## Instructions
+
+      ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
+      ```
+
+      1. Read the plan file and extract every acceptance criterion
+      2. For each criterion:
+         - Check if it's met by examining code, tests, or running verification commands
+         - Use codegraph queries for structural verification where specified
+         - Record evidence (test output, query results, file contents)
+      3. Run the full test suite:
+         ```bash
+         .venv/bin/python -m pytest tests/ -q
+         ```
+      4. Return JSON:
+         - verdict: "pass" if ALL criteria met, "fail" if ANY are not
+         - criteria_results: array of {criterion, met, evidence} for each
+         - gaps: array of strings describing what's missing (empty if pass)
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 7b: Fix gaps if critique failed (conditional)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement-fix
+    depends_on: [critique]
+    when: "$critique.output.verdict == 'fail'"
     model: opus
     effort: high
     idle_timeout: 600000
     loop:
       prompt: |
-        You are in the implementation cycle for codegraph.
+        The critique found gaps in the implementation. Fix them.
 
-        Plan from previous step:
-        $plan.output
+        Gaps to address:
+        $critique.output.gaps
 
-        User's original request:
-        $USER_MESSAGE
+        Full critique results:
+        $critique.output.criteria_results
 
-        ## Cycle: Implement → Review → Commit → Critique
+        Plan: $plan.output
+        User request: $USER_MESSAGE
 
-        ### Step 4: IMPLEMENT
+        ## Instructions
 
-        Read the plan file. For each task not yet completed:
-        1. Read the Mirror/context files referenced in the task
-        2. Implement the change
-        3. Validate immediately:
-           ```bash
-           cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
-           python -m compileall codegraph/ -q
-           .venv/bin/python -m pytest tests/ -q
-           ```
-        4. Fix any failures before moving to next task
-
-        ### Step 5: REVIEW
-
-        After all tasks are implemented:
-        1. Spawn the built-in `feature-dev:code-reviewer` agent on changed files
-           - Only report issues with >80% confidence
-        2. Run architecture check:
-           ```bash
-           .venv/bin/codegraph arch-check
-           ```
-        3. If issues found: fix them and re-run the reviewer
-        4. Repeat until reviewer finds 0 issues AND arch-check passes AND tests pass
-
-        ### Step 6: COMMIT
-
-        Once review is clean:
         ```bash
-        git add <changed files>
-        git commit -m "$(cat <<'COMMITEOF'
-        <type>(<scope>): <description>
-
-        <body>
-
-        Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
-        COMMITEOF
-        )"
+        REPO=$(git rev-parse --show-toplevel)
+        cd "$REPO/codegraph"
         ```
 
-        ### Step 7: CRITIQUE
+        For each gap:
+        1. Implement the fix
+        2. Run tests: `.venv/bin/python -m pytest tests/ -q`
+        3. Spawn the `feature-dev:code-reviewer` agent on changed files
+        4. Run arch-check: `.venv/bin/codegraph arch-check`
+        5. Commit the fix with conventional format + Co-Authored-By
 
-        Read the plan's acceptance criteria. For each criterion:
-        - Verify it's met by checking code, tests, or running verification commands
-        - Use codegraph queries for structural verification if specified
+        Re-verify ALL acceptance criteria from the plan.
+        If ALL criteria now pass: <promise>FIXES_COMPLETE</promise>
+        If gaps remain: list them and continue fixing.
 
-        Run the full test suite one more time:
-        ```bash
-        .venv/bin/python -m pytest tests/ -q
-        ```
-
-        **If ALL criteria pass**: Signal completion with <promise>CYCLE_COMPLETE</promise>
-
-        **If ANY criteria fail**: List the gaps, then loop back to implement the fixes.
-        Do NOT signal completion until all acceptance criteria are met.
-
-      until: CYCLE_COMPLETE
-      max_iterations: 10
+      until: FIXES_COMPLETE
+      max_iterations: 5
       until_bash: |
-        cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+        REPO=$(git rev-parse --show-toplevel)
+        cd "$REPO/codegraph"
         python -m compileall codegraph/ -q 2>&1 && .venv/bin/python -m pytest tests/ -q 2>&1
     hooks:
       PostToolUse:
@@ -301,25 +473,47 @@ nodes:
             systemMessage: "Run byte-compile and tests NOW to catch errors early."
 
   # ═══════════════════════════════════════════════════════════════
+  # Final gate — independent verification (fan-in from both paths)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: final-gate
+    depends_on: [critique, implement-fix]
+    trigger_rule: one_success
+    bash: |
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
+      echo "=== Final Gate ==="
+      python -m compileall codegraph/ -q 2>&1 && echo "PASS: byte-compile" || exit 1
+      .venv/bin/python -m pytest tests/ -q 2>&1 && echo "PASS: tests" || exit 1
+      echo "FINAL_GATE_PASS"
+    timeout: 120000
+
+  # ═══════════════════════════════════════════════════════════════
   # Step 8: Update ROADMAP.md
   # ═══════════════════════════════════════════════════════════════
 
   - id: roadmap
-    depends_on: [dev-cycle]
+    depends_on: [final-gate]
     context: fresh
     prompt: |
       Update ROADMAP.md at the repo root to reflect what was just implemented.
+      This step is MANDATORY — you MUST edit and commit the ROADMAP.md file.
 
-      Implementation summary:
-      $dev-cycle.output
+      Implementation summary: $implement.output
+      Review summary: $review.output
 
       ## Instructions
+
+      ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO"
+      ```
 
       1. Read the current ROADMAP.md
       2. Run `git log --oneline -10` to see recent commits
       3. Update these sections:
          - "TL;DR — where we are" — branch state, test count, package version
-         - "Shipped since the last roadmap update" — add new commits
+         - "Shipped since the last roadmap update" — add new commits grouped by theme
          - "Repository state" — update table
          - "What's next (ranked)" — move completed items, re-rank remaining
          - "Known open questions" — remove resolved, add new
@@ -327,38 +521,121 @@ nodes:
 
       Do NOT rewrite sections that haven't changed.
 
+      5. COMMIT the ROADMAP update (MANDATORY):
+         ```bash
+         git add ROADMAP.md
+         git commit -m "$(cat <<'EOF'
+         docs(roadmap): update session handoff
+
+         Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+         EOF
+         )"
+         ```
+
+      6. Verify:
+         ```bash
+         git log --oneline -1
+         ```
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 8b: Verify ROADMAP was committed (self-healing)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: roadmap-verify
+    depends_on: [roadmap]
+    loop:
+      prompt: |
+        Verify that ROADMAP.md was committed. If it was NOT committed, commit it now.
+
+        ```bash
+        REPO=$(git rev-parse --show-toplevel)
+        cd "$REPO"
+        ```
+
+        Check if ROADMAP.md appears in the last 2 commits:
+        ```bash
+        git log --oneline -2 -- ROADMAP.md
+        ```
+
+        If no recent commit touches ROADMAP.md:
+        ```bash
+        git add ROADMAP.md
+        git commit -m "docs(roadmap): update session handoff
+
+        Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+        ```
+
+        Once verified or committed: <promise>ROADMAP_COMMITTED</promise>
+      until: ROADMAP_COMMITTED
+      max_iterations: 3
+      until_bash: |
+        REPO=$(git rev-parse --show-toplevel)
+        cd "$REPO"
+        git log --oneline -3 --diff-filter=M -- ROADMAP.md | grep -qi roadmap
+
   # ═══════════════════════════════════════════════════════════════
   # Step 9: Package and publish
   # ═══════════════════════════════════════════════════════════════
 
   - id: package
-    depends_on: [roadmap]
+    depends_on: [roadmap-verify]
     context: fresh
     prompt: |
       Bump the version, build, and publish to PyPI.
 
       ## Instructions
 
-      1. Read current version: `grep '^version' pyproject.toml`
-      2. Bump patch: 0.1.X → 0.1.X+1
-      3. Edit pyproject.toml with the new version
-      4. Commit the version bump:
-         ```bash
-         cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
-         git add pyproject.toml
-         git commit -m "chore: bump version to 0.1.X
+      ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
+      ```
 
-         Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+      1. Read current version:
+         ```bash
+         grep '^version' pyproject.toml
          ```
-      5. Build: `rm -f dist/* && .venv/bin/python -m build`
-      6. Upload: `.venv/bin/twine upload dist/*`
-      7. Verify: check PyPI JSON API for the new version
+
+      2. Bump patch: 0.1.X → 0.1.X+1. Edit pyproject.toml with the new version.
+
+      3. COMMIT the version bump (MANDATORY — must be on the feature branch):
+         ```bash
+         git add pyproject.toml
+         git commit -m "$(cat <<'EOF'
+         chore: bump version to 0.1.X
+
+         Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+         EOF
+         )"
+         ```
+
+      4. Verify the commit is on the feature branch:
+         ```bash
+         git log --oneline -1
+         git branch --show-current  # must NOT be main/hotfix/dev
+         ```
+
+      5. Build:
+         ```bash
+         rm -f dist/*
+         .venv/bin/python -m build
+         ls dist/
+         ```
+
+      6. Upload:
+         ```bash
+         .venv/bin/twine upload dist/*
+         ```
+
+      7. Verify on PyPI:
+         ```bash
+         sleep 5
+         curl -s https://pypi.org/pypi/cognitx-codegraph/json | python3 -c "import sys,json; print('Published:', json.load(sys.stdin)['info']['version'])"
+         ```
 
       Output the version number and PyPI URL.
 
   # ═══════════════════════════════════════════════════════════════
   # Step 10: Test (unit + real-world)
-  # Loops until all tests pass
   # ═══════════════════════════════════════════════════════════════
 
   - id: test-cycle
@@ -374,9 +651,13 @@ nodes:
 
         ## Test Stages
 
+        ```bash
+        REPO=$(git rev-parse --show-toplevel)
+        cd "$REPO/codegraph"
+        ```
+
         ### Stage 1: Unit tests
         ```bash
-        cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
         .venv/bin/python -m pytest tests/ -q
         python -m compileall codegraph/ -q
         ```
@@ -419,8 +700,8 @@ nodes:
 
         If ANY stage fails:
         1. Diagnose the failure
-        2. Fix the code (implement the fix, run code review, commit)
-        3. Re-package if code changed (`python -m build && twine upload dist/*`)
+        2. Fix the code, run code review, commit
+        3. Re-package if code changed
         4. Re-run all test stages
 
         Do NOT signal completion until all stages pass.
@@ -428,7 +709,8 @@ nodes:
       until: TESTS_PASS
       max_iterations: 10
       until_bash: |
-        cd /home/edouard-gouilliard/Obsidian/SecondBrain/Personal/projects/graphrag-code/codegraph
+        REPO=$(git rev-parse --show-toplevel)
+        cd "$REPO/codegraph"
         .venv/bin/python -m pytest tests/ -q 2>&1 && python -m compileall codegraph/ -q 2>&1
 
   # ═══════════════════════════════════════════════════════════════
@@ -443,7 +725,8 @@ nodes:
       Review the implementation and testing for any enhancement ideas, bugs in
       unrelated code, or technical debt worth tracking.
 
-      Implementation output: $dev-cycle.output
+      Implementation output: $implement.output
+      Review output: $review.output
       Test output: $test-cycle.output
 
       ## Instructions
@@ -500,13 +783,12 @@ nodes:
          curl -s https://pypi.org/pypi/cognitx-codegraph/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])"
          ```
 
-      4. If the input mentioned an issue number, add a comment to the issue
-         explaining what was implemented:
+      4. MANDATORY — if the user's original request mentioned an issue number,
+         you MUST comment on the issue. Extract the issue number from: $USER_MESSAGE
          ```bash
          gh issue comment <N> --body "$(cat <<'EOF'
          ## Implementation Complete
 
-         **PR:** <PR will be linked below>
          **Package:** cognitx-codegraph=={version}
 
          ### What was done
@@ -522,10 +804,12 @@ nodes:
          EOF
          )"
          ```
+         Verify:
+         ```bash
+         gh issue view <N> --json comments --jq '.comments | length'
+         ```
 
-      5. Create the PR. If an issue number was mentioned, include `Closes #N`
-         in the PR body — GitHub will auto-close the issue when the PR is merged.
-         Do NOT manually close the issue — let GitHub handle it via the PR merge.
+      5. Create the PR with `Closes #N` in the body:
          ```bash
          BRANCH=$(git branch --show-current)
          gh pr create --base hotfix --head "$BRANCH" --title "<type>: <description>" --body "$(cat <<'EOF'
