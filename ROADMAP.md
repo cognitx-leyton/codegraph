@@ -2,17 +2,17 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `1d538fa` → `af36698` (added `exit 1` to install-retry loop on final failure — issue #127; PR #128 merged to main; version bumped to 0.1.27).
+> **Last updated:** 2026-04-18 after commits `ffd2009` → `5b6af3c` (replaced `importlib.metadata` version assertion with `pip show` to eliminate editable-install leakage — issue #126; PR #129 merged to main; version bumped to 0.1.28).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-127`. Added `exit 1` to the install-retry loop in `.claude/commands/test.md` on final failure (issue #127, shipped as `af36698`): the `else` block now emits a non-zero exit code after "Install FAILED" so CI/pipeline contexts detect the failure; a clarifying note documents the dual-signal design (exit code for CI, echo for slash-command context). PR #128 merged to main; version bumped to 0.1.27.
+- **Branch:** `archon/task-fix-issue-126`. Replaced `importlib.metadata.version()` with `pip show` for the version assertion in `.claude/commands/test.md` Stage 2 install test (issue #126, shipped as `5b6af3c`): `importlib.metadata` could see the local editable install via `.egg-info` or `.pth` finder inheritance, causing false-positive version checks even without a successful PyPI install. `pip show` only inspects the target venv's own `site-packages`, immune to both leakage vectors. PR #129 merged to main; version bumped to 0.1.28.
 - **Tests:** 448 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.27 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.28 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `1d538fa`)
+## Shipped since the last roadmap update (commit `ffd2009`)
 
 ```
+5b6af3c fix(test): use pip show instead of importlib to verify installed version
+5f18867 Merge pull request #129 from cognitx-leyton/archon/task-fix-issue-127
+42fa4f3 chore: bump version to 0.1.28
+ffd2009 docs(roadmap): update session handoff
 af36698 fix(test): add exit 1 to install-retry loop on final failure
 639b279 Merge pull request #128 from cognitx-leyton/archon/task-fix-issue-124
 000fd94 chore: bump version to 0.1.27
@@ -126,7 +130,13 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Twenty-one sessions' worth of work grouped by theme:
+Twenty-two sessions' worth of work grouped by theme:
+
+### Install-test editable-install leakage — `pip show` instead of `importlib.metadata` (issue #126)
+
+- `5b6af3c fix(test)` — `.claude/commands/test.md` Stage 2 version assertion was using `importlib.metadata.version("cognitx-codegraph")` inside the fresh temp venv. Because Python's import machinery can see the repo's editable install via `.egg-info` or `.pth` entries on `sys.path`, this returned the editable version rather than the PyPI-installed version, producing a false-positive assertion even when the target venv had no real install. Replaced with `"$TMPVENV/bin/pip" show cognitx-codegraph | awk '/^Version:/{print $2}'` (plus a `NONE` fallback when `pip show` returns nothing). `pip show` is scoped to the venv's own `site-packages` and is immune to both leakage vectors. `importlib` removed from the test command entirely. 448 tests unchanged.
+
+- `5f18867 merge` + `42fa4f3 chore` — PR #129 (issue #126) merged to `main`; version bumped to v0.1.28.
 
 ### Install-retry loop `exit 1` on final failure (issue #127)
 
