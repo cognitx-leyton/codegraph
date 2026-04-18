@@ -2,17 +2,17 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `2efe9b7` → `59c916a` (version bumped to 0.1.31; PR #134 merged (issue #131); install-test Stage 2 improved: exponential backoff + scope-filter skip guard).
+> **Last updated:** 2026-04-18 after commits `5299144` → `623dc8c` (PR #135 merged (issue #133 — install-test exponential backoff + scope-filter skip guard); codebase stats in CLAUDE.md and graph.md updated to reflect current graph state: ~20 files, 56 classes, 134 module functions, ~180 methods, ~17 test files).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-133`. Improved `.claude/commands/test.md` Stage 2 (install test): exponential backoff (15s → 30s across two retries, down from fixed 30s × 3) and a scope-filter skip guard so `/test unit` or `/test leytongo` skips the slow PyPI install stage. PR #134 merged to main (issue #131 — PR template); version bumped to 0.1.31.
+- **Branch:** `archon/task-fix-issue-123`. Updated stale codebase stats in `CLAUDE.md`, `.claude/commands/graph.md`, and the template copy (`codegraph/codegraph/templates/claude/commands/graph.md`) to reflect the current graph state: ~20 files, 56 classes, 134 module functions, ~180 methods, ~17 test files (was: ~18 files, 41 classes, 82 module functions, ~150 methods; handful of test files). PR #135 merged to main (issue #133 — install-test exponential backoff + scope-filter skip guard); version at 0.1.32.
 - **Tests:** 448 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.30 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `d4a50c3`)
+## Shipped since the last roadmap update (commit `a797178`)
 
 ```
+623dc8c docs(stats): update codebase stats to reflect current graph state
+5299144 Merge pull request #135 from cognitx-leyton/archon/task-fix-issue-133
+edd3ae2 chore: bump version to 0.1.32
+a797178 docs(roadmap): update session handoff
 59c916a docs(test): fix install-test retry documentation and add scope filter
 2efe9b7 Merge pull request #134 from cognitx-leyton/archon/task-fix-issue-131
 ab2a0a1 chore: bump version to 0.1.31
@@ -141,7 +145,13 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Twenty-six sessions' worth of work grouped by theme:
+Twenty-seven sessions' worth of work grouped by theme:
+
+### Codebase stats update — CLAUDE.md and graph.md (issue #123, PR #135 merged as #135)
+
+- `623dc8c docs(stats)` — Three `.md` files updated to reflect actual graph state (6 insertions, 3 deletions; zero source code). `CLAUDE.md:61`, `.claude/commands/graph.md:20`, and `codegraph/codegraph/templates/claude/commands/graph.md:20` all had stale stats copied from early development. Updated from `~18 files, 41 classes, 82 module functions, ~150 methods` → `~20 files, 56 classes, 134 module functions, ~180 methods`; `handful of files` → `~17 files` for the test suite; an HTML comment hint added to remind future editors to run `/graph-refresh` and update these counts after significant structural changes. Template and live `graph.md` stat lines kept byte-identical. 448 tests unchanged; byte-compile clean.
+
+- `5299144 merge` + `edd3ae2 chore` — PR #135 (branch `archon/task-fix-issue-133`, install-test exponential backoff + scope-filter skip guard, issue #133) merged to `main`; version bumped to v0.1.32.
 
 ### Install-test exponential backoff + scope skip guard (issue #133, PR #134 merged as #135)
 
@@ -349,10 +359,10 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-131` |
+| Current branch | `archon/task-fix-issue-123` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`61de3b1` — `.github/pull_request_template.md`, pending PR) |
-| Open PR | None. PR #132 (issue #124 housekeeping) merged to main. |
+| Unpushed commits | 1 (`623dc8c` — codebase stats update in CLAUDE.md + graph.md, pending PR) |
+| Open PR | None. PR #135 (issue #133 — install-test exponential backoff) merged to main. |
 | Working tree | Clean |
 | Test count | 448 passing + 1 deselected |
 | Test runtime | ~16 s |
