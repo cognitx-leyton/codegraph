@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `5299144` → `623dc8c` (PR #135 merged (issue #133 — install-test exponential backoff + scope-filter skip guard); codebase stats in CLAUDE.md and graph.md updated to reflect current graph state: ~20 files, 56 classes, 134 module functions, ~180 methods, ~17 test files).
+> **Last updated:** 2026-04-18 after commits `e185737` → `de21f68` (PR #138 merged (issue #123 — codebase stats update); `codegraph stats` CLI subcommand shipped (issue #137) — live graph counts with `--json`, `--scope`, `--update` to rewrite stat placeholders in markdown files; 459 tests passing, v0.1.33).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-123`. Updated stale codebase stats in `CLAUDE.md`, `.claude/commands/graph.md`, and the template copy (`codegraph/codegraph/templates/claude/commands/graph.md`) to reflect the current graph state: ~20 files, 56 classes, 134 module functions, ~180 methods, ~17 test files (was: ~18 files, 41 classes, 82 module functions, ~150 methods; handful of test files). PR #135 merged to main (issue #133 — install-test exponential backoff + scope-filter skip guard); version at 0.1.32.
-- **Tests:** 448 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-137`. `codegraph stats` subcommand shipped (issue #137): live Neo4j counts by node label and edge type with `--json`, `--scope/-s`, `--no-scope`, `--update` (rewrites `<!-- codegraph:stats-begin/end -->` delimiters in markdown files), `--file/-f`, `--repo` options. Auto-scopes from `codegraph.toml` / `pyproject.toml` like `arch-check`. Placeholder delimiters inserted in `CLAUDE.md`, `.claude/commands/graph.md`, and `codegraph/codegraph/templates/claude/commands/graph.md`. PR #138 merged to main (issue #123 — codebase stats update); version at v0.1.33.
+- **Tests:** 459 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `a797178`)
+## Shipped since the last roadmap update (commit `e185737`)
 
 ```
+de21f68 feat(cli): add codegraph stats subcommand with scope filtering and --update flag
+de41ee2 Merge pull request #138 from cognitx-leyton/archon/task-fix-issue-123
+737f89e chore: bump version to 0.1.33
+e185737 docs(roadmap): update session handoff
 623dc8c docs(stats): update codebase stats to reflect current graph state
 5299144 Merge pull request #135 from cognitx-leyton/archon/task-fix-issue-133
 edd3ae2 chore: bump version to 0.1.32
@@ -145,9 +149,15 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Twenty-seven sessions' worth of work grouped by theme:
+Twenty-eight sessions' worth of work grouped by theme:
 
-### Codebase stats update — CLAUDE.md and graph.md (issue #123, PR #135 merged as #135)
+### `codegraph stats` subcommand — live graph counts with scope + markdown update (issue #137)
+
+- `de21f68 feat(cli)` — `cli.py` gains three helper functions and a new `stats` Typer subcommand. **`_query_graph_stats(driver, scope)`** runs two Cypher queries (one for node counts by label, one for edge counts by type) using `coalesce(n.file, n.path)` to handle both `File` (`.path`) and all other node kinds (`.file`); scope prefix filtering is applied when `scope` is set. **`_format_stat_line(stats)`** produces a human-readable prose string like `"~21 files, 56 classes, 134 module functions, ~178 methods"` (omitting zero-count labels, approximating counts with `~`). **`_update_stat_placeholders(files, stat_line, quiet)`** uses a regex lambda replacement (safe against metacharacters) to rewrite the content between `<!-- codegraph:stats-begin -->` / `<!-- codegraph:stats-end -->` delimiters in each target file, skipping files with no delimiters and reporting unchanged files. The **`stats()` command** exposes `--json`, `--scope/-s`, `--no-scope`, `--update`, `--file/-f`, `--repo` options; auto-scopes from `codegraph.toml` / `pyproject.toml` (same logic as `arch-check`). Placeholder delimiters inserted in `CLAUDE.md`, `.claude/commands/graph.md`, and `codegraph/codegraph/templates/claude/commands/graph.md`, replacing the old HTML-comment stat lines. **11 new tests** in `tests/test_stats.py`: `_query_graph_stats` scoped + unscoped (verifies Cypher params), `_format_stat_line` all-nonzero / zero-omission / empty graph, `_update_stat_placeholders` replace / no-delimiters-skip / no-change-skip / missing-file-skip, CLI `--json` output, CLI `--update` end-to-end with `files_updated` key in JSON. Code-review fixes applied: explicit `_LABEL_MAP` dict replaced a dead capitalize() loop; JSON output deferred so `--json --update` reports `files_updated`; `import os` removed; lambda replacement for regex safety; `coalesce(n.file, n.path)` fixed 0-file-count bug. Arch-check: 5/5 policies pass, 0 violations. Test count: 448 → 459.
+
+- `de41ee2 merge` + `737f89e chore` — PR #138 (branch `archon/task-fix-issue-123`, codebase stats update, issue #123) merged to `main`; version bumped to v0.1.33.
+
+### Codebase stats update — CLAUDE.md and graph.md (issue #123, PR #138 merged as #138)
 
 - `623dc8c docs(stats)` — Three `.md` files updated to reflect actual graph state (6 insertions, 3 deletions; zero source code). `CLAUDE.md:61`, `.claude/commands/graph.md:20`, and `codegraph/codegraph/templates/claude/commands/graph.md:20` all had stale stats copied from early development. Updated from `~18 files, 41 classes, 82 module functions, ~150 methods` → `~20 files, 56 classes, 134 module functions, ~180 methods`; `handful of files` → `~17 files` for the test suite; an HTML comment hint added to remind future editors to run `/graph-refresh` and update these counts after significant structural changes. Template and live `graph.md` stat lines kept byte-identical. 448 tests unchanged; byte-compile clean.
 
@@ -359,12 +369,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-123` |
+| Current branch | `archon/task-fix-issue-137` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`623dc8c` — codebase stats update in CLAUDE.md + graph.md, pending PR) |
-| Open PR | None. PR #135 (issue #133 — install-test exponential backoff) merged to main. |
+| Unpushed commits | 1 (`de21f68` — `codegraph stats` subcommand, pending PR) |
+| Open PR | None. PR #138 (issue #123 — codebase stats update) merged to main. |
 | Working tree | Clean |
-| Test count | 448 passing + 1 deselected |
+| Test count | 459 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -437,6 +447,16 @@ The `/graph-refresh` slash command does this — re-runs `codegraph index` again
 ```bash
 .venv/bin/codegraph query "MATCH (p:Package) RETURN p.name, p.framework, p.confidence"
 .venv/bin/codegraph query --json "MATCH (c:Class {is_controller:true}) RETURN c.name LIMIT 5"
+```
+
+### Query graph statistics
+
+```bash
+.venv/bin/codegraph stats                              # Rich table: node + edge counts
+.venv/bin/codegraph stats --json                       # JSON output
+.venv/bin/codegraph stats --scope codegraph            # scoped to a path prefix
+.venv/bin/codegraph stats --update                     # rewrite <!-- codegraph:stats-begin/end --> in CLAUDE.md etc.
+.venv/bin/codegraph stats --update --file myfile.md    # target a specific file
 ```
 
 ### Run the architecture-conformance gate locally
@@ -531,7 +551,11 @@ The ranking assumes the same `plan → implement → e2e validate → commit` cy
 
 ~~#### B4. MCP write tools behind `--allow-write`~~ **SHIPPED** (`daae936`)
 
-#### B5. Agent-native RAG — graph-selected context injection
+~~#### B5. `codegraph stats` — live graph counts + markdown placeholder update~~ **SHIPPED** (`de21f68`)
+
+Live Neo4j counts by label/edge-type with `--json`, `--scope`, `--update` (rewrites `<!-- codegraph:stats-begin/end -->` delimiters). Auto-scopes from config like `arch-check`. 11 new tests, 459 total.
+
+#### B6. Agent-native RAG — graph-selected context injection
 
 **What:** Claude Code hook / extension that, when the user mentions a symbol, queries the graph for its 1-hop neighbours and injects a tight brief (maybe 2k tokens) instead of letting the model grep/read raw files.
 
@@ -541,7 +565,7 @@ The ranking assumes the same `plan → implement → e2e validate → commit` cy
 
 **Gotchas:** Tight coupling to Claude Code's extension API — may require using the official `@anthropic-ai/claude-code` SDK rather than MCP.
 
-~~#### B6. Investigate the 29% unresolved imports~~ **SHIPPED** (`c6460d2`)
+~~#### B7. Investigate the 29% unresolved imports~~ **SHIPPED** (`c6460d2`)
 
 Workspace registry + tsconfig extends chains now resolve bare package imports and scoped npm packages. Estimated ~8,081 previously-IMPORTS_EXTERNAL Twenty workspace imports now route to real files. Remaining unresolved are genuine third-party externals (react, apollo, etc.).
 
