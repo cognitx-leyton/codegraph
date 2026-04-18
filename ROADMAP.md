@@ -2,26 +2,31 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `aff9f10` → `9d05a44` (inline suppression for false-positive arch-check violations shipped as issue #23; PR #92 merged to main; version bumped to 0.1.15).
+> **Last updated:** 2026-04-18 after commits `9d05a44` → `06e9873` (incremental re-indexing via `--since` shipped as issue #13; PR #95 merged to main; version bumped to 0.1.16).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-23-arch-check-suppression`. Working tree has one untracked plan file (`.claude/plans/arch-check-suppression.plan.md`). Suppression feature shipped as `9d05a44`; PR #92 (`--scope` flag) merged to main.
-- **Tests:** 375 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-13-incremental-reindex`. Working tree has one untracked plan file (`.claude/plans/incremental-reindex.plan.md`). Incremental re-indexing shipped as `06e9873`; PR #95 (inline suppression, issue #23) merged to main.
+- **Tests:** 396 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools live + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.15 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.16 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
 - **Python Stage 2:** FastAPI / Flask / Django / SQLAlchemy framework detection + `:Endpoint` nodes. `/trace-endpoint` now works against Python repos.
+- **Incremental re-indexing:** `codegraph index --since <git-ref>` diffs git, cleans stale subgraphs, and upserts only touched files. Implies `--no-wipe`. REPL supports `index --since HEAD~1`.
 
 ---
 
-## Shipped since the last roadmap update (commit `aff9f10`)
+## Shipped since the last roadmap update (commit `9d05a44`)
 
 ```
+06e9873 feat(incremental): add --since flag for incremental re-indexing
+7327e46 Merge pull request #95 from cognitx-leyton/archon/task-feat-issue-23-arch-check-suppression
+87b6997 chore:          bump version to 0.1.16
+7290c13 docs(roadmap):  update session handoff
 9d05a44 feat(arch-check): add inline suppression for false-positive violations
 508826e Merge pull request #92 from cognitx-leyton/archon/task-feat-issue-22-arch-check-scope
 7c95ac2 chore:          bump version to 0.1.15
@@ -76,7 +81,15 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Eleven sessions' worth of work grouped by theme:
+Twelve sessions' worth of work grouped by theme:
+
+### Incremental re-indexing — `--since` flag for fast incremental updates (issue #13)
+
+- `06e9873 feat(incremental)` — `loader.py` gains `delete_file_subgraph(tx, file_path)`: a cascading 10-step Cypher cleanup that removes a File node and all its children (Classes → Methods, Functions, Interfaces, Atoms) plus orphaned Endpoint / GraphQLOperation / Column nodes connected via `EXPOSES` / `RESOLVES` / `HAS_COLUMN` before the class deletion. `_file_from_id(node_id)` extracts file paths from all node ID formats (`file:`, `class:`, `func:`, `method:`, `endpoint:`, `gqlop:`, `atom:`). `load()` gains a `touched_files: set[str] | None` parameter that filters nodes and edges to only those involving touched files (packages are always written). `cli.py` gains `_git_changed_files(repo_root, since)` which shells out to `git diff --name-status` and categorises files as modified/added (re-index) vs deleted (cleanup-only), with rename handling (old name → deleted, new name → modified). `--since` option on `codegraph index`: implies `--no-wipe`, skips ownership, calls `delete_file_subgraph()` for each deleted/modified file, then calls `load(touched_files=...)` for only the re-parsed files. `repl.py` passes `--since` through `_cmd_index()` so `index --since HEAD~1` works in the interactive REPL. `tests/test_incremental.py` (new, 21 tests): `delete_file_subgraph` cascades correctly (10-step Cypher), `_file_from_id` handles all 7 prefix formats, `load(touched_files=...)` filters nodes + edges, `_git_changed_files` parses `M`/`A`/`D`/`R` status lines, end-to-end `_run_index` with `--since` wires cleanup + selective load. Test count: 375 → 396.
+
+### Version bump + inline suppression PR merged to main
+
+- `87b6997 chore` + `7327e46 merge` — bumped `pyproject.toml` to v0.1.16 and merged PR #95 (inline suppression, issue #23) to `main`.
 
 ### Inline suppression — false-positive suppression for arch-check violations (issue #23)
 
@@ -180,12 +193,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-23-arch-check-suppression` |
+| Current branch | `archon/task-feat-issue-13-incremental-reindex` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`9d05a44` — inline suppression, pending PR) |
-| Open PR | Issue #23 suppression branch pending PR. PR #92 (--scope flag) merged to main. |
-| Working tree | 1 untracked file (`.claude/plans/arch-check-suppression.plan.md`) |
-| Test count | 375 passing + 1 deselected |
+| Unpushed commits | 1 (`06e9873` — incremental re-indexing, pending PR) |
+| Open PR | Issue #13 incremental branch pending PR. PR #95 (inline suppression) merged to main. |
+| Working tree | 1 untracked file (`.claude/plans/incremental-reindex.plan.md`) |
+| Test count | 396 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -348,23 +361,15 @@ The ranking assumes the same `plan → implement → e2e validate → commit` cy
 
 ~~#### B2. MCP resources / prompts — `queries.md` as named prompt templates~~ **SHIPPED** (`357ad03`)
 
-#### B3. Incremental re-indexing (`codegraph index --since HEAD~N`)
-
-**What:** Diff git, re-parse only touched files, upsert into the existing graph without wiping.
-
-**Why:** Full re-index of Twenty takes ~3 min. For agent workflows where code changes mid-session, that's too slow to close the loop.
-
-**Scope:** ~400 LOC. Touches `cli.py` (new flag), `loader.py` (upsert semantics, orphan cleanup), `resolver.py` (re-run `link_cross_file` over full index — option (a) from previous plans).
-
-**Blocked by**: nothing. Unlocks **B4 (MCP write tools behind `--allow-write`)**.
+~~#### B3. Incremental re-indexing (`codegraph index --since HEAD~N`)~~ **SHIPPED** (`06e9873`)
 
 #### B4. MCP write tools behind `--allow-write`
 
 **What:** `reindex_file(path)` + `wipe_graph()` tools, gated by a `--allow-write` CLI flag on `codegraph-mcp`.
 
-**Why:** Agents can refresh the graph after editing without shelling out for 3 min.
+**Why:** Agents can refresh the graph after editing without shelling out for 3 min. Now that B3 is done (`delete_file_subgraph` + `load(touched_files=...)` exist), this is ~100 LOC of wiring.
 
-**Scope:** ~100 LOC after B3 lands. Separate `WRITE_ACCESS` session for these tools only.
+**Scope:** ~100 LOC. Separate `WRITE_ACCESS` session for these tools only. B3 is a direct dependency — now unblocked.
 
 #### B5. Agent-native RAG — graph-selected context injection
 
@@ -461,6 +466,7 @@ Repo-local plans under `.claude/plans/`:
 - `feat-orphan-detection-policy.plan.md` — shipped as `2dd72b7`.
 - `arch-check-scope.plan.md` — shipped as `9ebc0e4`.
 - `arch-check-suppression.plan.md` — shipped as `9d05a44`.
+- `incremental-reindex.plan.md` — shipped as `06e9873`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -512,12 +518,12 @@ asking. Do not merge the open PR #8 without asking.
 
 | File | Purpose | Approximate LOC |
 |---|---|---|
-| `cli.py` | Typer CLI: `init`, `repl`, `index`, `validate`, `arch-check`, `query`, `wipe` | ~570 |
+| `cli.py` | Typer CLI: `init`, `repl`, `index`, `validate`, `arch-check`, `query`, `wipe` (+ `--since` incremental flag + `_git_changed_files`) | ~625 |
 | `init.py` | `codegraph init` scaffolder (detection + prompts + template render + docker + first index) | ~310 |
 | `parser.py` | tree-sitter TS/TSX walker with framework-construct detection | ~1160 |
 | `py_parser.py` | tree-sitter Python walker (Stage 1: classes, methods, functions, imports, decorators, CALLS, docstrings, params, return types) | ~560 |
 | `resolver.py` | Cross-file reference resolution (TS path aliases + Python module imports + class heritage + method calls + super()) | ~660 |
-| `loader.py` | Neo4j batch writer, constraints, indexes, `LoadStats` | ~815 |
+| `loader.py` | Neo4j batch writer, constraints, indexes, `LoadStats` (+ `delete_file_subgraph`, `_file_from_id`, `touched_files` filter) | ~900 |
 | `schema.py` | Node + edge dataclasses shared across parser → loader (+ shared test-pairing constants) | ~390 |
 | `config.py` | `codegraph.toml` / `pyproject.toml` config loader | ~190 |
 | `arch_check.py` | Architecture-conformance runner + 5 built-in policies + `--scope` path-prefix filtering + suppression + custom policy support | ~490 |
@@ -527,7 +533,7 @@ asking. Do not merge the open PR #8 without asking.
 | `mcp.py` | FastMCP stdio server with 13 tools + 29 prompt templates | ~610 |
 | `ownership.py` | Git log → author mapping onto graph nodes | ~130 |
 | `validate.py` | Post-load sanity-check suite | ~400 |
-| `repl.py` | Interactive Cypher REPL | ~320 |
+| `repl.py` | Interactive Cypher REPL (+ `--since` pass-through in `_cmd_index`) | ~328 |
 | `utils/neo4j_json.py` | Shared `clean_row` helper | ~30 |
 | `utils/repl_skin.py` | REPL formatting helpers | ~500 |
 | `templates/**/*` | 11 files scaffolded by `codegraph init` | ~300 (markdown + YAML + TOML) |
@@ -551,7 +557,8 @@ asking. Do not merge the open PR #8 without asking.
 | `test_arch_config.py` | 45 | `.arch-policies.toml` parser (built-ins + custom + validation errors + schema_version + coupling_ceiling + orphan_detection config + suppression) |
 | `test_init.py` | 19 | Scaffolder helpers (detection, prompts, render, write, container name uniqueness) |
 | `test_init_integration.py` | 2 (1 slow) | End-to-end scaffold + optional Docker |
-| **Total** | **375** | |
+| `test_incremental.py` | 21 | `delete_file_subgraph`, `_file_from_id`, `load(touched_files=...)`, `_git_changed_files`, end-to-end `_run_index --since` wiring |
+| **Total** | **396** | |
 
 ### Key decisions recorded in commit messages
 
@@ -585,6 +592,11 @@ Grep commit bodies for rationale:
 - Why suppression matching operates only on the sample rows, not on the full violation count (the violation count comes from an aggregation query; we can't know which of the un-sampled violations would also match without fetching all rows; applying `passed=True` only when `violation_count == suppressed_count` is the safe conservative path) → `9d05a44`
 - Why `suppressions.index(s)` was replaced with an `id_to_idx` identity map (`index()` is O(n) and broken when two `Suppression` objects are equal by value; identity-keyed dict gives O(1) lookup and correct behaviour with duplicate entries) → `9d05a44`
 - Why unknown policy names in `[[suppress]]` don't error at parse time (policy names are validated at match time so that stale suppressions for renamed or removed policies surface as "stale" warnings rather than hard config errors — easier to clean up) → `9d05a44`
+- Why `delete_file_subgraph` uses 10 explicit Cypher steps rather than a single `DETACH DELETE` on the File node (`DETACH DELETE` on File removes edges but leaves child-of-class nodes — Endpoint, GraphQLOperation, Column — orphaned as islands with no incoming edges; the 10-step cascade explicitly targets each child type before deleting its parent) → `06e9873`
+- Why `_file_from_id` uses `split("@")[1].split("#")[0]` for endpoint/gqlop IDs (those ID formats are `endpoint:{method}:{path}@{file}#{handler}` and `gqlop:{type}:{name}@{file}#{handler}` — `@` separates the structural prefix from the file path, and `#` separates the file from the handler name) → `06e9873`
+- Why `--since` implies `--no-wipe` and skips ownership (wiping then re-indexing defeats the purpose of incremental; ownership requires git-log over all files and is expensive — skipping it on incremental runs keeps the fast-path fast) → `06e9873`
+- Why `_git_changed_files` treats renamed files as delete-old + add-new (the old path's subgraph must be cleaned so its nodes don't become orphaned; the new path is re-parsed fresh; treating a rename as a single "move" would require a graph rename operation that doesn't exist) → `06e9873`
+- Why `load(touched_files=...)` always writes packages even in incremental mode (Package nodes encode framework-level metadata shared across files; filtering them out to save time could leave the Package table stale if the only changed file was the one that determined the framework) → `06e9873`
 
 ### Git remotes
 
