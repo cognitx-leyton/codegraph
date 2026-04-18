@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `d7d4172` → `28a5eda` (incomplete suppression coverage warning shipped as issue #109; PR #110 merged; version bumped to 0.1.20).
+> **Last updated:** 2026-04-18 after commits `e0951c6` → `082c943` (incomplete→not-passed invariant assert + test shipped as issue #111; PR #112 merged; version bumped to 0.1.21).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-109`. Incomplete suppression coverage warning shipped as `28a5eda`; PR #110 merged to main; version bumped to 0.1.20.
-- **Tests:** 439 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-111`. Incomplete→not-passed invariant assert + test shipped as `082c943`; PR #112 merged to main; version bumped to 0.1.21.
+- **Tests:** 440 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.20 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `d7d4172`)
+## Shipped since the last roadmap update (commit `e0951c6`)
 
 ```
+082c943 test(arch-check): assert and test the incomplete→not-passed invariant
+14bd396 Merge pull request #112 from cognitx-leyton/archon/task-fix-issue-109
+e31c2a2 chore: bump version to 0.1.21
+e0951c6 docs(roadmap): update session handoff
 28a5eda fix(arch-check): warn when suppression coverage is partial due to sample truncation
 30d13d9 Merge pull request #110 from cognitx-leyton/archon/task-fix-issue-105
 5013666 chore: bump version to 0.1.20
@@ -98,7 +102,13 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Fifteen sessions' worth of work grouped by theme:
+Sixteen sessions' worth of work grouped by theme:
+
+### Incomplete→not-passed invariant (issue #111)
+
+- `082c943 test(arch-check)` — `arch_check.py` gains an invariant comment + `assert not (incomplete and new_violation_count == 0)` inside `_apply_suppressions()`, explaining why suppressed rows drawn from the truncated sample guarantee `passed=False` when `incomplete=True` (at least one row was not suppressed at the full-count level). `tests/test_arch_check.py` gains `test_invariant_incomplete_implies_not_passed`: 15 violations, sample_size=10, all 10 suppressed → asserts `incomplete=True`, `passed=False`, `violation_count=5`. This covers the previously untested invariant boundary: incomplete=True cannot coexist with passed=True. Test count: 439 → 440.
+
+- `14bd396 merge` + `e31c2a2 chore` — PR #112 (incomplete suppression coverage warning, issue #109) merged to `main`; version bumped to v0.1.21.
 
 ### Incomplete suppression coverage warning (issue #109)
 
@@ -234,12 +244,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-109` |
+| Current branch | `archon/task-fix-issue-111` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`28a5eda` — incomplete suppression coverage warning, pending PR) |
-| Open PR | Issue #109 incomplete suppression warning branch pending PR. PR #110 (auto-scope, issue #105) merged to main. |
+| Unpushed commits | 1 (`082c943` — incomplete→not-passed invariant assert + test, pending PR) |
+| Open PR | Issue #111 invariant assert branch pending PR. PR #112 (incomplete suppression warning, issue #109) merged to main. |
 | Working tree | Clean |
-| Test count | 439 passing + 1 deselected |
+| Test count | 440 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -502,6 +512,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-unresolved-imports.plan.md` — shipped as `c6460d2`.
 - `fix-issue-105-auto-scope.plan.md` — shipped as `ae21e20`.
 - `incomplete-suppression-warning.plan.md` — shipped as `28a5eda`.
+- `document-invariant-incomplete-passed.plan.md` — shipped as `082c943`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -588,12 +599,12 @@ asking. Do not merge the open PR #8 without asking.
 | `test_resolver_bugs.py` | 28 | Resolver edge-case regression tests (+ 15 new: workspace resolution, scoped npm packages, tsconfig extends chains) |
 | `test_loader_partitioning.py` | 3 | Function DECORATED_BY routing |
 | `test_loader_pairing.py` | 6 | TS + Python test-file pairing |
-| `test_arch_check.py` | 62 | Policies + orchestrator + custom policy runner (including coupling_ceiling + orphan_detection + --scope filtering + suppression + CLI auto-scope / --no-scope + incomplete coverage warning) |
+| `test_arch_check.py` | 63 | Policies + orchestrator + custom policy runner (including coupling_ceiling + orphan_detection + --scope filtering + suppression + CLI auto-scope / --no-scope + incomplete coverage warning + incomplete→not-passed invariant) |
 | `test_arch_config.py` | 45 | `.arch-policies.toml` parser (built-ins + custom + validation errors + schema_version + coupling_ceiling + orphan_detection config + suppression) |
 | `test_init.py` | 19 | Scaffolder helpers (detection, prompts, render, write, container name uniqueness) |
 | `test_init_integration.py` | 2 (1 slow) | End-to-end scaffold + optional Docker |
 | `test_incremental.py` | 21 | `delete_file_subgraph`, `_file_from_id`, `load(touched_files=...)`, `_git_changed_files`, end-to-end `_run_index --since` wiring |
-| **Total** | **439** | |
+| **Total** | **440** | |
 
 ### Key decisions recorded in commit messages
 
@@ -642,6 +653,7 @@ Grep commit bodies for rationale:
 - Why auto-scope reads `codegraph.toml` / `pyproject.toml` rather than inferring from the repo structure (the config's `packages` list is the authoritative user declaration of what _this_ codegraph installation cares about; inferring from directory heuristics would re-derive something the user already stated explicitly, and would be wrong for multi-tenant graphs where leytongo / Twenty are co-indexed) → `ae21e20`
 - Why `incomplete_suppression_coverage` fires only when truncated AND at least one suppression matched (truncation alone is benign — the warning exists to alert users that suppressions may not cover unseen violations; if no suppression matched the visible sample, there's nothing to warn about) → `28a5eda`
 - Why the incomplete-coverage warning uses the original `violation_count + suppressed_count` total rather than `violation_count` alone (the number the user cares about is the full pre-suppression count; `violation_count` at render time has already had `suppressed_count` subtracted, so adding it back reconstructs the original total that triggered the warning) → `28a5eda`
+- Why `assert not (incomplete and new_violation_count == 0)` is sound (when `incomplete=True`, at least `violation_count - len(sample)` violations were never fetched; even if all sampled rows were suppressed, the unseen rows remain — so `violation_count > 0` is guaranteed and `passed` can never be True; the assert documents and enforces this invariant to catch future regressions) → `082c943`
 - Why `--no-scope` is needed when auto-scope is active (the graph may deliberately co-index multiple projects for cross-project arch-check; `--no-scope` restores the pre-#105 full-graph behaviour without requiring the user to delete their config) → `ae21e20`
 - Why `--scope` takes precedence over auto-scope (explicit always beats implicit; a CI job that passes `--scope` should not be silently overridden by whatever config the target repo happens to have) → `ae21e20`
 - Why `_git_changed_files` treats renamed files as delete-old + add-new (the old path's subgraph must be cleaned so its nodes don't become orphaned; the new path is re-parsed fresh; treating a rename as a single "move" would require a graph rename operation that doesn't exist) → `06e9873`
