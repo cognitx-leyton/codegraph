@@ -52,7 +52,7 @@ Five purpose-built wrappers over `/graph` for the patterns you'll reach for most
 
 **Configuring the trigger scope**: edit the `on:` block at the top of `.github/workflows/arch-check.yml`. The shipped default is `pull_request: branches: [main]` (strictest, lowest-noise). Two commented-out alternatives sit right below it: `push: branches: [dev]` to catch drift the moment it lands, and `workflow_dispatch` for manual runs from the Actions UI. Uncomment what you need.
 
-**Reproducing a failing check locally**: `cd codegraph && codegraph index . -p codegraph/codegraph -p codegraph/tests --skip-ownership && codegraph arch-check`. Exit code mirrors CI.
+**Reproducing a failing check locally**: `cd codegraph && codegraph index . -p codegraph -p tests --skip-ownership && codegraph arch-check`. Exit code mirrors CI.
 
 Policy reference + false-positive guidance: `codegraph/docs/arch-policies.md`.
 
