@@ -50,11 +50,14 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
     sleep $BACKOFF
   else
     echo "Install FAILED — expected $LATEST but got $INSTALLED after $MAX_ATTEMPTS attempts"
+    exit 1
   fi
 done
 ```
 
 **Pass criteria**: Installed version matches `pyproject.toml` version exactly. Retries up to 3 times with 30s backoff for PyPI propagation lag.
+
+> **Note**: The `exit 1` ensures a non-zero exit in standalone / CI contexts. When run as a Claude Code slash command, Claude also reads the "Install FAILED" echo to determine the outcome.
 
 ## Stage 3: Self-Index (dogfood)
 
