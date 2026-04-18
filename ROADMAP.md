@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `1e53a80` → `37d71a2` (PR #145 merged (issue #140 — stats edge-case tests); auto-scope edge-case test added for `codegraph stats` (issue #144) — `test_stats_auto_scope` covers the `--json` no-scope/no-no-scope branch that reads packages from config and forwards them as `$scopes` to Neo4j; 466 tests passing, v0.1.35).
+> **Last updated:** 2026-04-19 after commits `df49d03` → `7815b72` (PR #146 merged (issue #144 — auto-scope edge-case test); scoped edge AND logic tightened + `--include-cross-scope-edges` flag added for `codegraph stats` (issue #143) — 468 tests passing, v0.1.36).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-144`. Auto-scope edge-case test added for `codegraph stats` (issue #144): `test_stats_auto_scope` monkeypatches `load_config` + `GraphDatabase.driver`, invokes `stats --json` (no `--scope`, no `--no-scope`), and asserts the `$scopes` Cypher parameter matches the config packages and the query uses `STARTS WITH`. PR #145 merged to main (issue #140 — stats edge-case tests); version at v0.1.35.
-- **Tests:** 466 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-143`. Scoped edge counts in `codegraph stats` now use AND logic by default (both endpoints must match a scope prefix). New `--include-cross-scope-edges` flag restores the old OR behaviour. PR #146 merged to main (issue #144 — auto-scope edge-case test); version at v0.1.36.
+- **Tests:** 468 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `1e53a80`)
+## Shipped since the last roadmap update (commit `df49d03`)
 
 ```
+7815b72 fix(stats): tighten scoped edge counts to AND logic, add --include-cross-scope-edges flag
+60745ba Merge pull request #146 from cognitx-leyton/archon/task-fix-issue-144
+210a1f5 chore: bump version to 0.1.36
+df49d03 docs(roadmap): update session handoff
 37d71a2 test(stats): add auto-scope edge-case for stats command
 76a4574 Merge pull request #145 from cognitx-leyton/archon/task-fix-issue-140
 31ec89f chore: bump version to 0.1.35
@@ -157,7 +161,13 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Thirty sessions' worth of work grouped by theme:
+Thirty-one sessions' worth of work grouped by theme:
+
+### Stats scoped edge AND logic + `--include-cross-scope-edges` flag (issue #143)
+
+- `7815b72 fix(stats)` — `_query_graph_stats()` in `cli.py` now uses **AND** by default for scoped edge Cypher (both source and target file paths must match a scope prefix). Previously, OR logic was used, which could count cross-scope edges that only partially match. A new `cross_scope_edges: bool = False` parameter restores OR behaviour when set to `True`. The `stats()` CLI command gains a `--include-cross-scope-edges` flag that threads through to `_query_graph_stats`. The `--scope` help text updated to document the AND-default semantics. **2 new tests** in `tests/test_stats.py`: `test_query_graph_stats_with_scope_cross_edges` (verifies `cross_scope_edges=True` produces OR-based Cypher) and `test_stats_include_cross_scope_edges_flag` (CLI integration test). Existing `test_query_graph_stats_with_scope` updated to assert the edge Cypher contains `AND` and not `OR`. Code-review: 0 issues. Arch-check: 5/5 policies pass. Test count: 466 → 468.
+
+- `60745ba merge` + `210a1f5 chore` — PR #146 (branch `archon/task-fix-issue-144`, auto-scope edge-case test, issue #144) merged to `main`; version bumped to v0.1.36.
 
 ### Stats auto-scope edge-case test (issue #144)
 
@@ -389,12 +399,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-144` |
+| Current branch | `archon/task-fix-issue-143` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`37d71a2` — stats auto-scope edge-case test, pending PR) |
-| Open PR | None. PR #145 (issue #140 — stats edge-case tests) merged to main. |
+| Unpushed commits | 1 (`7815b72` — stats scoped edge AND logic + --include-cross-scope-edges, pending PR) |
+| Open PR | None. PR #146 (issue #144 — auto-scope edge-case test) merged to main. |
 | Working tree | Clean |
-| Test count | 466 passing + 1 deselected |
+| Test count | 468 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |

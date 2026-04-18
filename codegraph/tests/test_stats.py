@@ -127,6 +127,24 @@ def test_query_graph_stats_with_scope():
     assert "scopes" in node_params
     assert node_params["scopes"] == ["codegraph/codegraph"]
     assert "STARTS WITH" in node_cypher
+    # Default scoped edge query uses AND — both endpoints must be in scope
+    edge_cypher, _ = session.calls[1]
+    assert "AND (bloc" in edge_cypher
+    assert " OR " not in edge_cypher
+
+
+def test_query_graph_stats_with_scope_cross_edges():
+    """With cross_scope_edges=True, edge Cypher uses OR (either endpoint in scope)."""
+    driver = _constant_driver({
+        "labels(n)": [{"label": "File", "count": 5}],
+        "type(r)": [{"rel": "IMPORTS", "count": 10}],
+    })
+    result = _query_graph_stats(driver, scope=["codegraph/codegraph"], cross_scope_edges=True)
+    assert result["files"] == 5
+    assert result["edges"]["IMPORTS"] == 10
+    session = driver._session
+    edge_cypher, _ = session.calls[1]
+    assert " OR " in edge_cypher
 
 
 @pytest.mark.parametrize("scope", [None, []])
@@ -365,3 +383,28 @@ def test_stats_auto_scope(monkeypatch):
     node_cypher, node_params = session.calls[0]
     assert node_params["scopes"] == packages
     assert "STARTS WITH" in node_cypher
+
+
+def test_stats_include_cross_scope_edges_flag(monkeypatch):
+    """--include-cross-scope-edges makes edge query use OR logic."""
+    from typer.testing import CliRunner
+
+    from codegraph.cli import app
+    from neo4j import GraphDatabase
+
+    driver = _constant_driver({
+        "labels(n)": _SAMPLE_NODES,
+        "type(r)": _SAMPLE_EDGES,
+    })
+    monkeypatch.setattr(GraphDatabase, "driver", lambda *a, **kw: driver)
+
+    runner = CliRunner()
+    result = runner.invoke(app, [
+        "stats", "--json",
+        "--scope", "codegraph",
+        "--include-cross-scope-edges",
+    ])
+    assert result.exit_code == 0, result.output
+    session = driver._session
+    edge_cypher, _ = session.calls[1]
+    assert " OR " in edge_cypher

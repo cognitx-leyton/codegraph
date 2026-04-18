@@ -461,11 +461,20 @@ _STAT_NODE_LABELS = (
 )
 
 
-def _query_graph_stats(driver, scope: list[str] | None) -> dict[str, Any]:
+def _query_graph_stats(
+    driver,
+    scope: list[str] | None,
+    *,
+    cross_scope_edges: bool = False,
+) -> dict[str, Any]:
     """Query Neo4j for node and edge counts, optionally filtered by scope prefixes.
 
     File nodes use ``.path`` while other nodes use ``.file``, so queries
     use ``coalesce(n.file, n.path)`` to handle both uniformly.
+
+    When *scope* is set, edge counts default to AND logic (both endpoints
+    must be in scope).  Pass ``cross_scope_edges=True`` to use OR logic
+    (either endpoint in scope) — the pre-0.1.37 behaviour.
     """
     with driver.session() as s:
         if scope:
@@ -476,13 +485,14 @@ def _query_graph_stats(driver, scope: list[str] | None) -> dict[str, Any]:
                 "AND any(s IN $scopes WHERE loc STARTS WITH s) "
                 "RETURN labels(n)[0] AS label, count(*) AS count"
             )
+            conjunction = "OR" if cross_scope_edges else "AND"
             edge_cypher = (
                 "MATCH (a)-[r]->(b) "
                 "WITH a, r, b, "
                 "coalesce(a.file, a.path) AS aloc, "
                 "coalesce(b.file, b.path) AS bloc "
                 "WHERE (aloc IS NOT NULL AND any(s IN $scopes WHERE aloc STARTS WITH s)) "
-                "OR (bloc IS NOT NULL AND any(s IN $scopes WHERE bloc STARTS WITH s)) "
+                f"{conjunction} (bloc IS NOT NULL AND any(s IN $scopes WHERE bloc STARTS WITH s)) "
                 "RETURN type(r) AS rel, count(*) AS count"
             )
             params = {"scopes": scope}
@@ -827,13 +837,20 @@ def stats(
     as_json: bool = typer.Option(False, "--json", help="Emit stats as JSON on stdout."),
     scope: Optional[list[str]] = typer.Option(
         None, "--scope", "-s",
-        help="Restrict counts to nodes whose file path starts with this "
-             "prefix. Repeatable.",
+        help="Restrict counts to nodes/edges whose file path starts with "
+             "this prefix. Repeatable. Edge counts include only edges "
+             "where both endpoints match a scope prefix.",
     ),
     no_scope: bool = typer.Option(
         False, "--no-scope",
         help="Disable auto-scope even when packages are configured. "
              "Counts the entire graph.",
+    ),
+    include_cross_scope_edges: bool = typer.Option(
+        False, "--include-cross-scope-edges",
+        help="Include edges that cross scope boundaries (one endpoint "
+             "inside scope, one outside). Default counts only edges "
+             "where both endpoints are in scope.",
     ),
     update: bool = typer.Option(
         False, "--update",
@@ -870,7 +887,10 @@ def stats(
 
     driver = GraphDatabase.driver(uri, auth=(user, password))
     try:
-        result = _query_graph_stats(driver, effective_scope)
+        result = _query_graph_stats(
+            driver, effective_scope,
+            cross_scope_edges=include_cross_scope_edges,
+        )
     finally:
         driver.close()
 
