@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `e185737` → `de21f68` (PR #138 merged (issue #123 — codebase stats update); `codegraph stats` CLI subcommand shipped (issue #137) — live graph counts with `--json`, `--scope`, `--update` to rewrite stat placeholders in markdown files; 459 tests passing, v0.1.33).
+> **Last updated:** 2026-04-18 after commits `3b2f52a` → `8da989a` (PR #141 merged (issue #137 — `codegraph stats` subcommand); edge-case test coverage for stats command added (issue #140) — 6 new parametrised tests covering empty/falsy scope, trailing-slash scope, and hook/decorator format; 465 tests passing, v0.1.34).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-137`. `codegraph stats` subcommand shipped (issue #137): live Neo4j counts by node label and edge type with `--json`, `--scope/-s`, `--no-scope`, `--update` (rewrites `<!-- codegraph:stats-begin/end -->` delimiters in markdown files), `--file/-f`, `--repo` options. Auto-scopes from `codegraph.toml` / `pyproject.toml` like `arch-check`. Placeholder delimiters inserted in `CLAUDE.md`, `.claude/commands/graph.md`, and `codegraph/codegraph/templates/claude/commands/graph.md`. PR #138 merged to main (issue #123 — codebase stats update); version at v0.1.33.
-- **Tests:** 459 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-140`. Edge-case test coverage for `codegraph stats` added (issue #140): 6 new parametrised tests covering `scope=None` / `scope=[]` produce global Cypher (no `STARTS WITH`, no `$scopes` param), scope prefix values forwarded verbatim to `$scopes`, and hook/decorator labels present when non-zero and omitted when zero. PR #141 merged to main (issue #137 — `codegraph stats` subcommand); version at v0.1.34.
+- **Tests:** 465 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `e185737`)
+## Shipped since the last roadmap update (commit `3b2f52a`)
 
 ```
+8da989a test(stats): add edge-case coverage for stats command
+32d66d4 Merge pull request #141 from cognitx-leyton/archon/task-fix-issue-137
+7958de3 chore: bump version to 0.1.34
+3b2f52a docs(roadmap): update session handoff
 de21f68 feat(cli): add codegraph stats subcommand with scope filtering and --update flag
 de41ee2 Merge pull request #138 from cognitx-leyton/archon/task-fix-issue-123
 737f89e chore: bump version to 0.1.33
@@ -149,7 +153,13 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Twenty-eight sessions' worth of work grouped by theme:
+Twenty-nine sessions' worth of work grouped by theme:
+
+### Stats edge-case test coverage (issue #140)
+
+- `8da989a test(stats)` — 6 new parametrised tests added to `tests/test_stats.py`, covering three edge-case scenarios missed in the initial stats test suite: **(1) `test_query_graph_stats_empty_scope_is_global`** — `scope=None` and `scope=[]` both take the `else` branch (falsy check), producing global Cypher with no `STARTS WITH` clause and no `scopes` param. **(2) `test_query_graph_stats_scope_trailing_slash`** — scope prefix strings (with or without trailing slash) are forwarded verbatim to the `$scopes` Cypher param and the query includes `STARTS WITH`. **(3) `test_format_stat_line_hooks_decorators`** — hook/decorator labels appear in the stat line when non-zero and are omitted when zero, confirming the skip-zero behaviour is intentional. Code-review: 0 HIGH/MEDIUM issues. Arch-check: 5/5 policies pass. Test count: 459 → 465.
+
+- `32d66d4 merge` + `7958de3 chore` — PR #141 (branch `archon/task-fix-issue-137`, `codegraph stats` subcommand, issue #137) merged to `main`; version bumped to v0.1.34.
 
 ### `codegraph stats` subcommand — live graph counts with scope + markdown update (issue #137)
 
@@ -369,12 +379,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-137` |
+| Current branch | `archon/task-fix-issue-140` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`de21f68` — `codegraph stats` subcommand, pending PR) |
-| Open PR | None. PR #138 (issue #123 — codebase stats update) merged to main. |
+| Unpushed commits | 1 (`8da989a` — stats edge-case tests, pending PR) |
+| Open PR | None. PR #141 (issue #137 — `codegraph stats` subcommand) merged to main. |
 | Working tree | Clean |
-| Test count | 459 passing + 1 deselected |
+| Test count | 465 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |

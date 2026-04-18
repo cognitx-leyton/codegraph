@@ -129,6 +129,39 @@ def test_query_graph_stats_with_scope():
     assert "STARTS WITH" in node_cypher
 
 
+@pytest.mark.parametrize("scope", [None, []])
+def test_query_graph_stats_empty_scope_is_global(scope):
+    """Both None and [] should produce unscoped (global) queries."""
+    driver = _constant_driver({
+        "labels(n)": _SAMPLE_NODES,
+        "type(r)": _SAMPLE_EDGES,
+    })
+    result = _query_graph_stats(driver, scope=scope)
+    assert result["files"] == 21
+    assert result["classes"] == 56
+    assert result["functions"] == 134
+    assert result["methods"] == 178
+    # Verify no scope filtering in the Cypher
+    session = driver._session
+    node_cypher, node_params = session.calls[0]
+    assert "STARTS WITH" not in node_cypher
+    assert "scopes" not in node_params
+
+
+@pytest.mark.parametrize("scope_val", ["codegraph", "codegraph/"])
+def test_query_graph_stats_scope_trailing_slash(scope_val):
+    """Scope prefix is forwarded verbatim — trailing slash matters for STARTS WITH."""
+    driver = _constant_driver({
+        "labels(n)": [{"label": "File", "count": 5}],
+        "type(r)": [{"rel": "IMPORTS", "count": 10}],
+    })
+    _query_graph_stats(driver, scope=[scope_val])
+    session = driver._session
+    node_cypher, node_params = session.calls[0]
+    assert node_params["scopes"] == [scope_val]
+    assert "STARTS WITH" in node_cypher
+
+
 # ── _format_stat_line ───────────────────────────────────────────────
 
 
@@ -148,6 +181,34 @@ def test_format_stat_line_empty():
     stats = {"files": 0, "classes": 0, "functions": 0, "methods": 0}
     line = _format_stat_line(stats)
     assert line == "(empty graph)"
+
+
+@pytest.mark.parametrize(
+    "stats, expected_present, expected_absent",
+    [
+        pytest.param(
+            {"files": 10, "classes": 5, "functions": 3, "methods": 8,
+             "hooks": 3, "decorators": 2},
+            ["3 hooks", "2 decorators"],
+            [],
+            id="nonzero",
+        ),
+        pytest.param(
+            {"files": 10, "classes": 5, "functions": 3, "methods": 8,
+             "hooks": 0, "decorators": 0},
+            [],
+            ["hooks", "decorators"],
+            id="zero_omitted",
+        ),
+    ],
+)
+def test_format_stat_line_hooks_decorators(stats, expected_present, expected_absent):
+    """Hook/decorator labels appear when non-zero and are omitted when zero."""
+    line = _format_stat_line(stats)
+    for frag in expected_present:
+        assert frag in line
+    for frag in expected_absent:
+        assert frag not in line
 
 
 # ── _update_stat_placeholders ───────────────────────────────────────
