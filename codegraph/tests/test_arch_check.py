@@ -23,6 +23,7 @@ from codegraph.arch_check import (
     _check_import_cycles,
     _check_layer_bypass,
     _check_orphans,
+    _render,
     run_arch_check,
 )
 from codegraph.arch_config import (
@@ -840,6 +841,149 @@ def test_apply_suppressions_empty_list_is_noop():
     updated, stale = _apply_suppressions(policies, [])
     assert updated is policies  # same object, untouched
     assert stale == []
+
+
+def test_apply_suppressions_incomplete_coverage_when_truncated():
+    """Flag set when violation_count > len(sample) and suppressions match."""
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=20,  # more than the 10 sample rows
+            sample=sample,
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="f0.ts", reason="ok"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.incomplete_suppression_coverage is True
+    assert p.passed is False
+    assert p.suppressed_count == 1
+    assert p.violation_count == 19
+    assert stale == []
+
+
+def test_apply_suppressions_no_incomplete_flag_when_count_equals_sample():
+    """No flag when violation_count == len(sample) and all suppressed."""
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=2,
+            sample=[
+                {"file": "a.ts", "deps": 25},
+                {"file": "b.ts", "deps": 30},
+            ],
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="a.ts", reason="r1"),
+        Suppression(policy="coupling_ceiling", key="b.ts", reason="r2"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.incomplete_suppression_coverage is False
+    assert p.passed is True
+    assert p.violation_count == 0
+
+
+def test_apply_suppressions_no_incomplete_flag_when_no_suppression_matches():
+    """No flag when truncated but zero suppressions match."""
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=20,
+            sample=sample,
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="nonexistent.ts", reason="r"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.incomplete_suppression_coverage is False
+    assert p.passed is False
+
+
+def test_incomplete_suppression_coverage_in_json():
+    """The flag appears in JSON output via asdict()."""
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=False,
+                violation_count=10,
+                incomplete_suppression_coverage=True,
+            ),
+        ],
+    )
+    blob = json.loads(report.to_json())
+    assert blob["policies"][0]["incomplete_suppression_coverage"] is True
+
+    # Also check False is serialised.
+    report2 = ArchReport(
+        policies=[
+            PolicyResult(name="x", passed=True, violation_count=0),
+        ],
+    )
+    blob2 = json.loads(report2.to_json())
+    assert blob2["policies"][0]["incomplete_suppression_coverage"] is False
+
+
+def test_render_incomplete_coverage_warning():
+    """_render emits a warning when incomplete_suppression_coverage is True."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=False,
+                violation_count=15,
+                sample=[{"cycle": ["a.py", "b.py", "a.py"], "hops": 2}],
+                suppressed_count=5,
+                suppressed_sample=[
+                    {"cycle": ["c.py", "d.py", "c.py"], "hops": 2},
+                ],
+                incomplete_suppression_coverage=True,
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = buf.getvalue()
+    assert "suppression coverage is partial" in output
+    assert "import_cycles" in output
+
+
+def test_render_no_warning_when_coverage_complete():
+    """_render does NOT emit the warning when the flag is False."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=True,
+                violation_count=0,
+                suppressed_count=2,
+                incomplete_suppression_coverage=False,
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = buf.getvalue()
+    assert "suppression coverage is partial" not in output
 
 
 # ── Integration: run_arch_check + suppressions ──────────────────

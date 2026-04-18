@@ -82,6 +82,7 @@ class PolicyResult:
     detail: str = ""
     suppressed_count: int = 0
     suppressed_sample: list[dict] = field(default_factory=list)
+    incomplete_suppression_coverage: bool = False
 
 
 @dataclass
@@ -582,6 +583,10 @@ def _apply_suppressions(
 
         suppressed_count = len(suppressed)
         new_violation_count = max(0, p.violation_count - suppressed_count)
+        incomplete = (
+            p.violation_count > len(p.sample)
+            and suppressed_count > 0
+        )
         # Only mark as passing when the full violation count is accounted
         # for.  When violation_count > len(sample) we can't be certain that
         # unseen violations beyond the sample window are also suppressed.
@@ -593,6 +598,7 @@ def _apply_suppressions(
             detail=p.detail,
             suppressed_count=suppressed_count,
             suppressed_sample=suppressed[:SAMPLE_LIMIT],
+            incomplete_suppression_coverage=incomplete,
         ))
 
     stale = [
@@ -654,6 +660,18 @@ def _render(console: Console, report: ArchReport) -> None:
         for row in p.suppressed_sample:
             tbl.add_row(*[str(row.get(h, "")) for h in headers])
         console.print(tbl)
+
+    # Incomplete suppression coverage warnings.
+    for p in report.policies:
+        if p.incomplete_suppression_coverage:
+            total_violations = p.violation_count + p.suppressed_count
+            sampled = len(p.sample) + len(p.suppressed_sample)
+            console.print(
+                f"\n[yellow]\u26a0 {p.name}: {total_violations} violations found "
+                f"but only {sampled} sampled \u2014 suppression coverage is "
+                f"partial.\n  Increase SAMPLE_LIMIT or reduce violations to "
+                f"verify full suppression.[/]"
+            )
 
     # Stale suppressions.
     if report.stale_suppressions:
