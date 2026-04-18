@@ -207,12 +207,7 @@ def load_arch_config(repo_root: Path, path: Optional[Path] = None) -> ArchConfig
         raise ArchConfigError(
             f"{config_path}: [settings] must be a table, got {type(settings).__name__}"
         )
-    raw_limit = settings.get("sample_limit", 10)
-    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
-        raise ArchConfigError(
-            f"{config_path}: settings.sample_limit must be an integer"
-        )
-    sample_limit = raw_limit
+    sample_limit = _int(settings, "sample_limit", 10, config_path, "settings")
     if sample_limit < 1:
         raise ArchConfigError(
             f"{config_path}: settings.sample_limit must be >= 1 (got {sample_limit})"
@@ -244,9 +239,9 @@ def load_arch_config(repo_root: Path, path: Optional[Path] = None) -> ArchConfig
 def _parse_import_cycles(raw: dict, path: Path) -> ImportCyclesConfig:
     defaults = ImportCyclesConfig()
     cfg = ImportCyclesConfig(
-        enabled=_bool(raw, "enabled", defaults.enabled, path, "import_cycles"),
-        min_hops=_int(raw, "min_hops", defaults.min_hops, path, "import_cycles"),
-        max_hops=_int(raw, "max_hops", defaults.max_hops, path, "import_cycles"),
+        enabled=_bool(raw, "enabled", defaults.enabled, path, "policies.import_cycles"),
+        min_hops=_int(raw, "min_hops", defaults.min_hops, path, "policies.import_cycles"),
+        max_hops=_int(raw, "max_hops", defaults.max_hops, path, "policies.import_cycles"),
     )
     if cfg.min_hops < 2:
         raise ArchConfigError(
@@ -262,7 +257,7 @@ def _parse_import_cycles(raw: dict, path: Path) -> ImportCyclesConfig:
 
 def _parse_cross_package(raw: dict, path: Path) -> CrossPackageConfig:
     defaults = CrossPackageConfig()
-    enabled = _bool(raw, "enabled", defaults.enabled, path, "cross_package")
+    enabled = _bool(raw, "enabled", defaults.enabled, path, "policies.cross_package")
     pairs_raw = raw.get("pairs")
     if pairs_raw is None:
         return CrossPackageConfig(enabled=enabled, pairs=defaults.pairs)
@@ -304,23 +299,23 @@ def _parse_layer_bypass(raw: dict, path: Path) -> LayerBypassConfig:
             f"{path}: policies.layer_bypass.controller_labels must not be empty"
         )
     return LayerBypassConfig(
-        enabled=_bool(raw, "enabled", defaults.enabled, path, "layer_bypass"),
+        enabled=_bool(raw, "enabled", defaults.enabled, path, "policies.layer_bypass"),
         controller_labels=list(labels),
         repository_suffix=_str(
-            raw, "repository_suffix", defaults.repository_suffix, path, "layer_bypass"
+            raw, "repository_suffix", defaults.repository_suffix, path, "policies.layer_bypass"
         ),
         service_suffix=_str(
-            raw, "service_suffix", defaults.service_suffix, path, "layer_bypass"
+            raw, "service_suffix", defaults.service_suffix, path, "policies.layer_bypass"
         ),
-        call_depth=_int(raw, "call_depth", defaults.call_depth, path, "layer_bypass"),
+        call_depth=_int(raw, "call_depth", defaults.call_depth, path, "policies.layer_bypass"),
     )
 
 
 def _parse_coupling_ceiling(raw: dict, path: Path) -> CouplingCeilingConfig:
     defaults = CouplingCeilingConfig()
     cfg = CouplingCeilingConfig(
-        enabled=_bool(raw, "enabled", defaults.enabled, path, "coupling_ceiling"),
-        max_imports=_int(raw, "max_imports", defaults.max_imports, path, "coupling_ceiling"),
+        enabled=_bool(raw, "enabled", defaults.enabled, path, "policies.coupling_ceiling"),
+        max_imports=_int(raw, "max_imports", defaults.max_imports, path, "policies.coupling_ceiling"),
     )
     if cfg.max_imports < 1:
         raise ArchConfigError(
@@ -331,8 +326,8 @@ def _parse_coupling_ceiling(raw: dict, path: Path) -> CouplingCeilingConfig:
 
 def _parse_orphan_detection(raw: dict, path: Path) -> OrphanDetectionConfig:
     defaults = OrphanDetectionConfig()
-    enabled = _bool(raw, "enabled", defaults.enabled, path, "orphan_detection")
-    path_prefix = _str(raw, "path_prefix", defaults.path_prefix, path, "orphan_detection")
+    enabled = _bool(raw, "enabled", defaults.enabled, path, "policies.orphan_detection")
+    path_prefix = _str(raw, "path_prefix", defaults.path_prefix, path, "policies.orphan_detection")
     kinds_raw = raw.get("kinds", defaults.kinds)
     if not isinstance(kinds_raw, list):
         raise ArchConfigError(
@@ -437,28 +432,28 @@ def _parse_suppressions(raw: list, path: Path) -> list[Suppression]:
 # ── Tiny typed-getters ───────────────────────────────────────
 
 
-def _bool(raw: dict, key: str, default: bool, path: Path, section: str) -> bool:
+def _bool(raw: dict, key: str, default: bool, path: Path, section_path: str) -> bool:
     if key not in raw:
         return default
     v = raw[key]
     if not isinstance(v, bool):
-        raise ArchConfigError(f"{path}: policies.{section}.{key} must be a boolean")
+        raise ArchConfigError(f"{path}: {section_path}.{key} must be a boolean")
     return v
 
 
-def _int(raw: dict, key: str, default: int, path: Path, section: str) -> int:
+def _int(raw: dict, key: str, default: int, path: Path, section_path: str) -> int:
     if key not in raw:
         return default
     v = raw[key]
     if isinstance(v, bool) or not isinstance(v, int):
-        raise ArchConfigError(f"{path}: policies.{section}.{key} must be an integer")
+        raise ArchConfigError(f"{path}: {section_path}.{key} must be an integer")
     return v
 
 
-def _str(raw: dict, key: str, default: str, path: Path, section: str) -> str:
+def _str(raw: dict, key: str, default: str, path: Path, section_path: str) -> str:
     if key not in raw:
         return default
     v = raw[key]
     if not isinstance(v, str):
-        raise ArchConfigError(f"{path}: policies.{section}.{key} must be a string")
+        raise ArchConfigError(f"{path}: {section_path}.{key} must be a string")
     return v

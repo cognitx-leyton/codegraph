@@ -561,3 +561,12 @@ sample_limit = "ten"
 """)
     with pytest.raises(ArchConfigError, match="must be an integer"):
         load_arch_config(tmp_path)
+
+
+def test_sample_limit_bool_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[settings]
+sample_limit = true
+""")
+    with pytest.raises(ArchConfigError, match=r"settings\.sample_limit must be an integer"):
+        load_arch_config(tmp_path)
