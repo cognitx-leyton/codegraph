@@ -582,12 +582,21 @@ def arch_check(
         help="Restrict policies to nodes whose file path starts with this "
              "prefix. Repeatable. Mirrors --package/-p from 'codegraph index'.",
     ),
+    no_scope: bool = typer.Option(
+        False, "--no-scope",
+        help="Disable auto-scope even when packages are configured. "
+             "Checks the entire graph.",
+    ),
 ) -> None:
     """Run architecture-conformance policies against the live graph.
 
     Exits 0 when every policy passes, 1 when any policy reports a violation.
     Suitable as a CI gate — see ``.github/workflows/arch-check.yml`` for the
     reference integration.
+
+    When neither ``--scope`` nor ``--no-scope`` is given, auto-scopes to the
+    packages listed in ``codegraph.toml`` or ``pyproject.toml
+    [tool.codegraph]``.
     """
     from .arch_check import run_arch_check
     from .arch_config import ArchConfigError, load_arch_config
@@ -598,11 +607,23 @@ def arch_check(
         console.print(f"[bold red]arch-check config error:[/] {exc}")
         raise typer.Exit(code=2)
 
+    # Auto-scope: derive from configured packages when no explicit flag given.
+    effective_scope = scope
+    if scope is None and not no_scope:
+        cfg = load_config(repo.resolve())
+        if cfg.packages:
+            effective_scope = list(cfg.packages)
+            if not as_json:
+                console.print(
+                    f"[dim]auto-scope from {cfg.source}:[/] "
+                    + ", ".join(effective_scope)
+                )
+
     report = run_arch_check(
         uri, user, password,
         console=None if as_json else console,
         config=arch_cfg,
-        scope=scope,
+        scope=effective_scope,
     )
     if as_json:
         print(report.to_json())

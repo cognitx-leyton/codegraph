@@ -916,3 +916,97 @@ def test_run_arch_check_suppressions_in_json(monkeypatch):
     assert len(blob["stale_suppressions"]) == 1
     assert blob["stale_suppressions"][0]["policy"] == "import_cycles"
     assert blob["stale_suppressions"][0]["key"] == "x.py -> y.py"
+
+
+# ── CLI auto-scope tests ──────────────────────────────────────────────
+
+
+def _ok_report():
+    """Return a passing ArchReport with no violations."""
+    return ArchReport(policies=[], stale_suppressions=[])
+
+
+def _patch_cli(monkeypatch, config_packages=None, config_source=None):
+    """Patch run_arch_check, load_arch_config, and load_config for CLI tests.
+
+    Returns a dict whose ``"scope"`` key is set by the patched
+    ``run_arch_check`` each time it's called, so the test can inspect
+    what scope the CLI passed through.
+    """
+    from codegraph import cli as cli_mod
+    from codegraph.config import CodegraphConfig
+
+    captured: dict[str, Any] = {"scope": "NOT_CALLED"}
+
+    def fake_run(uri, user, password, *, console=None, config=None, scope=None):
+        captured["scope"] = scope
+        return _ok_report()
+
+    def fake_load_arch_config(repo, *, path=None):
+        return ArchConfig()
+
+    cfg = CodegraphConfig(
+        packages=config_packages or [],
+        source=config_source,
+    )
+
+    monkeypatch.setattr("codegraph.arch_check.run_arch_check", fake_run)
+    monkeypatch.setattr("codegraph.arch_config.load_arch_config", fake_load_arch_config)
+    monkeypatch.setattr(cli_mod, "load_config", lambda repo: cfg)
+    return captured
+
+
+def test_arch_check_cli_auto_scope_from_config(monkeypatch):
+    """When no --scope / --no-scope, packages from config become scope."""
+    from typer.testing import CliRunner
+    from codegraph.cli import app
+
+    captured = _patch_cli(
+        monkeypatch,
+        config_packages=["packages/server", "packages/web"],
+        config_source="codegraph.toml",
+    )
+    result = CliRunner().invoke(app, ["arch-check"])
+    assert result.exit_code == 0
+    assert captured["scope"] == ["packages/server", "packages/web"]
+
+
+def test_arch_check_cli_explicit_scope_overrides_config(monkeypatch):
+    """Explicit --scope wins over config packages."""
+    from typer.testing import CliRunner
+    from codegraph.cli import app
+
+    captured = _patch_cli(
+        monkeypatch,
+        config_packages=["packages/server"],
+        config_source="codegraph.toml",
+    )
+    result = CliRunner().invoke(app, ["arch-check", "--scope", "other/path"])
+    assert result.exit_code == 0
+    assert captured["scope"] == ["other/path"]
+
+
+def test_arch_check_cli_no_scope_flag_disables_auto(monkeypatch):
+    """--no-scope disables auto-scope even with packages configured."""
+    from typer.testing import CliRunner
+    from codegraph.cli import app
+
+    captured = _patch_cli(
+        monkeypatch,
+        config_packages=["packages/server"],
+        config_source="codegraph.toml",
+    )
+    result = CliRunner().invoke(app, ["arch-check", "--no-scope"])
+    assert result.exit_code == 0
+    assert captured["scope"] is None
+
+
+def test_arch_check_cli_no_config_no_scope_passes_none(monkeypatch):
+    """No config packages + no flags → scope=None (check entire graph)."""
+    from typer.testing import CliRunner
+    from codegraph.cli import app
+
+    captured = _patch_cli(monkeypatch)  # no packages
+    result = CliRunner().invoke(app, ["arch-check"])
+    assert result.exit_code == 0
+    assert captured["scope"] is None
