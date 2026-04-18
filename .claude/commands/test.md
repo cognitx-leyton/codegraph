@@ -36,7 +36,8 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
   python3 -m venv "$TMPVENV"
   "$TMPVENV/bin/pip" install "cognitx-codegraph[python]==$LATEST" --no-cache-dir -q
 
-  INSTALLED=$("$TMPVENV/bin/python" -c "from importlib.metadata import version; print(version('cognitx-codegraph'))" 2>/dev/null || echo "NONE")
+  INSTALLED=$("$TMPVENV/bin/pip" show cognitx-codegraph 2>/dev/null | grep '^Version:' | awk '{print $2}')
+  INSTALLED=${INSTALLED:-NONE}
   rm -rf "$_tmpdir"
 
   if [ "$INSTALLED" = "$LATEST" ]; then
