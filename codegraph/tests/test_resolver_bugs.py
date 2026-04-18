@@ -1,4 +1,4 @@
-"""Tests for resolver bug fixes: .js→.ts NodeNext remapping + cross-package alias scoping.
+"""Tests for resolver bug fixes.
 
 Bug 1: NodeNext-style imports (``import './foo.js'`` when source is ``foo.ts``)
 were treated as external because the resolver tried ``foo.js.ts`` not ``foo.ts``.
@@ -6,6 +6,13 @@ were treated as external because the resolver tried ``foo.js.ts`` not ``foo.ts``
 Bug 2: ``@/*`` path aliases in multi-package repos resolved to the wrong
 package because alias lookup iterated all packages without scoping to the
 importer's own package first.
+
+Bug 3 (issue #15): Monorepo workspace imports (``import { X } from 'twenty-ui/display'``)
+fell through to IMPORTS_EXTERNAL because the resolver had no mechanism to map
+bare package names to filesystem paths.
+
+Bug 4 (issue #15): ``_read_ts_paths()`` did not follow ``"extends"`` chains in
+tsconfig.json, missing path aliases defined in parent configs.
 """
 from __future__ import annotations
 
@@ -221,3 +228,258 @@ class TestCrossPackageAlias:
         # Backend file should resolve to backend's helper
         be_hit = r.resolve("apps/backend/src/index.ts", "@/helper")
         assert be_hit == "apps/backend/src/utils/helper.ts"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Bug 3: workspace (monorepo) package resolution (issue #15)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestWorkspaceResolution:
+    """Verify that bare workspace package imports resolve via package.json names."""
+
+    def test_workspace_subpath_resolves(self, tmp_path: Path):
+        """``import { X } from 'twenty-ui/display'`` resolves under the package's src/."""
+        front = tmp_path / "front"
+        ui = tmp_path / "twenty-ui"
+        _write(front, "src/App.tsx")
+        _write(front, "tsconfig.json", '{}')
+        _write(front, "package.json", '{"name": "twenty-front"}')
+        _write(ui, "src/display/index.ts")
+        _write(ui, "tsconfig.json", '{}')
+        _write(ui, "package.json", '{"name": "twenty-ui"}')
+        r = _make_resolver(tmp_path, [front, ui])
+        hit = r.resolve("front/src/App.tsx", "twenty-ui/display")
+        assert hit == "twenty-ui/src/display/index.ts"
+
+    def test_workspace_bare_import_resolves(self, tmp_path: Path):
+        """``import X from 'twenty-ui'`` resolves to the package's src/index.ts."""
+        front = tmp_path / "front"
+        ui = tmp_path / "twenty-ui"
+        _write(front, "src/App.tsx")
+        _write(front, "tsconfig.json", '{}')
+        _write(front, "package.json", '{"name": "twenty-front"}')
+        _write(ui, "src/index.ts")
+        _write(ui, "tsconfig.json", '{}')
+        _write(ui, "package.json", '{"name": "twenty-ui"}')
+        r = _make_resolver(tmp_path, [front, ui])
+        hit = r.resolve("front/src/App.tsx", "twenty-ui")
+        assert hit == "twenty-ui/src/index.ts"
+
+    def test_workspace_nested_subpath(self, tmp_path: Path):
+        """``import { Y } from 'twenty-shared/utils'`` resolves deeper sub-paths."""
+        front = tmp_path / "front"
+        shared = tmp_path / "twenty-shared"
+        _write(front, "src/App.tsx")
+        _write(front, "tsconfig.json", '{}')
+        _write(front, "package.json", '{"name": "twenty-front"}')
+        _write(shared, "src/utils/index.ts")
+        _write(shared, "tsconfig.json", '{}')
+        _write(shared, "package.json", '{"name": "twenty-shared"}')
+        r = _make_resolver(tmp_path, [front, shared])
+        hit = r.resolve("front/src/App.tsx", "twenty-shared/utils")
+        assert hit == "twenty-shared/src/utils/index.ts"
+
+    def test_workspace_no_src_dir_fallback(self, tmp_path: Path):
+        """When no ``src/`` directory exists, resolve under the package root."""
+        front = tmp_path / "front"
+        lib = tmp_path / "mylib"
+        _write(front, "src/App.tsx")
+        _write(front, "tsconfig.json", '{}')
+        _write(front, "package.json", '{"name": "front"}')
+        # mylib has no src/ — files live at the root
+        _write(lib, "utils/index.ts")
+        _write(lib, "tsconfig.json", '{}')
+        _write(lib, "package.json", '{"name": "mylib"}')
+        r = _make_resolver(tmp_path, [front, lib])
+        hit = r.resolve("front/src/App.tsx", "mylib/utils")
+        assert hit == "mylib/utils/index.ts"
+
+    def test_workspace_unknown_package_returns_none(self, tmp_path: Path):
+        """Unknown package names fall through to None (external)."""
+        front = tmp_path / "front"
+        _write(front, "src/App.tsx")
+        _write(front, "tsconfig.json", '{}')
+        _write(front, "package.json", '{"name": "front"}')
+        r = _make_resolver(tmp_path, [front])
+        hit = r.resolve("front/src/App.tsx", "unknown-pkg/foo")
+        assert hit is None
+
+    def test_workspace_coexists_with_aliases(self, tmp_path: Path):
+        """Aliases still resolve first; workspace is a fallback."""
+        front = tmp_path / "front"
+        ui = tmp_path / "twenty-ui"
+        _write(front, "src/App.tsx")
+        _write(front, "src/modules/display/index.ts")
+        _write(front, "tsconfig.json", '''{
+            "compilerOptions": { "paths": { "@/*": ["./src/modules/*"] } }
+        }''')
+        _write(front, "package.json", '{"name": "twenty-front"}')
+        _write(ui, "src/display/index.ts")
+        _write(ui, "tsconfig.json", '{}')
+        _write(ui, "package.json", '{"name": "twenty-ui"}')
+        r = _make_resolver(tmp_path, [front, ui])
+        # @/display resolves via alias, NOT workspace
+        alias_hit = r.resolve("front/src/App.tsx", "@/display")
+        assert alias_hit == "front/src/modules/display/index.ts"
+        # twenty-ui/display resolves via workspace
+        ws_hit = r.resolve("front/src/App.tsx", "twenty-ui/display")
+        assert ws_hit == "twenty-ui/src/display/index.ts"
+
+    def test_workspace_with_js_remap(self, tmp_path: Path):
+        """JS→TS remap works inside workspace sub-paths."""
+        front = tmp_path / "front"
+        ui = tmp_path / "twenty-ui"
+        _write(front, "src/App.tsx")
+        _write(front, "tsconfig.json", '{}')
+        _write(front, "package.json", '{"name": "front"}')
+        _write(ui, "src/display/Icon.ts")
+        _write(ui, "tsconfig.json", '{}')
+        _write(ui, "package.json", '{"name": "twenty-ui"}')
+        r = _make_resolver(tmp_path, [front, ui])
+        hit = r.resolve("front/src/App.tsx", "twenty-ui/display/Icon.js")
+        assert hit == "twenty-ui/src/display/Icon.ts"
+
+    def test_workspace_scoped_package(self, tmp_path: Path):
+        """``@scope/name/sub`` resolves correctly for scoped npm names."""
+        front = tmp_path / "front"
+        shared = tmp_path / "shared"
+        _write(front, "src/App.tsx")
+        _write(front, "tsconfig.json", '{}')
+        _write(front, "package.json", '{"name": "front"}')
+        _write(shared, "src/utils/index.ts")
+        _write(shared, "tsconfig.json", '{}')
+        _write(shared, "package.json", '{"name": "@twenty/shared"}')
+        r = _make_resolver(tmp_path, [front, shared])
+        hit = r.resolve("front/src/App.tsx", "@twenty/shared/utils")
+        assert hit == "shared/src/utils/index.ts"
+
+    def test_workspace_scoped_bare_import(self, tmp_path: Path):
+        """``@scope/name`` without sub-path resolves to the package root."""
+        front = tmp_path / "front"
+        shared = tmp_path / "shared"
+        _write(front, "src/App.tsx")
+        _write(front, "tsconfig.json", '{}')
+        _write(front, "package.json", '{"name": "front"}')
+        _write(shared, "src/index.ts")
+        _write(shared, "tsconfig.json", '{}')
+        _write(shared, "package.json", '{"name": "@twenty/shared"}')
+        r = _make_resolver(tmp_path, [front, shared])
+        hit = r.resolve("front/src/App.tsx", "@twenty/shared")
+        assert hit == "shared/src/index.ts"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Bug 4: tsconfig "extends" chain (issue #15)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestTsconfigExtends:
+    """Verify that ``_read_ts_paths()`` follows tsconfig ``extends`` chains."""
+
+    def test_extends_inherits_parent_paths(self, tmp_path: Path):
+        """Child extends parent; parent has paths; child has none → parent paths resolve."""
+        pkg = tmp_path / "app"
+        _write(pkg, "tsconfig.base.json", '''{
+            "compilerOptions": { "paths": { "@shared/*": ["./shared/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '{ "extends": "./tsconfig.base.json" }')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "shared/utils.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@shared/utils")
+        assert hit == "app/shared/utils.ts"
+
+    def test_extends_child_overrides_parent(self, tmp_path: Path):
+        """Both parent and child define ``@/*``; child wins."""
+        pkg = tmp_path / "app"
+        _write(pkg, "tsconfig.base.json", '''{
+            "compilerOptions": { "paths": { "@/*": ["./parent-src/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '''{
+            "extends": "./tsconfig.base.json",
+            "compilerOptions": { "paths": { "@/*": ["./child-src/*"] } }
+        }''')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "child-src/utils.ts")
+        _write(pkg, "parent-src/utils.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@/utils")
+        assert hit == "app/child-src/utils.ts"
+
+    def test_extends_chain_three_levels(self, tmp_path: Path):
+        """Grandparent → parent → child; paths merge correctly."""
+        pkg = tmp_path / "app"
+        _write(pkg, "tsconfig.grandparent.json", '''{
+            "compilerOptions": { "paths": { "@gp/*": ["./gp/*"] } }
+        }''')
+        _write(pkg, "tsconfig.parent.json", '''{
+            "extends": "./tsconfig.grandparent.json",
+            "compilerOptions": { "paths": { "@parent/*": ["./parent/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '''{
+            "extends": "./tsconfig.parent.json",
+            "compilerOptions": { "paths": { "@child/*": ["./child/*"] } }
+        }''')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "gp/a.ts")
+        _write(pkg, "parent/b.ts")
+        _write(pkg, "child/c.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        assert r.resolve("app/src/index.ts", "@gp/a") == "app/gp/a.ts"
+        assert r.resolve("app/src/index.ts", "@parent/b") == "app/parent/b.ts"
+        assert r.resolve("app/src/index.ts", "@child/c") == "app/child/c.ts"
+
+    def test_extends_missing_parent_graceful(self, tmp_path: Path):
+        """Child extends nonexistent file → no crash, child paths still work."""
+        pkg = tmp_path / "app"
+        _write(pkg, "tsconfig.json", '''{
+            "extends": "./nonexistent.json",
+            "compilerOptions": { "paths": { "@/*": ["./src/*"] } }
+        }''')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "src/utils.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@/utils")
+        assert hit == "app/src/utils.ts"
+
+    def test_extends_circular_reference_safe(self, tmp_path: Path):
+        """A extends B extends A → no infinite loop."""
+        pkg = tmp_path / "app"
+        _write(pkg, "tsconfig.json", '''{
+            "extends": "./tsconfig.other.json",
+            "compilerOptions": { "paths": { "@a/*": ["./a/*"] } }
+        }''')
+        _write(pkg, "tsconfig.other.json", '''{
+            "extends": "./tsconfig.json",
+            "compilerOptions": { "paths": { "@b/*": ["./b/*"] } }
+        }''')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "a/x.ts")
+        _write(pkg, "b/y.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        # Both aliases should work despite the circular extends
+        assert r.resolve("app/src/index.ts", "@a/x") == "app/a/x.ts"
+        assert r.resolve("app/src/index.ts", "@b/y") == "app/b/y.ts"
+
+    def test_extends_array(self, tmp_path: Path):
+        """TypeScript 5.0+ supports ``"extends": [...]`` — all parents merge."""
+        pkg = tmp_path / "app"
+        _write(pkg, "tsconfig.base.json", '''{
+            "compilerOptions": { "paths": { "@base/*": ["./base/*"] } }
+        }''')
+        _write(pkg, "tsconfig.paths.json", '''{
+            "compilerOptions": { "paths": { "@extra/*": ["./extra/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '''{
+            "extends": ["./tsconfig.base.json", "./tsconfig.paths.json"],
+            "compilerOptions": { "paths": { "@child/*": ["./child/*"] } }
+        }''')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "base/a.ts")
+        _write(pkg, "extra/b.ts")
+        _write(pkg, "child/c.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        assert r.resolve("app/src/index.ts", "@base/a") == "app/base/a.ts"
+        assert r.resolve("app/src/index.ts", "@extra/b") == "app/extra/b.ts"
+        assert r.resolve("app/src/index.ts", "@child/c") == "app/child/c.ts"

@@ -281,7 +281,8 @@ def _run_index(
         pkg_configs.append(pkg_config)
 
         lang_label = pkg_config.language
-        say(f"  [green]•[/] {pkg_path} ({lang_label}): aliases={list(pkg_config.aliases.keys())}")
+        name_note = f" name={pkg_config.pkg_json_name}" if pkg_config.pkg_json_name else ""
+        say(f"  [green]•[/] {pkg_path} ({lang_label}):{name_note} aliases={list(pkg_config.aliases.keys())}")
 
         if pkg_config.language == "ts":
             info = FrameworkDetector(pkg_dir).detect()

@@ -78,9 +78,15 @@ def _strip_jsonc(raw: str) -> str:
     return "".join(out)
 
 
-def _read_ts_paths(tsconfig: Path) -> dict[str, list[str]]:
+def _read_ts_paths(tsconfig: Path, _seen: Optional[set[str]] = None) -> dict[str, list[str]]:
     if not tsconfig.exists():
         return {}
+    resolved_key = str(tsconfig.resolve())
+    if _seen is None:
+        _seen = set()
+    if resolved_key in _seen or len(_seen) >= 10:
+        return {}
+    _seen.add(resolved_key)
     try:
         raw = tsconfig.read_text()
     except OSError:
@@ -91,7 +97,23 @@ def _read_ts_paths(tsconfig: Path) -> dict[str, list[str]]:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
         return {}
-    return (data.get("compilerOptions") or {}).get("paths") or {}
+    # Follow "extends" chain — parent paths are inherited, child overrides.
+    paths: dict[str, list[str]] = {}
+    extends = data.get("extends")
+    if isinstance(extends, str):
+        extends = [extends]
+    if isinstance(extends, list):
+        for ext in extends:
+            if not isinstance(ext, str):
+                continue
+            parent = (tsconfig.parent / ext).resolve()
+            # If extends points to a directory or has no .json suffix, try adding it
+            if not parent.suffix:
+                parent = parent.with_suffix(".json")
+            paths.update(_read_ts_paths(parent, _seen))
+    child_paths = (data.get("compilerOptions") or {}).get("paths") or {}
+    paths.update(child_paths)
+    return paths
 
 
 @dataclass
@@ -101,6 +123,7 @@ class PackageConfig:
     repo_root: Path
     aliases: dict[str, list[Path]] = field(default_factory=dict)
     language: str = "ts"  # "ts" (TypeScript/TSX) or "py" (Python)
+    pkg_json_name: Optional[str] = None  # "name" from package.json (e.g. "twenty-ui")
 
 
 def load_package_config(repo_root: Path, package_dir: Path) -> PackageConfig:
@@ -111,6 +134,12 @@ def load_package_config(repo_root: Path, package_dir: Path) -> PackageConfig:
         for t in targets:
             resolved.append((package_dir / t.rstrip("*")).resolve())
         cfg.aliases[alias_prefix] = resolved
+    # Read package.json "name" for workspace package resolution.
+    try:
+        pkg_data = json.loads((package_dir / "package.json").read_text())
+        cfg.pkg_json_name = pkg_data.get("name") or None
+    except (OSError, json.JSONDecodeError):
+        pass
     return cfg
 
 
@@ -198,6 +227,7 @@ class Resolver:
         self.packages = packages
         self._path_index: Optional[PathIndex] = None
         self._alias_cache: dict[str, list[tuple[str, Path]]] = {}
+        self._workspace_pkgs: dict[str, PackageConfig] = {}
 
     def set_path_index(self, path_index: PathIndex) -> None:
         self._path_index = path_index
@@ -211,6 +241,12 @@ class Resolver:
                 self._alias_cache.setdefault(pkg_key, [])
                 for t in targets:
                     self._alias_cache[pkg_key].append((alias, t))
+        # Workspace package registry: map package.json "name" → PackageConfig
+        # so bare imports like 'twenty-ui/display' can resolve to source files.
+        self._workspace_pkgs = {}
+        for pkg in self.packages:
+            if pkg.pkg_json_name:
+                self._workspace_pkgs[pkg.pkg_json_name] = pkg
 
     def resolve(self, importer_rel: str, specifier: str) -> Optional[str]:
         if self._path_index is None:
@@ -254,7 +290,9 @@ class Resolver:
             hit = self._try_aliases(spec, alias_pairs)
             if hit:
                 return hit
-        return None
+        # Workspace package resolution: try matching bare specifier against
+        # package.json names (e.g. 'twenty-ui/display' → packages/twenty-ui/src/display)
+        return self._try_workspace(spec)
 
     def _try_aliases(self, spec: str, alias_pairs: list[tuple[str, Path]]) -> Optional[str]:
         """Try resolving *spec* against a list of (alias_prefix, target_dir) pairs."""
@@ -298,6 +336,40 @@ class Resolver:
                 if remapped in self._path_index.files:
                     return remapped
         return None
+
+    # ── Workspace (monorepo) resolution ────────────────────────────────
+
+    def _try_workspace(self, spec: str) -> Optional[str]:
+        """Resolve a bare workspace package import like ``twenty-ui/display``.
+
+        Splits the specifier on the first ``/``, matches the prefix against
+        ``package.json`` names of indexed packages, then resolves the
+        remainder under ``<pkg_root>/src/`` (falling back to ``<pkg_root>/``
+        if no ``src/`` directory exists).  Scoped packages (``@scope/name``)
+        are handled by splitting on the second ``/``.
+        """
+        if self._path_index is None:
+            return None
+        pkg_name, _, sub_path = spec.partition("/")
+        pkg = self._workspace_pkgs.get(pkg_name)
+        # Scoped packages: @scope/name → split on the second '/'
+        if pkg is None and pkg_name.startswith("@") and sub_path:
+            scoped_name, _, sub_path = sub_path.partition("/")
+            pkg_name = f"{pkg_name}/{scoped_name}"
+            pkg = self._workspace_pkgs.get(pkg_name)
+        if pkg is None:
+            return None
+        src_dir = pkg.root / "src"
+        source_root = src_dir if src_dir.is_dir() else pkg.root
+        candidate = (source_root / sub_path) if sub_path else source_root
+        try:
+            base_rel = str(candidate.resolve().relative_to(self.repo_root)).replace("\\", "/")
+        except ValueError:
+            return None
+        hit = self._path_index.try_resolve(base_rel)
+        if hit:
+            return hit
+        return self._try_js_remap(base_rel)
 
     # ── Python resolution ─────────────────────────────────────────────
 
