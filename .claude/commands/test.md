@@ -22,18 +22,39 @@ python -m compileall codegraph/ -q
 
 ## Stage 2: Install Test
 
-Test that the published package is installable:
+Test that the published package is installable with version assertion and retry for PyPI propagation lag:
 
 ```bash
 LATEST=$(grep '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
-TMPVENV=$(mktemp -d)/venv
-python3 -m venv "$TMPVENV"
-"$TMPVENV/bin/pip" install "cognitx-codegraph[python]==$LATEST" -q
-"$TMPVENV/bin/codegraph" --help > /dev/null && echo "Install OK" || echo "Install FAILED"
-rm -rf "$(dirname $TMPVENV)"
+MAX_ATTEMPTS=3
+BACKOFF=30
+INSTALL_OK=false
+
+for attempt in $(seq 1 $MAX_ATTEMPTS); do
+  _tmpdir=$(mktemp -d)
+  TMPVENV="$_tmpdir/venv"
+  python3 -m venv "$TMPVENV"
+  "$TMPVENV/bin/pip" install "cognitx-codegraph[python]==$LATEST" --no-cache-dir -q
+
+  INSTALLED=$("$TMPVENV/bin/python" -c "from importlib.metadata import version; print(version('cognitx-codegraph'))" 2>/dev/null || echo "NONE")
+  rm -rf "$_tmpdir"
+
+  if [ "$INSTALLED" = "$LATEST" ]; then
+    echo "Install OK — version $INSTALLED verified (attempt $attempt/$MAX_ATTEMPTS)"
+    INSTALL_OK=true
+    break
+  fi
+
+  if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+    echo "Attempt $attempt/$MAX_ATTEMPTS: expected $LATEST, got $INSTALLED. Retrying in ${BACKOFF}s..."
+    sleep $BACKOFF
+  else
+    echo "Install FAILED — expected $LATEST but got $INSTALLED after $MAX_ATTEMPTS attempts"
+  fi
+done
 ```
 
-**Pass criteria**: `codegraph --help` exits 0 in a fresh venv.
+**Pass criteria**: Installed version matches `pyproject.toml` version exactly. Retries up to 3 times with 30s backoff for PyPI propagation lag.
 
 ## Stage 3: Self-Index (dogfood)
 
