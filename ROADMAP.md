@@ -2,17 +2,17 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `039497d` → `1d538fa` (fixed install-test flakiness and `__version__` hardcode — issue #124; PR #125 merged CI arch-check fix to main; version bumped to 0.1.26).
+> **Last updated:** 2026-04-18 after commits `1d538fa` → `af36698` (added `exit 1` to install-retry loop on final failure — issue #127; PR #128 merged to main; version bumped to 0.1.27).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-124`. Fixed install-test flakiness and `__version__` hardcode (issue #124, shipped as `1d538fa`): `__init__.py` now reads version from `importlib.metadata` instead of a hardcoded `"0.1.0"` string; `.claude/commands/test.md` Stage 2 bash block replaced with a retry loop (pip install flakiness) + version assertion (`codegraph.__version__ == pyproject.toml version`). PR #125 (CI arch-check workflow paths, issue #121) merged to main; version bumped to 0.1.26.
+- **Branch:** `archon/task-fix-issue-127`. Added `exit 1` to the install-retry loop in `.claude/commands/test.md` on final failure (issue #127, shipped as `af36698`): the `else` block now emits a non-zero exit code after "Install FAILED" so CI/pipeline contexts detect the failure; a clarifying note documents the dual-signal design (exit code for CI, echo for slash-command context). PR #128 merged to main; version bumped to 0.1.27.
 - **Tests:** 448 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.26 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.27 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `039497d`)
+## Shipped since the last roadmap update (commit `1d538fa`)
 
 ```
+af36698 fix(test): add exit 1 to install-retry loop on final failure
+639b279 Merge pull request #128 from cognitx-leyton/archon/task-fix-issue-124
+000fd94 chore: bump version to 0.1.27
+55f192c docs(roadmap): update session handoff
 1d538fa fix(test): resolve install-test flakiness and version hardcode
 4768f69 Merge pull request #125 from cognitx-leyton/archon/task-fix-issue-121
 9b79c9a chore: bump version to 0.1.26
@@ -123,6 +127,12 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 ```
 
 Twenty-one sessions' worth of work grouped by theme:
+
+### Install-retry loop `exit 1` on final failure (issue #127)
+
+- `af36698 fix(test)` — `.claude/commands/test.md` Stage 2 install-retry `else` block was missing a non-zero exit code after emitting the "Install FAILED" echo. Added `exit 1` so CI/pipeline contexts that read exit codes detect the failure rather than silently proceeding. A clarifying comment documents the dual-signal design: `exit 1` for CI, the echo for Claude Code slash-command context where the exit code surfaces differently. No production code changes. 448 tests unchanged.
+
+- `639b279 merge` + `000fd94 chore` — PR #128 (issue #127) merged to `main`; version bumped to v0.1.27.
 
 ### Install-test flakiness + `__version__` hardcode (issue #124)
 
