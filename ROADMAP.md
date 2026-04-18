@@ -2,17 +2,17 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `e40fcec` → `039497d` (aligned CI `arch-check.yml` to index from `codegraph/` and drop explicit `--scope` flags in favour of pyproject.toml auto-scope — issue #121; PR #122 merged to main; version bumped to 0.1.25).
+> **Last updated:** 2026-04-18 after commits `039497d` → `1d538fa` (fixed install-test flakiness and `__version__` hardcode — issue #124; PR #125 merged CI arch-check fix to main; version bumped to 0.1.26).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-121`. Aligned `.github/workflows/arch-check.yml` so the CI index step runs from `codegraph/` with `-p codegraph -p tests` (matching the pyproject.toml auto-scope paths), and the arch-check step drops explicit `--scope codegraph/codegraph --scope codegraph/tests` flags so pyproject.toml auto-scope activates in CI — issue #121, shipped as `039497d`. PR #122 (pyproject.toml auto-scope config fix, issue #119) merged to main; version bumped to 0.1.25.
+- **Branch:** `archon/task-fix-issue-124`. Fixed install-test flakiness and `__version__` hardcode (issue #124, shipped as `1d538fa`): `__init__.py` now reads version from `importlib.metadata` instead of a hardcoded `"0.1.0"` string; `.claude/commands/test.md` Stage 2 bash block replaced with a retry loop (pip install flakiness) + version assertion (`codegraph.__version__ == pyproject.toml version`). PR #125 (CI arch-check workflow paths, issue #121) merged to main; version bumped to 0.1.26.
 - **Tests:** 448 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.25 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.26 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `e40fcec`)
+## Shipped since the last roadmap update (commit `039497d`)
 
 ```
+1d538fa fix(test): resolve install-test flakiness and version hardcode
+4768f69 Merge pull request #125 from cognitx-leyton/archon/task-fix-issue-121
+9b79c9a chore: bump version to 0.1.26
+3961abd docs(roadmap): update session handoff
 039497d fix(ci): align arch-check workflow paths with pyproject.toml auto-scope
 3d69ec3 Merge pull request #122 from cognitx-leyton/archon/task-fix-issue-119
 eb4a4c8 chore: bump version to 0.1.25
@@ -118,7 +122,13 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Twenty sessions' worth of work grouped by theme:
+Twenty-one sessions' worth of work grouped by theme:
+
+### Install-test flakiness + `__version__` hardcode (issue #124)
+
+- `1d538fa fix(test)` — Two related problems fixed in one commit. **(1) `__init__.py` hardcoded `__version__ = "0.1.0"`** which never changed with version bumps; replaced with `importlib.metadata.version("cognitx-codegraph")` (with a graceful fallback to `"0.0.0"` for editable installs before the package is installed). **(2) `.claude/commands/test.md` Stage 2 bash block** was a single `pip install` + `python -c` assertion that would fail transiently on slow networks. Replaced with a retry loop (3 attempts, 10s backoff) + `TMPDIR`-aware venv + version assertion (`codegraph.__version__ == <pyproject.toml version>`). Code-review fixes applied: `TMPDIR` env var shadowing avoided (renamed to `_tmpdir`); `2>/dev/null` removed from `pip install` so diagnostic errors surface. 448 tests unchanged.
+
+- `4768f69 merge` + `9b79c9a chore` — PR #125 (CI arch-check workflow paths, issue #121) merged to `main`; version bumped to v0.1.26.
 
 ### CI arch-check workflow — align index paths and drop explicit --scope flags (issue #121)
 
@@ -284,10 +294,10 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-121` |
+| Current branch | `archon/task-fix-issue-124` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`039497d` — CI arch-check workflow path alignment, pending PR) |
-| Open PR | None. PR #122 (pyproject.toml auto-scope config, issue #119) merged to main. |
+| Unpushed commits | 1 (`1d538fa` — install-test flakiness + `__version__` hardcode fix, pending PR) |
+| Open PR | None. PR #125 (CI arch-check workflow paths, issue #121) merged to main. |
 | Working tree | Clean |
 | Test count | 448 passing + 1 deselected |
 | Test runtime | ~16 s |
@@ -557,6 +567,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-typed-getter-prefix.plan.md` — shipped as `d04af53`.
 - `fix-issue-119-arch-check-scope.plan.md` — shipped as `e40fcec`.
 - `fix-ci-arch-check-scope.plan.md` — shipped as `039497d`.
+- `fix-install-test-flakiness.plan.md` — shipped as `1d538fa`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -703,6 +714,9 @@ Grep commit bodies for rationale:
 - Why `_bool`/`_int`/`_str` helpers now take `section_path` instead of `section` and format errors as `f"{section_path}.{key}"` (callers are the only ones with full context on where the value lives in the TOML tree; the helper had no basis for assuming `"policies."` as a universal prefix — `sample_limit` lives under `"settings"`, not `"policies"`) → `d04af53`
 - Why CI index uses `-p codegraph -p tests` (not `-p codegraph/codegraph`) and arch-check drops explicit `--scope` (the CLI runs from `codegraph/`, so graph paths are relative to that directory — `codegraph/cli.py`, not `codegraph/codegraph/cli.py`; explicit `--scope codegraph/codegraph` never matched anything and silently bypassed scope filtering; letting `pyproject.toml` auto-scope drive both local and CI keeps them in sync) → `039497d`
 - Why `pyproject.toml` packages use `["codegraph", "tests"]` not `["codegraph/codegraph", "codegraph/tests"]` (`load_config` discovers `pyproject.toml` from the `codegraph/` directory where `arch-check` is run; `codegraph index .` from that directory stores file paths relative to `.`, so graph paths are `codegraph/cli.py` not `codegraph/codegraph/cli.py`; the longer paths are only correct when indexing from the repo root — which CI does via `-p codegraph/codegraph`) → `e40fcec`
+- Why `__version__` uses `importlib.metadata.version()` rather than a hardcoded string (a hardcoded string must be updated manually on every version bump and was already stale at `"0.1.0"` while pyproject.toml was at `0.1.26`; `importlib.metadata` reads the installed package metadata which is always in sync with `pyproject.toml` after `pip install -e .`; fallback to `"0.0.0"` covers the case where the package is imported from source without being installed) → `1d538fa`
+- Why `TMPDIR` was renamed to `_tmpdir` in the test slash command (TMPDIR is a standard POSIX environment variable; shadowing it in the shell scope could cause downstream tools in the same script to create temp files in the wrong directory; `_tmpdir` is a local variable name that avoids the collision) → `1d538fa`
+- Why `2>/dev/null` was removed from `pip install` in the test slash command (silently suppressing pip's stderr hides diagnostic information — network errors, SSL failures, package conflict messages — that are essential when the install fails; the retry loop already provides flakiness tolerance, so suppression is no longer needed as a noise-reduction measure) → `1d538fa`
 - Why `assert not (incomplete and new_violation_count == 0)` is sound (when `incomplete=True`, at least `violation_count - len(sample)` violations were never fetched; even if all sampled rows were suppressed, the unseen rows remain — so `violation_count > 0` is guaranteed and `passed` can never be True; the assert documents and enforces this invariant to catch future regressions) → `082c943`
 - Why `--no-scope` is needed when auto-scope is active (the graph may deliberately co-index multiple projects for cross-project arch-check; `--no-scope` restores the pre-#105 full-graph behaviour without requiring the user to delete their config) → `ae21e20`
 - Why `--scope` takes precedence over auto-scope (explicit always beats implicit; a CI job that passes `--scope` should not be silently overridden by whatever config the target repo happens to have) → `ae21e20`
