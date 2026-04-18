@@ -2,17 +2,17 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `d5fdc80` → `581d9db` (closed GitHub issue #124 with a comment referencing PR #128 — no code changes; PR #130 (issue #126 follow-up) merged to main; version bumped to 0.1.29).
+> **Last updated:** 2026-04-18 after commits `2391bfc` → `61de3b1` (version bumped to 0.1.30; PR #132 merged (issue #124 housekeeping); `.github/pull_request_template.md` created to address issue #131 — auto-closes linked issues on merge).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-124`. Closed GitHub issue #124 with a comment referencing PR #128 (which had already shipped the fix — `__version__` dynamic lookup + install-test retry loop — but was missing a `Closes #124` keyword). No code changes this session. PR #130 merged to main (issue #126 follow-up); version bumped to 0.1.29.
+- **Branch:** `archon/task-fix-issue-131`. Created `.github/pull_request_template.md` to address issue #131 — a 13-line template with a pre-filled `Closes #` line, `## Summary` section, and a 3-item checklist (conventional commits, pytest, arch-check). GitHub will now auto-close linked issues when a PR using this template is merged. No code changes. PR #132 merged to main (issue #124 housekeeping); version bumped to 0.1.30.
 - **Tests:** 448 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.29 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.30 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `d5fdc80`)
+## Shipped since the last roadmap update (commit `2391bfc`)
 
 ```
+61de3b1 docs(github): add pull request template
+a4fa7d8 Merge pull request #132 from cognitx-leyton/archon/task-fix-issue-124
+b876054 chore: bump version to 0.1.30
+2391bfc docs(roadmap): update session handoff
 581d9db Merge pull request #130 from cognitx-leyton/archon/task-fix-issue-126
 82ec7d3 chore: bump version to 0.1.29
 d5fdc80 docs(roadmap): update session handoff
@@ -133,7 +137,15 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Twenty-three sessions' worth of work grouped by theme:
+Twenty-five sessions' worth of work grouped by theme:
+
+### PR template + version bump to 0.1.30 (issue #131, PR #132)
+
+- `61de3b1 docs(github)` — `.github/pull_request_template.md` created (13 lines). Contains an HTML comment explaining the template's purpose, a pre-filled `Closes #` line on its own (so GitHub auto-closes linked issues on merge), a `## Summary` free-text section, and a 3-item checklist: conventional commit prefix, `pytest tests/ -q` green, `codegraph arch-check` exit 0. Checklist references align exactly with `CLAUDE.md` conventions. No code changes — docs-only. 448 tests unchanged.
+
+- `a4fa7d8 merge` — PR #132 (branch `archon/task-fix-issue-124`) merged to `main`. Housekeeping: closed issue #124 programmatically after its fix had already shipped in PR #128 without a `Closes` keyword.
+
+- `b876054 chore` — `pyproject.toml` version bumped to v0.1.30.
 
 ### Closed issue #124 + version bump to 0.1.29 (PR #130)
 
@@ -325,10 +337,10 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-124` |
+| Current branch | `archon/task-fix-issue-131` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`1d538fa` — install-test flakiness + `__version__` hardcode fix, pending PR) |
-| Open PR | None. PR #125 (CI arch-check workflow paths, issue #121) merged to main. |
+| Unpushed commits | 1 (`61de3b1` — `.github/pull_request_template.md`, pending PR) |
+| Open PR | None. PR #132 (issue #124 housekeeping) merged to main. |
 | Working tree | Clean |
 | Test count | 448 passing + 1 deselected |
 | Test runtime | ~16 s |
