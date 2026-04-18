@@ -40,6 +40,7 @@ from .arch_config import (
     ImportCyclesConfig,
     LayerBypassConfig,
     OrphanDetectionConfig,
+    Suppression,
     load_arch_config,
 )
 
@@ -79,12 +80,15 @@ class PolicyResult:
     violation_count: int
     sample: list[dict] = field(default_factory=list)
     detail: str = ""
+    suppressed_count: int = 0
+    suppressed_sample: list[dict] = field(default_factory=list)
 
 
 @dataclass
 class ArchReport:
     """Aggregate result across all policies."""
     policies: list[PolicyResult] = field(default_factory=list)
+    stale_suppressions: list[dict] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -95,6 +99,7 @@ class ArchReport:
             {
                 "ok": self.ok,
                 "policies": [asdict(p) for p in self.policies],
+                "stale_suppressions": self.stale_suppressions,
             },
             indent=2,
             default=str,
@@ -133,7 +138,11 @@ def run_arch_check(
     finally:
         driver.close()
 
-    report = ArchReport(policies=policies)
+    stale: list[dict] = []
+    if config.suppressions:
+        policies, stale = _apply_suppressions(policies, config.suppressions)
+
+    report = ArchReport(policies=policies, stale_suppressions=stale)
     if console is not None:
         _render(console, report)
     return report
@@ -477,6 +486,123 @@ def _check_custom(driver: Driver, custom: CustomPolicy) -> PolicyResult:
     )
 
 
+# ── Suppression matching ────────────────────────────────────
+
+
+def _violation_key(policy_name: str, row: dict) -> str:
+    """Compute a canonical string key from a violation sample row.
+
+    The key format is policy-specific so suppressions can target individual
+    violations precisely.
+    """
+    if policy_name == "import_cycles":
+        cycle = row.get("cycle", [])
+        return " -> ".join(str(p) for p in cycle)
+    if policy_name == "cross_package":
+        return f"{row.get('importer', '')} -> {row.get('importee', '')}"
+    if policy_name == "layer_bypass":
+        return (
+            f"{row.get('controller', '')} -> "
+            f"{row.get('repository', '')}.{row.get('method', '')}"
+        )
+    if policy_name == "coupling_ceiling":
+        return str(row.get("file", ""))
+    if policy_name == "orphan_detection":
+        return f"{row.get('kind', '')}:{row.get('name', '')}"
+    # Fallback for custom policies: join all values.
+    return " | ".join(str(v) for v in row.values())
+
+
+def _match_suppression_key(
+    policy_name: str, row: dict, suppression_key: str,
+) -> bool:
+    """Check whether *suppression_key* matches the violation in *row*.
+
+    For ``import_cycles``, the suppression key is an edge (``"A -> B"``)
+    and matches if that consecutive pair appears anywhere in the cycle.
+    For all other policies, it's an exact match against :func:`_violation_key`.
+    """
+    if policy_name == "import_cycles":
+        cycle = row.get("cycle", [])
+        parts = [s.strip() for s in suppression_key.split(" -> ")]
+        if len(parts) == 2:
+            # Edge-based matching: check consecutive pairs in the cycle.
+            for a, b in zip(cycle, cycle[1:]):
+                if str(a) == parts[0] and str(b) == parts[1]:
+                    return True
+            return False
+        # Full-cycle match fallback.
+        return _violation_key(policy_name, row) == suppression_key
+    return _violation_key(policy_name, row) == suppression_key
+
+
+def _apply_suppressions(
+    policies: list[PolicyResult],
+    suppressions: list[Suppression],
+) -> tuple[list[PolicyResult], list[dict]]:
+    """Match suppressions against policy results.
+
+    Returns ``(updated_policies, stale_suppressions)``.
+    """
+    if not suppressions:
+        return policies, []
+
+    # Group suppressions by policy name.
+    by_policy: dict[str, list[Suppression]] = {}
+    for s in suppressions:
+        by_policy.setdefault(s.policy, []).append(s)
+
+    # Map each suppression object to its index by identity, so duplicate
+    # (policy, key, reason) entries are tracked independently.
+    id_to_idx: dict[int, int] = {id(s): i for i, s in enumerate(suppressions)}
+    used: set[int] = set()  # indices into *suppressions*
+    updated: list[PolicyResult] = []
+
+    for p in policies:
+        policy_supps = by_policy.get(p.name)
+        # Skip when there are no suppressions for this policy, or when the
+        # policy produced no sample rows (nothing to match against).
+        if not policy_supps or not p.sample:
+            updated.append(p)
+            continue
+
+        kept: list[dict] = []
+        suppressed: list[dict] = []
+        for row in p.sample:
+            matched = False
+            for s in policy_supps:
+                if _match_suppression_key(p.name, row, s.key):
+                    used.add(id_to_idx[id(s)])
+                    matched = True
+                    break
+            if matched:
+                suppressed.append(row)
+            else:
+                kept.append(row)
+
+        suppressed_count = len(suppressed)
+        new_violation_count = max(0, p.violation_count - suppressed_count)
+        # Only mark as passing when the full violation count is accounted
+        # for.  When violation_count > len(sample) we can't be certain that
+        # unseen violations beyond the sample window are also suppressed.
+        updated.append(PolicyResult(
+            name=p.name,
+            passed=(new_violation_count == 0),
+            violation_count=new_violation_count,
+            sample=kept[:SAMPLE_LIMIT],
+            detail=p.detail,
+            suppressed_count=suppressed_count,
+            suppressed_sample=suppressed[:SAMPLE_LIMIT],
+        ))
+
+    stale = [
+        {"policy": s.policy, "key": s.key, "reason": s.reason}
+        for i, s in enumerate(suppressions)
+        if i not in used
+    ]
+    return updated, stale
+
+
 # ── Rendering ────────────────────────────────────────────────
 
 def _render(console: Console, report: ArchReport) -> None:
@@ -486,17 +612,22 @@ def _render(console: Console, report: ArchReport) -> None:
     t.add_column("result", width=6)
     t.add_column("policy")
     t.add_column("violations", justify="right")
+    t.add_column("suppressed", justify="right")
     t.add_column("detail", style="dim")
     for p in report.policies:
         if "(disabled" in p.detail:
             mark = "[yellow]SKIP"
+        elif p.passed and p.suppressed_count > 0:
+            mark = "[yellow]WARN"
         elif p.passed:
             mark = "[green]PASS"
         else:
             mark = "[red]FAIL"
-        t.add_row(mark, p.name, str(p.violation_count), p.detail)
+        suppressed_str = str(p.suppressed_count) if p.suppressed_count else ""
+        t.add_row(mark, p.name, str(p.violation_count), suppressed_str, p.detail)
     console.print(t)
 
+    # Failing policies — unsuppressed violations.
     for p in report.policies:
         if p.passed or not p.sample:
             continue
@@ -509,7 +640,34 @@ def _render(console: Console, report: ArchReport) -> None:
             tbl.add_row(*[str(row.get(h, "")) for h in headers])
         console.print(tbl)
 
+    # Suppressed violations — printed as warnings.
+    for p in report.policies:
+        if not p.suppressed_sample:
+            continue
+        console.print(
+            f"\n[yellow]{p.name}[/] — {p.suppressed_count} suppressed"
+        )
+        headers = list(p.suppressed_sample[0].keys())
+        tbl = Table(show_header=True, header_style="bold magenta")
+        for h in headers:
+            tbl.add_column(h)
+        for row in p.suppressed_sample:
+            tbl.add_row(*[str(row.get(h, "")) for h in headers])
+        console.print(tbl)
+
+    # Stale suppressions.
+    if report.stale_suppressions:
+        console.print(
+            f"\n[yellow]stale suppression(s): {len(report.stale_suppressions)}[/]"
+        )
+        for s in report.stale_suppressions:
+            console.print(f"  [dim]{s['policy']}[/]: {s['key']}")
+
+    total_suppressed = sum(p.suppressed_count for p in report.policies)
     passed = sum(1 for p in report.policies if p.passed)
     total = len(report.policies)
     style = "bold green" if passed == total else "bold red"
-    console.print(f"\n[{style}]{passed}/{total} policies passed[/]")
+    summary = f"{passed}/{total} policies passed"
+    if total_suppressed:
+        summary += f" ({total_suppressed} violation(s) suppressed)"
+    console.print(f"\n[{style}]{summary}[/]")

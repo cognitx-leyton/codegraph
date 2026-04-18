@@ -129,6 +129,15 @@ class CustomPolicy:
 
 
 @dataclass
+class Suppression:
+    """A single suppressed violation — accepted technical debt."""
+
+    policy: str
+    key: str
+    reason: str
+
+
+@dataclass
 class ArchConfig:
     """Aggregate config for ``codegraph arch-check``.
 
@@ -142,6 +151,7 @@ class ArchConfig:
     coupling_ceiling: CouplingCeilingConfig = field(default_factory=CouplingCeilingConfig)
     orphan_detection: OrphanDetectionConfig = field(default_factory=OrphanDetectionConfig)
     custom: list[CustomPolicy] = field(default_factory=list)
+    suppressions: list[Suppression] = field(default_factory=list)
     schema_version: int = 1
 
 
@@ -201,6 +211,7 @@ def load_arch_config(repo_root: Path, path: Optional[Path] = None) -> ArchConfig
         coupling_ceiling=_parse_coupling_ceiling(policies.get("coupling_ceiling", {}), config_path),
         orphan_detection=_parse_orphan_detection(policies.get("orphan_detection", {}), config_path),
         custom=_parse_custom(policies.get("custom", []), config_path),
+        suppressions=_parse_suppressions(raw.get("suppress", []), config_path),
         schema_version=schema_version,
     )
 
@@ -372,6 +383,31 @@ def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:
             sample_cypher=sample_cypher,
             description=description,
             enabled=enabled,
+        ))
+    return out
+
+
+def _parse_suppressions(raw: list, path: Path) -> list[Suppression]:
+    if not isinstance(raw, list):
+        raise ArchConfigError(
+            f"{path}: suppress must be an array of tables, got {type(raw).__name__}"
+        )
+    out: list[Suppression] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ArchConfigError(
+                f"{path}: suppress[{i}] must be a table"
+            )
+        for field_name in ("policy", "key", "reason"):
+            value = entry.get(field_name)
+            if not (isinstance(value, str) and value.strip()):
+                raise ArchConfigError(
+                    f"{path}: suppress[{i}].{field_name} must be a non-empty string"
+                )
+        out.append(Suppression(
+            policy=entry["policy"],
+            key=entry["key"],
+            reason=entry["reason"],
         ))
     return out
 

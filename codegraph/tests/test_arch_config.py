@@ -429,3 +429,92 @@ enabled = "yes"
 """)
     with pytest.raises(ArchConfigError, match="enabled must be a boolean"):
         load_arch_config(tmp_path)
+
+
+# ── Suppressions ─────────────────────────────────────────────
+
+
+def test_no_suppressions_returns_empty_list(tmp_path: Path):
+    _write(tmp_path, "")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.suppressions == []
+
+
+def test_single_suppression_parsed(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+key    = "a.py -> b.py"
+reason = "Intentional mutual dependency"
+""")
+    cfg = load_arch_config(tmp_path)
+    assert len(cfg.suppressions) == 1
+    s = cfg.suppressions[0]
+    assert s.policy == "import_cycles"
+    assert s.key == "a.py -> b.py"
+    assert s.reason == "Intentional mutual dependency"
+
+
+def test_multiple_suppressions_parsed(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+key    = "a.py -> b.py"
+reason = "reason one"
+
+[[suppress]]
+policy = "coupling_ceiling"
+key    = "src/App.tsx"
+reason = "reason two"
+""")
+    cfg = load_arch_config(tmp_path)
+    assert len(cfg.suppressions) == 2
+    assert cfg.suppressions[0].policy == "import_cycles"
+    assert cfg.suppressions[1].policy == "coupling_ceiling"
+
+
+def test_suppression_missing_policy_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+key    = "a.py -> b.py"
+reason = "some reason"
+""")
+    with pytest.raises(ArchConfigError, match="suppress\\[0\\].policy must be a non-empty string"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_missing_key_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+reason = "some reason"
+""")
+    with pytest.raises(ArchConfigError, match="suppress\\[0\\].key must be a non-empty string"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_missing_reason_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+key    = "a.py -> b.py"
+""")
+    with pytest.raises(ArchConfigError, match="suppress\\[0\\].reason must be a non-empty string"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_empty_reason_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+key    = "a.py -> b.py"
+reason = "   "
+""")
+    with pytest.raises(ArchConfigError, match="suppress\\[0\\].reason must be a non-empty string"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, 'suppress = "not a list"\n')
+    with pytest.raises(ArchConfigError, match="suppress must be an array of tables"):
+        load_arch_config(tmp_path)

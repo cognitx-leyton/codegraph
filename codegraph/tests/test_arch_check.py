@@ -683,3 +683,236 @@ def test_run_arch_check_passes_scope_to_policies(monkeypatch):
         scope=["x/", "y/"],
     )
     assert received_scope == [["x/", "y/"]]
+
+
+# ── Suppression ───────────────────────────────────────────────────
+
+
+from codegraph.arch_check import (
+    _apply_suppressions,
+    _match_suppression_key,
+    _violation_key,
+)
+from codegraph.arch_config import Suppression
+
+
+# ── _violation_key ─────────────────────────────────────────────
+
+
+def test_violation_key_import_cycles():
+    row = {"cycle": ["a.py", "b.py", "a.py"], "hops": 2}
+    assert _violation_key("import_cycles", row) == "a.py -> b.py -> a.py"
+
+
+def test_violation_key_cross_package():
+    row = {
+        "importer_package": "web",
+        "importee_package": "api",
+        "importer": "web/a.ts",
+        "importee": "api/b.ts",
+    }
+    assert _violation_key("cross_package", row) == "web/a.ts -> api/b.ts"
+
+
+def test_violation_key_coupling_ceiling():
+    row = {"file": "src/app.ts", "deps": 30}
+    assert _violation_key("coupling_ceiling", row) == "src/app.ts"
+
+
+def test_violation_key_orphan_detection():
+    row = {"kind": "orphan_function", "name": "dead_fn", "file": "src/utils.py"}
+    assert _violation_key("orphan_detection", row) == "orphan_function:dead_fn"
+
+
+def test_violation_key_layer_bypass():
+    row = {"controller": "UserCtrl", "repository": "UserRepo", "method": "find"}
+    assert _violation_key("layer_bypass", row) == "UserCtrl -> UserRepo.find"
+
+
+def test_violation_key_custom_fallback():
+    row = {"path": "big.py", "loc": 999}
+    assert _violation_key("my_custom_rule", row) == "big.py | 999"
+
+
+# ── _match_suppression_key ─────────────────────────────────────
+
+
+def test_match_suppression_exact():
+    row = {"file": "src/app.ts", "deps": 30}
+    assert _match_suppression_key("coupling_ceiling", row, "src/app.ts") is True
+
+
+def test_match_suppression_cycle_edge():
+    """Edge key 'A -> B' matches any cycle containing that consecutive pair."""
+    row = {"cycle": ["a.py", "b.py", "c.py", "a.py"], "hops": 3}
+    assert _match_suppression_key("import_cycles", row, "a.py -> b.py") is True
+    assert _match_suppression_key("import_cycles", row, "b.py -> c.py") is True
+    assert _match_suppression_key("import_cycles", row, "c.py -> a.py") is True
+
+
+def test_match_suppression_no_match():
+    row = {"file": "src/app.ts", "deps": 30}
+    assert _match_suppression_key("coupling_ceiling", row, "src/other.ts") is False
+
+
+def test_match_suppression_cycle_edge_no_match():
+    row = {"cycle": ["a.py", "b.py", "a.py"], "hops": 2}
+    assert _match_suppression_key("import_cycles", row, "x.py -> y.py") is False
+
+
+# ── _apply_suppressions ─────────────────────────────────────────
+
+
+def test_apply_suppressions_all_suppressed_passes():
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=2,
+            sample=[
+                {"file": "a.ts", "deps": 25},
+                {"file": "b.ts", "deps": 30},
+            ],
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="a.ts", reason="r1"),
+        Suppression(policy="coupling_ceiling", key="b.ts", reason="r2"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.passed is True
+    assert p.violation_count == 0
+    assert p.suppressed_count == 2
+    assert len(p.suppressed_sample) == 2
+    assert p.sample == []
+    assert stale == []
+
+
+def test_apply_suppressions_partial():
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=3,
+            sample=[
+                {"file": "a.ts", "deps": 25},
+                {"file": "b.ts", "deps": 30},
+                {"file": "c.ts", "deps": 40},
+            ],
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="a.ts", reason="r1"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.passed is False
+    assert p.violation_count == 2
+    assert p.suppressed_count == 1
+    assert len(p.sample) == 2
+    assert stale == []
+
+
+def test_apply_suppressions_stale_detected():
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=True,
+            violation_count=0,
+            sample=[],
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="gone.ts", reason="was needed"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    assert len(stale) == 1
+    assert stale[0]["policy"] == "coupling_ceiling"
+    assert stale[0]["key"] == "gone.ts"
+    assert stale[0]["reason"] == "was needed"
+
+
+def test_apply_suppressions_empty_list_is_noop():
+    policies = [
+        PolicyResult(name="x", passed=True, violation_count=0),
+    ]
+    updated, stale = _apply_suppressions(policies, [])
+    assert updated is policies  # same object, untouched
+    assert stale == []
+
+
+# ── Integration: run_arch_check + suppressions ──────────────────
+
+
+def test_run_arch_check_with_suppressions_exits_zero(monkeypatch):
+    """All violations suppressed → report.ok is True."""
+    sample = [{"file": "god.ts", "deps": 50}]
+    fake_driver = _constant_driver({
+        "count(DISTINCT path) AS v": [{"v": 0}],
+        "count(*) AS v": [{"v": 0}],
+        "count(DISTINCT ctrl) AS v": [{"v": 0}],
+        "count(f) AS v": [{"v": 1}],
+        "f.path AS file, deps": sample,
+    })
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    config = ArchConfig(
+        suppressions=[
+            Suppression(
+                policy="coupling_ceiling",
+                key="god.ts",
+                reason="Legacy monolith file",
+            ),
+        ],
+    )
+    report = run_arch_check(
+        "bolt://fake:7687", "neo4j", "pw", console=None, config=config,
+    )
+    assert report.ok is True
+    coupling = next(p for p in report.policies if p.name == "coupling_ceiling")
+    assert coupling.passed is True
+    assert coupling.suppressed_count == 1
+    assert coupling.violation_count == 0
+
+
+def test_run_arch_check_suppressions_in_json(monkeypatch):
+    """JSON output includes suppressed_count and stale_suppressions."""
+    sample = [{"file": "god.ts", "deps": 50}]
+    fake_driver = _constant_driver({
+        "count(DISTINCT path) AS v": [{"v": 0}],
+        "count(*) AS v": [{"v": 0}],
+        "count(DISTINCT ctrl) AS v": [{"v": 0}],
+        "count(f) AS v": [{"v": 1}],
+        "f.path AS file, deps": sample,
+    })
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    config = ArchConfig(
+        suppressions=[
+            Suppression(
+                policy="coupling_ceiling",
+                key="god.ts",
+                reason="Legacy",
+            ),
+            Suppression(
+                policy="import_cycles",
+                key="x.py -> y.py",
+                reason="Stale entry",
+            ),
+        ],
+    )
+    report = run_arch_check(
+        "bolt://fake:7687", "neo4j", "pw", console=None, config=config,
+    )
+    blob = json.loads(report.to_json())
+    assert blob["ok"] is True
+
+    # suppressed_count should be in the per-policy data
+    coupling = next(p for p in blob["policies"] if p["name"] == "coupling_ceiling")
+    assert coupling["suppressed_count"] == 1
+
+    # The stale entry should appear
+    assert len(blob["stale_suppressions"]) == 1
+    assert blob["stale_suppressions"][0]["policy"] == "import_cycles"
+    assert blob["stale_suppressions"][0]["key"] == "x.py -> y.py"

@@ -329,6 +329,74 @@ pairs = [
 ]
 ```
 
+## Suppression — accepted violations
+
+Sometimes a violation is known, understood, and deliberately accepted as technical debt. Rather than disabling an entire policy, you can suppress individual violations by adding `[[suppress]]` entries to `.arch-policies.toml`. Each suppression requires a reason so the rationale doesn't get lost.
+
+### TOML syntax
+
+```toml
+[[suppress]]
+policy = "import_cycles"
+key    = "src/lib/coordinatesUtils.ts -> src/lib/fieldValidation.ts"
+reason = "Mutual dependency is intentional — shared geometric types"
+
+[[suppress]]
+policy = "coupling_ceiling"
+key    = "src/App.tsx"
+reason = "Root component, fan-out is expected"
+
+[[suppress]]
+policy = "orphan_detection"
+key    = "orphan_function:legacy_helper"
+reason = "Called via eval in migration script"
+
+[[suppress]]
+policy = "layer_bypass"
+key    = "HealthController -> MetricsRepository.count"
+reason = "Health check endpoint, no business logic needed"
+
+[[suppress]]
+policy = "cross_package"
+key    = "apps/web/src/shared.ts -> apps/api/src/types.ts"
+reason = "Shared type import, pending extraction to packages/types"
+```
+
+### Key format reference
+
+Each policy uses a different key format to identify the specific violation:
+
+| Policy | Key format | Example |
+|---|---|---|
+| `import_cycles` | Edge: `"fileA -> fileB"` | `"src/a.ts -> src/b.ts"` |
+| `cross_package` | `"importer_path -> importee_path"` | `"apps/web/x.ts -> apps/api/y.ts"` |
+| `layer_bypass` | `"Controller -> Repository.method"` | `"UserCtrl -> UserRepo.find"` |
+| `coupling_ceiling` | File path | `"src/App.tsx"` |
+| `orphan_detection` | `"kind:name"` | `"orphan_function:dead_fn"` |
+| Custom policies | All sample row values joined by ` \| ` | `"big.py \| 999"` |
+
+For `import_cycles`, the key is an **edge** (`"A -> B"`), not the full cycle path. If the edge `A -> B` appears as a consecutive pair in any detected cycle, that cycle is suppressed. This avoids issues with cycle rotation and lets you target the specific dependency you've accepted.
+
+### Behaviour
+
+- **Exit code**: `codegraph arch-check` exits 0 when all remaining (unsuppressed) violations are resolved. Suppressed violations do not count as failures.
+- **Visibility**: suppressed violations are printed as `WARN` (yellow) in the table and listed after the failure details so they don't disappear silently.
+- **Stale detection**: if a suppression entry no longer matches any current violation (the code was fixed or the violation changed shape), it is flagged as stale at the bottom of the report. This encourages cleanup — remove stale entries to keep the config honest. A typo in `policy` (e.g. `"import_cycle"` instead of `"import_cycles"`) will also appear as stale — double-check the policy name if a suppression shows up as stale unexpectedly.
+- **Sample window**: suppressions are matched against the violation sample (first 10 rows). When a policy reports more violations than the sample window, only violations visible in the sample can be suppressed. To reliably suppress all violations of a pattern, ensure the total violation count matches the number of suppressions.
+- **JSON output**: `suppressed_count` and `suppressed_sample` appear per policy; `stale_suppressions` appears at the top level of the JSON report.
+
+### Required fields
+
+Every `[[suppress]]` entry must have all three fields:
+
+- `policy` — non-empty string naming the policy (built-in or custom). The name is not validated against known policies at parse time — a typo will appear as a stale suppression at report time.
+- `key` — non-empty string identifying the specific violation.
+- `reason` — non-empty string explaining why this violation is accepted.
+
+Missing or empty fields → exit code 2 (config error).
+
+---
+
 ## Scoping to specific packages
 
 When multiple codebases share a Neo4j instance (common with `codegraph index --no-wipe`), use `--scope` to restrict policies to the packages you indexed:
