@@ -2,17 +2,17 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-18 after commits `ffd2009` → `5b6af3c` (replaced `importlib.metadata` version assertion with `pip show` to eliminate editable-install leakage — issue #126; PR #129 merged to main; version bumped to 0.1.28).
+> **Last updated:** 2026-04-18 after commits `d5fdc80` → `581d9db` (closed GitHub issue #124 with a comment referencing PR #128 — no code changes; PR #130 (issue #126 follow-up) merged to main; version bumped to 0.1.29).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-126`. Replaced `importlib.metadata.version()` with `pip show` for the version assertion in `.claude/commands/test.md` Stage 2 install test (issue #126, shipped as `5b6af3c`): `importlib.metadata` could see the local editable install via `.egg-info` or `.pth` finder inheritance, causing false-positive version checks even without a successful PyPI install. `pip show` only inspects the target venv's own `site-packages`, immune to both leakage vectors. PR #129 merged to main; version bumped to 0.1.28.
+- **Branch:** `archon/task-fix-issue-124`. Closed GitHub issue #124 with a comment referencing PR #128 (which had already shipped the fix — `__version__` dynamic lookup + install-test retry loop — but was missing a `Closes #124` keyword). No code changes this session. PR #130 merged to main (issue #126 follow-up); version bumped to 0.1.29.
 - **Tests:** 448 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.28 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.29 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
@@ -21,9 +21,12 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `ffd2009`)
+## Shipped since the last roadmap update (commit `d5fdc80`)
 
 ```
+581d9db Merge pull request #130 from cognitx-leyton/archon/task-fix-issue-126
+82ec7d3 chore: bump version to 0.1.29
+d5fdc80 docs(roadmap): update session handoff
 5b6af3c fix(test): use pip show instead of importlib to verify installed version
 5f18867 Merge pull request #129 from cognitx-leyton/archon/task-fix-issue-127
 42fa4f3 chore: bump version to 0.1.28
@@ -130,7 +133,15 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Twenty-two sessions' worth of work grouped by theme:
+Twenty-three sessions' worth of work grouped by theme:
+
+### Closed issue #124 + version bump to 0.1.29 (PR #130)
+
+- `581d9db merge` — PR #130 (branch `archon/task-fix-issue-126`) merged to `main`. This appears to be the final merge associated with the issue #126 fix series.
+
+- `82ec7d3 chore` — `pyproject.toml` version bumped to v0.1.29.
+
+- **Issue #124 closure** — GitHub issue #124 ("install-test flakiness and `__version__` hardcode") was left open after its fix shipped in PR #128 (`1d538fa`), which lacked a `Closes #124` keyword. Closed manually this session with a comment referencing the merged PR. No code changes — purely a housekeeping step.
 
 ### Install-test editable-install leakage — `pip show` instead of `importlib.metadata` (issue #126)
 
