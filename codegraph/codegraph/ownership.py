@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
 import re
 import subprocess
 from collections import Counter
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
@@ -21,9 +24,19 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
             ["git", "log", "--name-only", "--pretty=format:__COMMIT__%H|%ae|%an|%at"],
             cwd=str(repo_root), capture_output=True, text=True, check=False, timeout=120,
         )
-        log_text = proc.stdout
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("collect_ownership: git log failed: %s", exc)
         return {}
+
+    if proc.returncode != 0:
+        logger.warning(
+            "collect_ownership: git log failed (exit %d): %s",
+            proc.returncode,
+            proc.stderr.strip(),
+        )
+        return {}
+
+    log_text = proc.stdout
 
     file_last: dict[str, tuple[str, int]] = {}    # file -> (email, ts)
     file_counts: dict[str, Counter] = {}          # file -> Counter[email]
@@ -42,6 +55,7 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
                 if email not in authors:
                     authors[email] = {"email": email, "name": name}
             except ValueError:
+                logger.warning("collect_ownership: malformed git log line: %r", line)
                 current_email = None
             continue
         if not line.strip():
@@ -60,7 +74,7 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
     for f, (email, ts) in file_last.items():
         last_modified.append({"path": f, "email": email, "at": ts})
     for f, counter in file_counts.items():
-        for email, count in counter.most_common(10):
+        for email, count in sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:10]:
             contributors.append({"path": f, "email": email, "commits": count})
 
     # CODEOWNERS
@@ -94,8 +108,12 @@ _CO_LINE_RE = re.compile(r"^\s*([^\s#]+)\s+(.+)$")
 
 def _parse_codeowners(p: Path) -> list[tuple[str, list[str]]]:
     rules: list[tuple[str, list[str]]] = []
-    with open(p, encoding="utf-8", errors="replace", newline="") as fh:
-        _text = fh.read()
+    try:
+        with open(p, encoding="utf-8", newline="") as fh:
+            _text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("CODEOWNERS: cannot decode %s: %s", p, exc)
+        return []
     for line in _text.splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
