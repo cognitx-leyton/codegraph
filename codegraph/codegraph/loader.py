@@ -504,7 +504,7 @@ class Neo4jLoader:
             _write_test_edges(s, index, stats)
 
             # ── Ownership (Phase 7) ───────────────────────────────
-            if ownership:
+            if ownership is not None:
                 _write_ownership(s, ownership, stats)
 
         return stats
