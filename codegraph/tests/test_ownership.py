@@ -37,10 +37,10 @@ def test_parse_codeowners_crlf(tmp_path: Path) -> None:
 def test_contributors_deterministic_on_tie(tmp_path: Path) -> None:
     """Contributors with equal commit counts sort alphabetically by email."""
     git_log = (
-        "__COMMIT__aaa|zeta@example.com|Zeta|1000000\n"
+        "__COMMIT__aaa\x1fzeta@example.com\x1fZeta\x1f1000000\n"
         "src/app.py\n"
         "\n"
-        "__COMMIT__bbb|alpha@example.com|Alpha|1000001\n"
+        "__COMMIT__bbb\x1falpha@example.com\x1fAlpha\x1f1000001\n"
         "src/app.py\n"
     )
     proc = subprocess.CompletedProcess(
@@ -53,6 +53,25 @@ def test_contributors_deterministic_on_tie(tmp_path: Path) -> None:
     emails = [c["email"] for c in contribs if c["path"] == "src/app.py"]
     # Both have 1 commit — alphabetical order must win
     assert emails == ["alpha@example.com", "zeta@example.com"]
+
+
+# --- Issue #170: pipe in author name must not corrupt ownership ---
+
+def test_collect_ownership_pipe_in_author_name(tmp_path: Path) -> None:
+    """Author name containing '|' must parse correctly with \\x1f delimiter."""
+    git_log = (
+        "__COMMIT__abc\x1fjo@example.com\x1fJo|hn Doe\x1f1000000\n"
+        "src/app.py\n"
+    )
+    proc = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=git_log, stderr="",
+    )
+    with patch("codegraph.ownership.subprocess.run", return_value=proc):
+        result = collect_ownership(tmp_path, {"src/app.py"})
+
+    assert result["authors"] == [{"email": "jo@example.com", "name": "Jo|hn Doe"}]
+    assert result["last_modified"] == [{"path": "src/app.py", "email": "jo@example.com", "at": 1000000}]
+    assert result["contributors"] == [{"path": "src/app.py", "email": "jo@example.com", "commits": 1}]
 
 
 # --- Issue #166: non-zero git exit code returns empty ---
@@ -83,7 +102,7 @@ def test_collect_ownership_logs_on_os_error(tmp_path: Path, caplog) -> None:
 def test_collect_ownership_logs_malformed_commit(tmp_path: Path, caplog) -> None:
     """Malformed commit header must log a warning and skip the commit."""
     git_log = (
-        "__COMMIT__badline_no_pipes\n"
+        "__COMMIT__badline_no_delimiters\n"
         "src/app.py\n"
     )
     proc = subprocess.CompletedProcess(

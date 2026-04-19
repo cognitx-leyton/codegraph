@@ -37,7 +37,7 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
     # Single git log call: name + email + timestamp + file list per commit
     try:
         proc = subprocess.run(
-            ["git", "log", "--name-only", "--pretty=format:__COMMIT__%H|%ae|%an|%at"],
+            ["git", "log", "--name-only", "--pretty=format:__COMMIT__%H\x1f%ae\x1f%an\x1f%at"],
             cwd=str(repo_root), capture_output=True, text=True, check=False, timeout=120,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -64,7 +64,7 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
         if line.startswith("__COMMIT__"):
             try:
                 _, payload = line.split("__COMMIT__", 1)
-                _h, email, name, ts = payload.split("|", 3)
+                _h, email, name, ts = payload.split("\x1f", 3)
                 current_email = email
                 current_name = name
                 current_ts = int(ts)
