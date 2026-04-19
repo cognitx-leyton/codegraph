@@ -460,6 +460,27 @@ def test_validate_limit_custom_max():
     assert mcp_mod._validate_limit(101, max_limit=100) is not None
 
 
+# ── _validate_max_depth ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [0, -1, 6, 100, "3", None, 3.5, True, False],
+)
+def test_validate_max_depth_rejects(bad):
+    assert mcp_mod._validate_max_depth(bad) is not None
+
+
+@pytest.mark.parametrize("good", [1, 3, 5])
+def test_validate_max_depth_accepts(good):
+    assert mcp_mod._validate_max_depth(good) is None
+
+
+def test_validate_max_depth_custom_max():
+    assert mcp_mod._validate_max_depth(8, max_val=10) is None
+    assert mcp_mod._validate_max_depth(11, max_val=10) is not None
+
+
 # ── files_in_package ────────────────────────────────────────────────
 
 
@@ -1078,3 +1099,79 @@ def test_reindex_file_ownership_edges_not_doubled(monkeypatch, tmp_path):
 
     # Ownership edges are excluded from the generic loop count
     assert out["edges"] == 0
+
+
+def test_reindex_file_structural_edges_not_doubled(monkeypatch, tmp_path):
+    """Structural edges (HAS_METHOD, RESOLVES, HAS_COLUMN) come only from
+    inline node-creation MERGEs, not the generic edge loop.  EXPOSES stays
+    in the generic loop for file-level endpoints with no owning class."""
+    monkeypatch.setattr(mcp_mod, "_allow_write", True)
+
+    py_file = tmp_path / "ctrl.py"
+    py_file.write_text("class Ctrl:\n    def handle(self): ...\n")
+
+    driver = _patch(monkeypatch, [[]])
+
+    from codegraph.py_parser import PyParser
+    from codegraph.schema import (
+        HAS_METHOD, EXPOSES, RESOLVES, HAS_COLUMN,
+        Edge, FileNode, ClassNode, MethodNode,
+        EndpointNode, GraphQLOperationNode, ColumnNode,
+        ParseResult,
+    )
+
+    class_id = f"class:{py_file}#Ctrl"
+    fake_result = ParseResult(
+        file=FileNode(path=str(py_file), package="pkg", language="py", loc=2),
+        classes=[ClassNode(name="Ctrl", file=str(py_file))],
+        methods=[MethodNode(name="handle", class_id=class_id, file=str(py_file))],
+        endpoints=[EndpointNode(
+            method="GET", path="/foo",
+            controller_class=class_id,
+            file=str(py_file), handler="handle",
+        )],
+        gql_operations=[GraphQLOperationNode(
+            op_type="query", name="getCtrl", return_type="Ctrl",
+            file=str(py_file), resolver_class=class_id, handler="handle",
+        )],
+        columns=[ColumnNode(entity_id=class_id, name="id", type="int")],
+        edges=[
+            Edge(kind=HAS_METHOD, src_id=class_id,
+                 dst_id=f"method:{class_id}#handle"),
+            Edge(kind=EXPOSES, src_id=class_id,
+                 dst_id=f"endpoint:GET:/foo@{py_file}#handle"),
+            Edge(kind=RESOLVES, src_id=class_id,
+                 dst_id=f"gqlop:query:getCtrl@{py_file}#handle"),
+            Edge(kind=HAS_COLUMN, src_id=class_id,
+                 dst_id=f"column:{class_id}#id"),
+        ],
+    )
+
+    monkeypatch.setattr(PyParser, "parse_file", lambda *a, **kw: fake_result)
+
+    out = mcp_mod.reindex_file(str(py_file), package="pkg")
+    assert out["ok"] is True
+
+    all_cypher = " ".join(cypher for cypher, _ in driver.session_obj.calls)
+
+    # Inline MERGEs must still contain these edge types
+    assert "HAS_METHOD" in all_cypher
+    assert "EXPOSES" in all_cypher
+    assert "RESOLVES" in all_cypher
+    assert "HAS_COLUMN" in all_cypher
+
+    # Generic edge loop calls use MATCH(a {id:$src}) MATCH(b {id:$dst}) pattern
+    generic_edge_calls = [
+        (cypher, params) for cypher, params in driver.session_obj.calls
+        if "MATCH (a {id: $src})" in cypher and "MATCH (b {id: $dst})" in cypher
+    ]
+
+    # HAS_METHOD, RESOLVES, HAS_COLUMN must NOT appear in the generic loop
+    for cypher, _ in generic_edge_calls:
+        assert "HAS_METHOD" not in cypher
+        assert "RESOLVES" not in cypher
+        assert "HAS_COLUMN" not in cypher
+
+    # EXPOSES MUST appear in the generic loop (kept deliberately)
+    exposes_in_generic = [c for c, _ in generic_edge_calls if "EXPOSES" in c]
+    assert len(exposes_in_generic) == 1
