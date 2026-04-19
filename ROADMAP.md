@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `d91b45e` → `ec10b5c` (fix(schema,mcp): rename DEFINES_INTERFACE → DEFINES_IFACE and remove duplicate edge writes — closes #188; 496 tests passing, v0.1.48).
+> **Last updated:** 2026-04-19 after commits `ec10b5c` → `abc6776` (fix(mcp): remove duplicate structural edge writes in reindex_file — closes #190; 510 tests passing, v0.1.49).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-188`. Fixed two related schema/MCP bugs: (1) `schema.py` constant `DEFINES_IFACE` had value `"DEFINES_INTERFACE"` — mismatched the actual Neo4j relationship type `DEFINES_IFACE` emitted by `loader.py` and `mcp.py`; (2) `mcp.py`'s `reindex_file()` was double-writing `DEFINES_CLASS`, `DEFINES_FUNC`, `DEFINES_IFACE`, and `DEFINES_ATOM` edges — once inline during node MERGEs, then again via the generic `_EDGE_WHITELIST` loop. Fix: correct the constant value + remove those 4 edge types from the whitelist. Added regression test `test_reindex_file_ownership_edges_not_doubled`. 496 tests passing, v0.1.48.
-- **Tests:** 496 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-190`. Fixed remaining structural edge double-writes in `mcp.py`'s `reindex_file()`: removed `HAS_METHOD`, `RESOLVES`, and `HAS_COLUMN` from `_EDGE_WHITELIST` (these are already written inline during node MERGEs). `EXPOSES` retained in whitelist (file-level endpoints have no owning class, so the generic loop is their only write path). Also extracted `_validate_max_depth()` helper (mirrors `_validate_limit()`) to eliminate 3 copy-pasted inline checks in `callers_of_class`, `calls_from`, and `callers_of`. Added 14 new tests (1 structural-edge regression + 13 for `_validate_max_depth`). 510 tests passing, v0.1.49.
+- **Tests:** 510 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `d91b45e`)
+## Shipped since the last roadmap update (commit `ec10b5c`)
 
 ```
+abc6776 fix(mcp): remove duplicate structural edge writes in reindex_file
+db92a5c Merge pull request #191 from cognitx-leyton/archon/task-fix-issue-188
+589b1e2 chore: bump version to 0.1.49
+7106cbc docs(roadmap): update session handoff
 ec10b5c fix(schema,mcp): rename DEFINES_INTERFACE → DEFINES_IFACE and remove duplicate edge writes
 223685e Merge pull request #189 from cognitx-leyton/archon/task-fix-issue-161
 a6aa05b chore: bump version to 0.1.48
@@ -527,12 +531,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-188` |
+| Current branch | `archon/task-fix-issue-190` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`ec10b5c` — fix(schema,mcp): rename DEFINES_INTERFACE → DEFINES_IFACE and remove duplicate edge writes, pending PR) |
-| Open PR | None. PR #189 (issue #161 — schema-resilient delete cascade) merged to main. |
+| Unpushed commits | 1 (`abc6776` — fix(mcp): remove duplicate structural edge writes in reindex_file, pending PR) |
+| Open PR | None. PR #191 (issue #188 — DEFINES_IFACE rename + ownership edge dedup) merged to main. |
 | Working tree | Clean |
-| Test count | 496 passing + 1 deselected |
+| Test count | 510 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -817,6 +821,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-install-test-flakiness.plan.md` — shipped as `1d538fa`.
 - `fix-issue-181-ownership-contract.plan.md` — shipped as `5d01a60`.
 - `simplify-delete-cascade.plan.md` — shipped as `54d2100`.
+- `fix-mcp-structural-edge-double-write.plan.md` — shipped as `abc6776`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
