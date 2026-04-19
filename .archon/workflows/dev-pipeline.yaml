@@ -950,27 +950,44 @@ nodes:
          git diff --name-only hotfix.."$BRANCH"
          ```
 
-      3. For each open issue, check if it was ALREADY FIXED by the changes:
+      3. For each open issue, check TWO things:
+
+         **A. Already fixed?** Check if the issue was resolved by the changes:
          - Does the issue mention a file that was modified?
          - Does the issue describe a bug in a function that was changed?
          - Read the relevant code to verify the fix is actually in place
          - Only close if you are CONFIDENT (>90%) the issue is resolved
 
+         **B. Out of scope / has constraint comments?** Check the issue comments:
+         ```bash
+         gh issue view <N> --json comments --jq '.comments[].body'
+         ```
+         Look for comments containing:
+         - "no-LLM" or "no-llm" — feature requires LLM which codegraph doesn't use
+         - "out of scope" or "not in scope"
+         - "will not implement" or "won't implement"
+         - "Scope note" with a constraint that makes the issue invalid
+         - "Implementation Complete" — issue was already done but not closed
+
+         If any of these are found, the issue should be closed.
+
       4. For each issue that was inadvertently fixed:
          ```bash
-         gh issue close <N> --comment "$(cat <<'EOF'
-         This issue was resolved as a side effect of the changes in PR #<PR>.
-
-         The fix was applied in commit <SHA> which modified <file>.
-         EOF
-         )"
+         gh issue close <N> --comment "This issue was resolved as a side effect of the changes in PR #<PR>. The fix was applied in commit <SHA> which modified <file>."
          ```
 
-      5. Output a summary:
+      5. For each issue with scope constraints or "Implementation Complete":
+         ```bash
+         gh issue close <N> --comment "Closing — this issue has been marked as out of scope or already completed. See prior comments."
+         ```
+
+      6. Output a summary:
          - Issues scanned: N
          - Issues closed as already fixed: list with numbers and reasons
+         - Issues closed as out of scope: list with numbers and reasons
+         - Issues closed as already implemented: list with numbers
          - Issues still open: count
 
-      If no issues were inadvertently fixed, say "No additional issues resolved."
+      If nothing to close, say "No additional issues resolved."
 
       Workflow complete.
