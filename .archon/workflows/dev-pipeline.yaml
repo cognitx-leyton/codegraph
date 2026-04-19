@@ -903,7 +903,21 @@ nodes:
          )"
          ```
 
-      Output the PR URL.
+      6. MANDATORY — after creating the PR, explicitly close ALL issues
+         (primary + grouped). Do NOT rely on GitHub's auto-close from
+         `Closes #N` — it only works when the PR is merged into the
+         DEFAULT branch, which may not be hotfix.
+         For EACH issue number:
+         ```bash
+         gh issue close <N> --comment "Resolved in PR #<PR-number>"
+         ```
+         Verify all are closed:
+         ```bash
+         gh issue view <N> --json state --jq '.state'
+         # Should say CLOSED for every issue
+         ```
+
+      Output the PR URL and list of closed issues.
 
   # ═══════════════════════════════════════════════════════════════
   # Step 13: Scan for already-fixed issues
