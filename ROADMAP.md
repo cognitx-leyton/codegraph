@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `d91b45e` → `54d2100` (fix(loader): simplify delete cascade to avoid stale child nodes — closes #161; 495 tests passing, v0.1.47).
+> **Last updated:** 2026-04-19 after commits `d91b45e` → `ec10b5c` (fix(schema,mcp): rename DEFINES_INTERFACE → DEFINES_IFACE and remove duplicate edge writes — closes #188; 496 tests passing, v0.1.48).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-161`. Simplified the `delete_file_subgraph()` delete cascade in `loader.py` and the `_DELETE_CASCADE` pattern in `mcp.py`'s `reindex_file()` from a brittle 10-step ordered sequence to a robust 3-step pattern: (1) delete grandchildren of owned classes via `(c:Class)-->(child)` excluding Class/Decorator nodes, (2) delete direct children via the 4 ownership edges (`DEFINES_CLASS|DEFINES_FUNC|DEFINES_IFACE|DEFINES_ATOM`), (3) `DETACH DELETE` the File node. The new approach is schema-resilient: adding new child node/edge types doesn't require cascade updates. Test count unchanged at 495 (assertion updated from 10 → 3 calls). Version at v0.1.47.
-- **Tests:** 495 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-188`. Fixed two related schema/MCP bugs: (1) `schema.py` constant `DEFINES_IFACE` had value `"DEFINES_INTERFACE"` — mismatched the actual Neo4j relationship type `DEFINES_IFACE` emitted by `loader.py` and `mcp.py`; (2) `mcp.py`'s `reindex_file()` was double-writing `DEFINES_CLASS`, `DEFINES_FUNC`, `DEFINES_IFACE`, and `DEFINES_ATOM` edges — once inline during node MERGEs, then again via the generic `_EDGE_WHITELIST` loop. Fix: correct the constant value + remove those 4 edge types from the whitelist. Added regression test `test_reindex_file_ownership_edges_not_doubled`. 496 tests passing, v0.1.48.
+- **Tests:** 496 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,6 +24,10 @@
 ## Shipped since the last roadmap update (commit `d91b45e`)
 
 ```
+ec10b5c fix(schema,mcp): rename DEFINES_INTERFACE → DEFINES_IFACE and remove duplicate edge writes
+223685e Merge pull request #189 from cognitx-leyton/archon/task-fix-issue-161
+a6aa05b chore: bump version to 0.1.48
+a1130c8 docs(roadmap): update session handoff
 54d2100 fix(loader): simplify delete cascade to avoid stale child nodes
 8012478 Merge pull request #187 from cognitx-leyton/archon/task-fix-issue-170
 0c24335 chore: bump version to 0.1.47
@@ -218,6 +222,10 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 ```
 
 Forty-two sessions' worth of work grouped by theme:
+
+### Schema / MCP — fix DEFINES_IFACE constant and remove duplicate edge writes (issue #188)
+
+- `ec10b5c fix(schema,mcp)` — Two related bugs in `schema.py` and `mcp.py` fixed together. **(1) Constant mismatch:** `schema.py:243` defined `DEFINES_IFACE = "DEFINES_INTERFACE"` — the value did not match the variable name. All Cypher strings in `loader.py` and `mcp.py` already used the literal `DEFINES_IFACE` as the Neo4j relationship type, so the constant was effectively dead and the mismatch was invisible at runtime but would have caused silent failures in any code path that consumed the constant. Fixed to `DEFINES_IFACE = "DEFINES_IFACE"`. **(2) Double-write in `reindex_file()`:** `mcp.py`'s `_EDGE_WHITELIST` included `DEFINES_CLASS`, `DEFINES_FUNC`, `DEFINES_IFACE`, and `DEFINES_ATOM`. These 4 edge types are already emitted inline by the node-creation MERGEs earlier in `reindex_file()` (lines 765, 786, 824, 880). Including them in `_EDGE_WHITELIST` caused the generic edge-writing loop to write each ownership edge a second time, producing phantom duplicate relationships in Neo4j. Fixed by removing all 4 from both the import block and `_EDGE_WHITELIST`. **(3) Regression test:** `test_reindex_file_ownership_edges_not_doubled` added to `tests/test_mcp.py` — creates all 4 ownership edge types in `result.edges`, confirms `DEFINES_INTERFACE` never appears, verifies ownership edges come from node MERGEs only, and asserts no ownership edge leaks into the generic loop. Arch-check: 5/5 policies pass. Test count: 495 → 496. Version bumped to v0.1.48 (PR #189 merged to `main`, `223685e`).
 
 ### Loader / MCP — schema-resilient delete cascade (issue #161)
 
@@ -519,12 +527,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-161` |
+| Current branch | `archon/task-fix-issue-188` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`54d2100` — fix(loader): simplify delete cascade to avoid stale child nodes, pending PR) |
-| Open PR | None. PR #187 (issue #170 — pipe-safe git log delimiter) merged to main. |
+| Unpushed commits | 1 (`ec10b5c` — fix(schema,mcp): rename DEFINES_INTERFACE → DEFINES_IFACE and remove duplicate edge writes, pending PR) |
+| Open PR | None. PR #189 (issue #161 — schema-resilient delete cascade) merged to main. |
 | Working tree | Clean |
-| Test count | 495 passing + 1 deselected |
+| Test count | 496 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
