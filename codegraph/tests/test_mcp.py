@@ -1020,3 +1020,61 @@ def test_reindex_file_loads_decorated_by_edges(monkeypatch, tmp_path):
         if "DECORATED_BY" in cypher and "Function" in cypher
     ]
     assert len(edge_merges) == 1
+
+
+def test_reindex_file_ownership_edges_not_doubled(monkeypatch, tmp_path):
+    """Ownership edges (DEFINES_*) come only from node MERGEs, not the generic edge loop."""
+    monkeypatch.setattr(mcp_mod, "_allow_write", True)
+
+    py_file = tmp_path / "mod.py"
+    py_file.write_text("class Foo:\n    pass\ndef bar(): ...\n")
+
+    driver = _patch(monkeypatch, [[]])
+
+    from codegraph.py_parser import PyParser
+    from codegraph.schema import (
+        DEFINES_CLASS, DEFINES_FUNC, DEFINES_IFACE, DEFINES_ATOM,
+        Edge, FileNode, ClassNode, FunctionNode, InterfaceNode, AtomNode,
+        ParseResult,
+    )
+    fake_result = ParseResult(
+        file=FileNode(path=str(py_file), package="pkg", language="py", loc=3),
+        classes=[ClassNode(name="Foo", file=str(py_file))],
+        functions=[FunctionNode(name="bar", file=str(py_file))],
+        interfaces=[InterfaceNode(name="IFoo", file=str(py_file))],
+        atoms=[AtomNode(name="myAtom", file=str(py_file), family="jotai")],
+        edges=[
+            Edge(kind=DEFINES_CLASS, src_id=f"file:{py_file}", dst_id=f"class:{py_file}#Foo"),
+            Edge(kind=DEFINES_FUNC, src_id=f"file:{py_file}", dst_id=f"func:{py_file}#bar"),
+            Edge(kind=DEFINES_IFACE, src_id=f"file:{py_file}", dst_id=f"iface:{py_file}#IFoo"),
+            Edge(kind=DEFINES_ATOM, src_id=f"file:{py_file}", dst_id=f"atom:{py_file}#myAtom"),
+        ],
+    )
+
+    monkeypatch.setattr(PyParser, "parse_file", lambda *a, **kw: fake_result)
+
+    out = mcp_mod.reindex_file(str(py_file), package="pkg")
+    assert out["ok"] is True
+
+    all_cypher = " ".join(cypher for cypher, _ in driver.session_obj.calls)
+
+    # The old mismatched value must never appear
+    assert "DEFINES_INTERFACE" not in all_cypher
+
+    # DEFINES_IFACE must appear in node-creation MERGEs
+    assert "DEFINES_IFACE" in all_cypher
+
+    # Generic edge loop uses MATCH(a {id:$src}) MATCH(b {id:$dst}) MERGE pattern.
+    # Ownership edges must NOT appear via that path.
+    generic_edge_calls = [
+        (cypher, params) for cypher, params in driver.session_obj.calls
+        if "MATCH (a {id: $src})" in cypher and "MATCH (b {id: $dst})" in cypher
+    ]
+    for cypher, _ in generic_edge_calls:
+        assert "DEFINES_CLASS" not in cypher
+        assert "DEFINES_FUNC" not in cypher
+        assert "DEFINES_IFACE" not in cypher
+        assert "DEFINES_ATOM" not in cypher
+
+    # Ownership edges are excluded from the generic loop count
+    assert out["edges"] == 0

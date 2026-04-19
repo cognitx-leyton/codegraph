@@ -885,7 +885,6 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
             # ── Load intra-file edges ───────────────────────────
             from .schema import (
                 IMPORTS, IMPORTS_SYMBOL, IMPORTS_EXTERNAL,
-                DEFINES_CLASS, DEFINES_FUNC, DEFINES_IFACE,
                 HAS_METHOD, EXPOSES, HANDLES, INJECTS,
                 EXTENDS, IMPLEMENTS, DECORATED_BY,
                 RENDERS, USES_HOOK,
@@ -896,12 +895,11 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                 DECLARES_CONTROLLER,
                 TESTS, TESTS_CLASS, HANDLES_EVENT, EMITS_EVENT,
                 LAST_MODIFIED_BY, CONTRIBUTED_BY, OWNED_BY,
-                DEFINES_ATOM, READS_ATOM, WRITES_ATOM, READS_ENV,
+                READS_ATOM, WRITES_ATOM, READS_ENV,
                 BELONGS_TO,
             )
             _EDGE_WHITELIST = frozenset({
                 IMPORTS, IMPORTS_SYMBOL, IMPORTS_EXTERNAL,
-                DEFINES_CLASS, DEFINES_FUNC, DEFINES_IFACE,
                 HAS_METHOD, EXPOSES, HANDLES, INJECTS,
                 EXTENDS, IMPLEMENTS, DECORATED_BY,
                 RENDERS, USES_HOOK,
@@ -912,7 +910,7 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                 DECLARES_CONTROLLER,
                 TESTS, TESTS_CLASS, HANDLES_EVENT, EMITS_EVENT,
                 LAST_MODIFIED_BY, CONTRIBUTED_BY, OWNED_BY,
-                DEFINES_ATOM, READS_ATOM, WRITES_ATOM, READS_ENV,
+                READS_ATOM, WRITES_ATOM, READS_ENV,
                 BELONGS_TO,
             })
 
