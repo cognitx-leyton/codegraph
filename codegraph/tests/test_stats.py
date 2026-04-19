@@ -184,9 +184,11 @@ def test_query_graph_stats_scope_trailing_slash(scope_val):
 
 
 def test_format_stat_line_all_nonzero():
-    stats = {"files": 21, "classes": 56, "functions": 134, "methods": 178}
+    stats = {"files": 21, "classes": 56, "functions": 134, "methods": 178,
+             "interfaces": 3, "endpoints": 5, "hooks": 2, "decorators": 4}
     line = _format_stat_line(stats)
-    assert line == "~21 files, 56 classes, 134 module functions, ~178 methods"
+    assert line == ("~21 files, 56 classes, 134 module functions, ~178 methods, "
+                    "3 interfaces, 5 endpoints, 2 hooks, 4 decorators")
 
 
 def test_format_stat_line_zero_omitted():
@@ -222,6 +224,34 @@ def test_format_stat_line_empty():
 )
 def test_format_stat_line_hooks_decorators(stats, expected_present, expected_absent):
     """Hook/decorator labels appear when non-zero and are omitted when zero."""
+    line = _format_stat_line(stats)
+    for frag in expected_present:
+        assert frag in line
+    for frag in expected_absent:
+        assert frag not in line
+
+
+@pytest.mark.parametrize(
+    "stats, expected_present, expected_absent",
+    [
+        pytest.param(
+            {"files": 10, "classes": 5, "functions": 3, "methods": 8,
+             "interfaces": 4, "endpoints": 7},
+            ["4 interfaces", "7 endpoints"],
+            [],
+            id="nonzero",
+        ),
+        pytest.param(
+            {"files": 10, "classes": 5, "functions": 3, "methods": 8,
+             "interfaces": 0, "endpoints": 0},
+            [],
+            ["interfaces", "endpoints"],
+            id="zero_omitted",
+        ),
+    ],
+)
+def test_format_stat_line_interfaces_endpoints(stats, expected_present, expected_absent):
+    """Interface/endpoint labels appear when non-zero and are omitted when zero."""
     line = _format_stat_line(stats)
     for frag in expected_present:
         assert frag in line
