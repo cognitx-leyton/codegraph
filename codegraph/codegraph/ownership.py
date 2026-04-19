@@ -21,7 +21,15 @@ _EMPTY_OWNERSHIP: dict = {
 
 
 def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
-    """Build authors/teams/last_modified/contributors/owned_by from git + CODEOWNERS."""
+    """Build authors/teams/last_modified/contributors/owned_by from git + CODEOWNERS.
+
+    Returns a dict with keys ``authors``, ``teams``, ``last_modified``,
+    ``contributors``, and ``owned_by``.  On error (git not found, non-zero
+    exit, timeout) every value is an empty list -- but the dict itself is
+    **always truthy**.  Callers must not use ``if not ownership:`` as a
+    failure check; test individual lists or handle the logged warning
+    instead.
+    """
     authors: dict[str, dict] = {}
     last_modified: list[dict] = []
     contributors: list[dict] = []
@@ -34,7 +42,7 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("collect_ownership: git log failed: %s", exc)
-        return dict(_EMPTY_OWNERSHIP)
+        return {k: [] for k in _EMPTY_OWNERSHIP}
 
     if proc.returncode != 0:
         logger.warning(
@@ -42,7 +50,7 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
             proc.returncode,
             proc.stderr.strip(),
         )
-        return dict(_EMPTY_OWNERSHIP)
+        return {k: [] for k in _EMPTY_OWNERSHIP}
 
     log_text = proc.stdout
 

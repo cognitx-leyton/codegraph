@@ -389,7 +389,7 @@ def _run_index(
         say("[bold]Collecting git ownership…")
         t0 = time.time()
         ownership = collect_ownership(repo, set(index_obj.files_by_path.keys()))
-        if ownership:
+        if ownership is not None:
             say(
                 f"  authors={len(ownership['authors'])} "
                 f"last_mod={len(ownership['last_modified'])} "

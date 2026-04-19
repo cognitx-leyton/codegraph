@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `eab0758` → `a1d7cb9` (fix(ownership): return empty list instead of empty dict on all error paths — closes #176 and #171; 490 tests passing, v0.1.43).
+> **Last updated:** 2026-04-19 after commits `a1d7cb9` → `5d01a60` (fix(ownership): harden ownership contract to never return None — closes #181 and #180; 490 tests passing, v0.1.44).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-176`. Fixed `ownership.py` to return a fully-typed empty dict (all 5 keys with `[]` values) instead of `{}` on error paths — closes issues #176 and #171. Updated 3 test assertions and 2 docstrings. Version at v0.1.43.
-- **Tests:** 490 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. No new tests in this session — existing error-path tests updated. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-181`. Hardened the ownership contract: `collect_ownership()` can never return `None`; expanded docstring documents the always-truthy return contract; two `if ownership:` guards in `cli.py` and `loader.py` tightened to `if ownership is not None:`; `_EMPTY_OWNERSHIP` error-path returns now use a dict comprehension (`{k: [] for k in _EMPTY_OWNERSHIP}`) so callers get independent list objects — closes issues #181 and #180. Version at v0.1.44.
+- **Tests:** 490 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. No new tests in this session — all 490 pass with the contract hardening. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,16 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `eab0758`)
+## Shipped since the last roadmap update (commit `a1d7cb9`)
 
 ```
+5d01a60 fix(ownership): harden ownership contract to never return None
+4b6c9fd chore: bump version to 0.1.44
+bbb0d38 chore(workflow): tell reviewer the code was written by Codex
+4f719eb Merge pull request #183 from cognitx-leyton/dev
+258aa02 Merge remote-tracking branch 'origin/main' into hotfix
+07ac776 Merge pull request #182 from cognitx-leyton/archon/task-fix-issue-176
+8cf1fcc docs(roadmap): update session handoff
 a1d7cb9 fix(ownership): return empty list instead of empty dict on all error paths
 7fc679d Merge pull request #177 from cognitx-leyton/archon/task-fix-issue-172
 efdf8f2 Merge remote-tracking branch 'origin/main' into hotfix
@@ -198,7 +205,11 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Thirty-eight sessions' worth of work grouped by theme:
+Thirty-nine sessions' worth of work grouped by theme:
+
+### Ownership module — harden contract, docstring, and shallow-copy fix (issues #181, #180)
+
+- `5d01a60 fix(ownership)` — Three hardening changes across `ownership.py`, `cli.py`, and `loader.py`. **(1) Issue #181 — docstring:** `collect_ownership()` lacked any docstring; added a 9-line docstring documenting the always-truthy return contract, all 5 keys (`authors`, `teams`, `last_modified`, `contributors`, `owned_by`), and error conditions (OSError / non-zero git exit → all-empty dict, never `None`). **(2) Issue #181 — `is not None` guards:** `cli.py:392` and `loader.py:507` both tested `if ownership:` which is always `True` for the post-#176 return value (a dict with 5 keys, never an empty `{}`). Changed to `if ownership is not None:` to correctly express the intent (sentinel vs. empty-but-valid). The `loader.py` guard is load-bearing — `ownership: dict | None = None` in the function signature makes `None` the real sentinel. **(3) Issue #180 — independent list objects on error paths:** `_EMPTY_OWNERSHIP` error-path returns used `dict(_EMPTY_OWNERSHIP)` (shallow copy), which means all callers got the *same* 5 `[]` objects. If any caller mutated a list, the sentinel would be corrupted. Changed to `{k: [] for k in _EMPTY_OWNERSHIP}` so each call creates 5 independent `[]` objects. Code-review: 0 actionable issues (reviewer confirmed `[] == []` by value so existing `test_collect_ownership_git_nonzero_exit` / `test_collect_ownership_logs_on_os_error` still pass, and the `is not None` guard in `cli.py` is intentional even though it's always `True` — it communicates intent). Arch-check: 5/5 policies pass. Test count: 490 (unchanged). Version bumped to v0.1.44. PR #182 merged (`07ac776`). Workflow fix `bbb0d38` also lands: reviewer prompt now identifies the code as written by Codex.
 
 ### Ownership module — typed empty return on error paths (issues #176, #171)
 
@@ -480,10 +491,10 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-176` |
+| Current branch | `archon/task-fix-issue-181` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`a1d7cb9` — fix(ownership): return empty list instead of empty dict on all error paths, pending PR) |
-| Open PR | None. PR #177 (issues #176, #171 — typed empty return on ownership error paths) merged to main. |
+| Unpushed commits | 1 (`5d01a60` — fix(ownership): harden ownership contract to never return None, pending PR) |
+| Open PR | None. PR #182 (issues #181, #180 — ownership contract hardening + shallow-copy fix) merged to main. |
 | Working tree | Clean |
 | Test count | 490 passing + 1 deselected |
 | Test runtime | ~16 s |
@@ -768,6 +779,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-issue-119-arch-check-scope.plan.md` — shipped as `e40fcec`.
 - `fix-ci-arch-check-scope.plan.md` — shipped as `039497d`.
 - `fix-install-test-flakiness.plan.md` — shipped as `1d538fa`.
+- `fix-issue-181-ownership-contract.plan.md` — shipped as `5d01a60`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
