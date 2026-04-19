@@ -107,6 +107,7 @@ nodes:
     depends_on: [preflight]
     model: opus
     effort: high
+    idle_timeout: 600000
     prompt: |
       You are researching a codegraph issue/feature before planning implementation.
 
@@ -189,6 +190,7 @@ nodes:
     depends_on: [research]
     model: opus
     effort: high
+    idle_timeout: 600000
     prompt: |
       Create an implementation plan based on the research. Do NOT enter plan mode.
       Do NOT use /plan or any interactive planning mode. Just write a plan file directly.
@@ -224,19 +226,69 @@ nodes:
       Output the plan file path when done.
 
   # ═══════════════════════════════════════════════════════════════
+  # Step 3b: Group similar issues
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: group-issues
+    depends_on: [plan]
+    model: sonnet
+    context: fresh
+    idle_timeout: 600000
+    prompt: |
+      Check if there are other open GitHub issues that are similar to the one being
+      implemented and could be addressed in the same PR.
+
+      Current issue from user request: $USER_MESSAGE
+      Plan: $plan.output
+
+      ## Instructions
+
+      1. List all open issues:
+         ```bash
+         gh issue list --state open --json number,title,body --jq '.[] | "#\(.number) \(.title)\n\(.body[:200])\n---"'
+         ```
+
+      2. Compare each open issue against:
+         - The files being changed in the plan
+         - The scope of the current issue (same module? same function? same bug class?)
+         - Keywords overlap (e.g., both mention "arch-check", "mcp", "resolver")
+
+      3. An issue is "similar" if:
+         - It affects the SAME files as the current plan
+         - OR it's about the SAME function/class/module
+         - OR fixing the current issue would naturally fix it too
+         - Do NOT group issues that are merely in the same category but touch different code
+
+      4. Output a JSON-like summary:
+         - primary_issue: the original issue number
+         - grouped_issues: list of issue numbers that should be addressed together
+         - For each grouped issue: a one-line reason why it's related
+
+      If no similar issues found, just output the primary issue number alone.
+
+      Example output:
+      ```
+      Primary: #30
+      Grouped: #65 (same function: query_graph limit handling), #71 (same function: query_graph row cleaning)
+      All issue numbers: 30, 65, 71
+      ```
+
+  # ═══════════════════════════════════════════════════════════════
   # Step 4: Implement
   # ═══════════════════════════════════════════════════════════════
 
   - id: implement
-    depends_on: [plan]
+    depends_on: [group-issues]
     model: opus
     effort: high
     idle_timeout: 600000
     prompt: |
-      Read the plan and implement ALL tasks.
+      Read the plan and implement ALL tasks. If similar issues were grouped,
+      address ALL of them in this implementation.
 
       Plan: $plan.output
       User request: $USER_MESSAGE
+      Grouped issues: $group-issues.output
 
       ## Instructions
 
@@ -265,7 +317,7 @@ nodes:
     depends_on: [implement]
     model: opus
     effort: high
-    idle_timeout: 300000
+    idle_timeout: 600000
     prompt: |
       You MUST run a code review on all changed files. This is a mandatory step.
 
@@ -325,6 +377,7 @@ nodes:
     depends_on: [review]
     model: sonnet
     context: fresh
+    idle_timeout: 600000
     prompt: |
       Commit all changes with a conventional commit message.
 
@@ -371,6 +424,7 @@ nodes:
     model: opus
     effort: high
     context: fresh
+    idle_timeout: 600000
     output_format:
       type: object
       properties:
@@ -500,6 +554,7 @@ nodes:
   - id: roadmap
     depends_on: [final-gate]
     context: fresh
+    idle_timeout: 600000
     prompt: |
       Update ROADMAP.md at the repo root to reflect what was just implemented.
       This step is MANDATORY — you MUST edit and commit the ROADMAP.md file.
@@ -585,6 +640,7 @@ nodes:
   - id: package
     depends_on: [roadmap-verify]
     context: fresh
+    idle_timeout: 600000
     prompt: |
       Bump the version, build, and publish to PyPI.
 
@@ -726,6 +782,7 @@ nodes:
     depends_on: [test-cycle]
     context: fresh
     model: sonnet
+    idle_timeout: 600000
     prompt: |
       Review the implementation and testing for any enhancement ideas, bugs in
       unrelated code, or technical debt worth tracking.
@@ -763,11 +820,13 @@ nodes:
   - id: create-pr
     depends_on: [file-issues]
     context: fresh
+    idle_timeout: 600000
     prompt: |
       Create a pull request from the current feature branch to hotfix.
 
       Package version: $package.output
       Test results: $test-cycle.output
+      Grouped issues: $group-issues.output
 
       ## Instructions
 
@@ -788,8 +847,9 @@ nodes:
          curl -s https://pypi.org/pypi/cognitx-codegraph/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])"
          ```
 
-      4. MANDATORY — if the user's original request mentioned an issue number,
-         you MUST comment on the issue. Extract the issue number from: $USER_MESSAGE
+      4. MANDATORY — comment on ALL issues being addressed (primary + grouped).
+         Extract issue numbers from $USER_MESSAGE and $group-issues.output.
+         For EACH issue number:
          ```bash
          gh issue comment <N> --body "$(cat <<'EOF'
          ## Implementation Complete
@@ -814,11 +874,14 @@ nodes:
          gh issue view <N> --json comments --jq '.comments | length'
          ```
 
-      5. Create the PR with `Closes #N` in the body:
+      5. Create the PR with `Closes #N` for EVERY issue (primary + grouped).
+         Put each `Closes #N` on its own line:
          ```bash
          BRANCH=$(git branch --show-current)
          gh pr create --base hotfix --head "$BRANCH" --title "<type>: <description>" --body "$(cat <<'EOF'
          Closes #<N>
+         Closes #<M>
+         Closes #<K>
 
          ## Summary
          - <what changed>
@@ -840,5 +903,59 @@ nodes:
          ```
 
       Output the PR URL.
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 13: Scan for already-fixed issues
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: close-fixed-issues
+    depends_on: [create-pr]
+    context: fresh
+    model: sonnet
+    idle_timeout: 600000
+    prompt: |
+      Scan all open GitHub issues to find any that were inadvertently fixed by
+      the changes in this workflow run, but were NOT part of the grouped issues.
+
+      Implementation summary: $implement.output
+      Grouped issues: $group-issues.output
+
+      ## Instructions
+
+      1. List all open issues:
+         ```bash
+         gh issue list --state open --json number,title,body --jq '.[] | "#\(.number) \(.title): \(.body[:300])"'
+         ```
+
+      2. Get the files changed in this run:
+         ```bash
+         REPO=$(git rev-parse --show-toplevel)
+         cd "$REPO"
+         BRANCH=$(git branch --show-current)
+         git diff --name-only hotfix.."$BRANCH"
+         ```
+
+      3. For each open issue, check if it was ALREADY FIXED by the changes:
+         - Does the issue mention a file that was modified?
+         - Does the issue describe a bug in a function that was changed?
+         - Read the relevant code to verify the fix is actually in place
+         - Only close if you are CONFIDENT (>90%) the issue is resolved
+
+      4. For each issue that was inadvertently fixed:
+         ```bash
+         gh issue close <N> --comment "$(cat <<'EOF'
+         This issue was resolved as a side effect of the changes in PR #<PR>.
+
+         The fix was applied in commit <SHA> which modified <file>.
+         EOF
+         )"
+         ```
+
+      5. Output a summary:
+         - Issues scanned: N
+         - Issues closed as already fixed: list with numbers and reasons
+         - Issues still open: count
+
+      If no issues were inadvertently fixed, say "No additional issues resolved."
 
       Workflow complete.
