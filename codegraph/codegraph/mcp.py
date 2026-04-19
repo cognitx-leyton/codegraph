@@ -202,6 +202,20 @@ def _validate_limit(limit: int, *, max_limit: int = 1000) -> Optional[str]:
     return None
 
 
+def _validate_max_depth(max_depth: int, *, max_val: int = 5) -> Optional[str]:
+    """Return an error message if ``max_depth`` is out of range, ``None`` if OK.
+
+    Variable-length path bounds cannot be bind parameters in Cypher, so the
+    integer is validated here before interpolation — same rationale as
+    :func:`_validate_limit`.
+    """
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool):
+        return f"max_depth must be an integer in 1..{max_val}"
+    if max_depth < 1 or max_depth > max_val:
+        return f"max_depth must be an integer in 1..{max_val}"
+    return None
+
+
 def _run_read(cypher: str, **params: Any) -> list[dict]:
     """Execute a read-only Cypher query and return JSON-clean rows.
 
@@ -314,10 +328,9 @@ def callers_of_class(class_name: str, max_depth: int = 1) -> list[dict]:
         class_name: Exact ``:Class.name`` to query (e.g. ``"AuthService"``).
         max_depth: Max hops to traverse (1..5, default 1).
     """
-    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or not 1 <= max_depth <= 5:
-        return [{"error": "max_depth must be an integer in 1..5"}]
-    # Variable-length path bounds cannot be bind parameters in Cypher; the
-    # integer is validated above before we interpolate it.
+    err = _validate_max_depth(max_depth)
+    if err:
+        return [{"error": err}]
     cypher = (
         f"MATCH (caller:Class)-[:INJECTS|EXTENDS|IMPLEMENTS*1..{max_depth}]->"
         "(target:Class {name: $class_name}) "
@@ -524,8 +537,9 @@ def calls_from(
         max_depth: 1 for direct calls, up to 5 for transitive reach.
         limit: Max rows to return. Integer in 1..1000, default 50.
     """
-    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or not 1 <= max_depth <= 5:
-        return [{"error": "max_depth must be an integer in 1..5"}]
+    err = _validate_max_depth(max_depth)
+    if err:
+        return [{"error": err}]
     err = _validate_limit(limit)
     if err:
         return [{"error": err}]
@@ -560,8 +574,9 @@ def callers_of(
         max_depth: 1 for direct callers, up to 5 for transitive reach.
         limit: Max rows to return. Integer in 1..1000, default 50.
     """
-    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or not 1 <= max_depth <= 5:
-        return [{"error": "max_depth must be an integer in 1..5"}]
+    err = _validate_max_depth(max_depth)
+    if err:
+        return [{"error": err}]
     err = _validate_limit(limit)
     if err:
         return [{"error": err}]
@@ -885,11 +900,11 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
             # ── Load intra-file edges ───────────────────────────
             from .schema import (
                 IMPORTS, IMPORTS_SYMBOL, IMPORTS_EXTERNAL,
-                HAS_METHOD, EXPOSES, HANDLES, INJECTS,
+                EXPOSES, HANDLES, INJECTS,
                 EXTENDS, IMPLEMENTS, DECORATED_BY,
                 RENDERS, USES_HOOK,
-                HAS_COLUMN, RELATES_TO, REPOSITORY_OF,
-                RESOLVES, RETURNS, CALLS_ENDPOINT, USES_OPERATION,
+                RELATES_TO, REPOSITORY_OF,
+                RETURNS, CALLS_ENDPOINT, USES_OPERATION,
                 CALLS,
                 PROVIDES, EXPORTS_PROVIDER, IMPORTS_MODULE,
                 DECLARES_CONTROLLER,
@@ -898,13 +913,17 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                 READS_ATOM, WRITES_ATOM, READS_ENV,
                 BELONGS_TO,
             )
+            # HAS_METHOD, RESOLVES, HAS_COLUMN are written inline during
+            # node-creation MERGEs above — excluded here to avoid double-write.
+            # EXPOSES stays: file-level endpoints (no owning class) need the
+            # generic loop because the inline MATCH (c:Class ...) silently fails.
             _EDGE_WHITELIST = frozenset({
                 IMPORTS, IMPORTS_SYMBOL, IMPORTS_EXTERNAL,
-                HAS_METHOD, EXPOSES, HANDLES, INJECTS,
+                EXPOSES, HANDLES, INJECTS,
                 EXTENDS, IMPLEMENTS, DECORATED_BY,
                 RENDERS, USES_HOOK,
-                HAS_COLUMN, RELATES_TO, REPOSITORY_OF,
-                RESOLVES, RETURNS, CALLS_ENDPOINT, USES_OPERATION,
+                RELATES_TO, REPOSITORY_OF,
+                RETURNS, CALLS_ENDPOINT, USES_OPERATION,
                 CALLS,
                 PROVIDES, EXPORTS_PROVIDER, IMPORTS_MODULE,
                 DECLARES_CONTROLLER,
