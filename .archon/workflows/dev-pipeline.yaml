@@ -778,45 +778,82 @@ nodes:
         .venv/bin/python -m pytest tests/ -q 2>&1 && python3 -m compileall codegraph/ -q 2>&1
 
   # ═══════════════════════════════════════════════════════════════
-  # Step 11: File issues for discoveries
+  # Step 11: Fix small issues inline, file large ones
   # ═══════════════════════════════════════════════════════════════
 
-  - id: file-issues
+  - id: fix-and-file
     depends_on: [test-cycle]
     context: fresh
-    model: sonnet
+    model: opus
     idle_timeout: 600000
     prompt: |
-      Review the implementation and testing for any enhancement ideas, bugs in
-      unrelated code, or technical debt worth tracking.
+      Review the implementation and testing for any bugs, enhancements, or
+      tech debt discovered during this workflow run. Fix small things inline.
+      Only file GitHub issues for things too complex to fix right now.
 
       Implementation output: $implement.output
       Review output: $review.output
       Test output: $test-cycle.output
 
-      ## Instructions
+      ## Step 1: Gather discoveries
 
-      ### What to file
-      Only file issues for things that are:
-      - Actual bugs in existing code
-      - Concrete enhancements that fit codegraph's scope
-      - Technical debt that makes the code harder to maintain
+      List everything you noticed during the workflow — bugs in existing code,
+      missing edge cases, inconsistencies, enhancement ideas.
 
-      ### What NOT to file
-      Do NOT create issues for:
-      - Features that require LLM/AI calls (codegraph is deterministic — no-LLM)
-      - Features outside codegraph's scope (web UIs, dashboards, real-time watchers)
-      - Vague ideas without a concrete implementation path
-      - Things already tracked in existing open issues
-
-      Check existing issues first:
+      Check existing open issues to avoid duplicates:
       ```bash
       gh issue list --state open --json number,title --jq '.[] | "#\(.number) \(.title)"' | head -30
       ```
 
-      ### Filing
-      For each valid discovery:
+      ## Step 2: Triage each discovery
 
+      For each discovery, decide: **FIX NOW** or **FILE ISSUE**.
+
+      ### FIX NOW if ALL of these are true:
+      - The fix is obvious from the description (no research or investigation needed)
+      - No public API changes (function signatures, CLI flags, config schema stay the same)
+      - No new dependencies
+      - Existing tests cover it OR the test change is trivial
+      - Won't conflict with other open issues
+      - You are confident about the correct fix
+
+      ### FILE ISSUE if ANY of these are true:
+      - Needs investigation ("why is this happening?")
+      - Changes a public API or config schema
+      - Requires adding a new dependency
+      - Could conflict with or duplicate another open issue
+      - Needs a design decision (multiple valid approaches)
+      - You are not confident about the right fix
+
+      ### SKIP entirely if:
+      - Requires LLM/AI calls (codegraph is deterministic — no-LLM)
+      - Outside codegraph's scope (web UIs, dashboards, real-time watchers)
+      - Vague idea without a concrete implementation path
+      - Already tracked in an existing open issue
+
+      ## Step 3: Fix inline discoveries
+
+      For each FIX NOW item:
+      ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
+      ```
+      1. Make the fix
+      2. Run tests: `.venv/bin/python -m pytest tests/ -q`
+      3. If tests pass, commit:
+         ```bash
+         git add <files>
+         git commit -m "$(cat <<'EOF'
+         fix(<scope>): <description>
+
+         Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+         EOF
+         )"
+         ```
+
+      ## Step 4: File issues for complex discoveries
+
+      For each FILE ISSUE item:
       ```bash
       gh issue create --title "<type>: <title>" --body "$(cat <<'EOF'
       ## Context
@@ -831,16 +868,21 @@ nodes:
       )" --label "<enhancement|bug|tech-debt>"
       ```
 
-      If nothing was discovered, that's fine — just say "No new issues to file."
+      ## Step 5: Report
 
-      List all issues created with their numbers and titles.
+      Output:
+      - Fixes applied inline: list with descriptions
+      - Issues filed: list with numbers and titles
+      - Items skipped: list with reasons
+
+      If nothing was discovered, say "No discoveries."
 
   # ═══════════════════════════════════════════════════════════════
   # Step 12: Create PR to hotfix
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-pr
-    depends_on: [file-issues]
+    depends_on: [fix-and-file]
     context: fresh
     idle_timeout: 600000
     prompt: |
