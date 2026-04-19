@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `9192514` → `d91b45e` (fix(ownership): use unit separator (0x1f) instead of pipe to delimit git log fields — closes #170; 495 tests passing, v0.1.46).
+> **Last updated:** 2026-04-19 after commits `d91b45e` → `54d2100` (fix(loader): simplify delete cascade to avoid stale child nodes — closes #161; 495 tests passing, v0.1.47).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-170`. Fixed ownership git log parsing breakage when an author name contains a pipe character (`|`): replaced the pipe delimiter in the `--pretty=format:` string with ASCII Unit Separator (`\x1f`, 0x1f) in `ownership.py` (lines 40 and 67). Updated 2 existing test mocks to use the new delimiter and added a regression test `test_collect_ownership_pipe_in_author_name` that verifies `Jo|hn Doe` parses correctly — closes issue #170. Version at v0.1.46.
-- **Tests:** 495 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. 1 new regression test for issue #170 added to `tests/test_ownership.py`. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-161`. Simplified the `delete_file_subgraph()` delete cascade in `loader.py` and the `_DELETE_CASCADE` pattern in `mcp.py`'s `reindex_file()` from a brittle 10-step ordered sequence to a robust 3-step pattern: (1) delete grandchildren of owned classes via `(c:Class)-->(child)` excluding Class/Decorator nodes, (2) delete direct children via the 4 ownership edges (`DEFINES_CLASS|DEFINES_FUNC|DEFINES_IFACE|DEFINES_ATOM`), (3) `DETACH DELETE` the File node. The new approach is schema-resilient: adding new child node/edge types doesn't require cascade updates. Test count unchanged at 495 (assertion updated from 10 → 3 calls). Version at v0.1.47.
+- **Tests:** 495 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `9192514`)
+## Shipped since the last roadmap update (commit `d91b45e`)
 
 ```
+54d2100 fix(loader): simplify delete cascade to avoid stale child nodes
+8012478 Merge pull request #187 from cognitx-leyton/archon/task-fix-issue-170
+0c24335 chore: bump version to 0.1.47
+a8c6b3f docs(roadmap): update session handoff
 d91b45e fix(ownership): use unit separator (0x1f) instead of pipe to delimit git log fields
 186dc7e chore: bump version to 0.1.46
 34b79bb Merge pull request #186 from cognitx-leyton/archon/task-fix-issue-175
@@ -213,7 +217,11 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Forty-one sessions' worth of work grouped by theme:
+Forty-two sessions' worth of work grouped by theme:
+
+### Loader / MCP — schema-resilient delete cascade (issue #161)
+
+- `54d2100 fix(loader)` — `delete_file_subgraph()` in `loader.py` and the inline cascade in `mcp.py`'s `reindex_file()` previously used a 10-step ordered Cypher sequence that had to be manually updated whenever a new child node type or ownership edge was added to the schema. The cascade was also fragile: the ordering was undocumented, and a missing step would leave orphaned nodes after `--since` incremental re-indexing. Replaced with a 3-step pattern that is schema-resilient by construction: **(1)** Delete all grandchildren of owned classes via `(c:Class)-->(child) WHERE NOT child:Class AND NOT child:Decorator` — catches Method, Endpoint, Column, GraphQLOperation, Atom, and any future types without code changes; **(2)** Delete direct children via the 4 ownership edges (`DEFINES_CLASS|DEFINES_FUNC|DEFINES_IFACE|DEFINES_ATOM`) — handles Function, Class, Interface, and Atom nodes; **(3)** `DETACH DELETE` the File node itself — automatically drops IMPORTS, BELONGS_TO, and any other File-level edges. The `(c:Class)-->(child)` catch-all is safe because all outgoing edges from Class to non-Class/non-Decorator targets are ownership edges; cross-file references (EXTENDS, IMPLEMENTS, INJECTS, etc.) all target Class nodes and are excluded by the `WHERE NOT child:Class` guard. Code review found and fixed one critical bug: step 2 initially used `DEFINES_INTERFACE` but the actual Neo4j relationship type (emitted at `loader.py:387` and `mcp.py:824`) is `DEFINES_IFACE` — corrected before commit. `tests/test_incremental.py` assertion updated from 10 → 3 call assertions. Loader and MCP Cypher kept byte-identical (same 3-step logic, differing only in UNWIND vs single-path parameter style). Arch-check: 5/5 policies pass. Test count: 495 (unchanged). Version bumped to v0.1.47.
 
 ### Ownership module — pipe-safe git log delimiter (issue #170)
 
@@ -511,10 +519,10 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-170` |
+| Current branch | `archon/task-fix-issue-161` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`d91b45e` — fix(ownership): use unit separator (0x1f) instead of pipe to delimit git log fields, pending PR) |
-| Open PR | None. PR #186 (issue #175 — rooted CODEOWNERS false-positive fix) merged to main. |
+| Unpushed commits | 1 (`54d2100` — fix(loader): simplify delete cascade to avoid stale child nodes, pending PR) |
+| Open PR | None. PR #187 (issue #170 — pipe-safe git log delimiter) merged to main. |
 | Working tree | Clean |
 | Test count | 495 passing + 1 deselected |
 | Test runtime | ~16 s |
@@ -800,6 +808,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-ci-arch-check-scope.plan.md` — shipped as `039497d`.
 - `fix-install-test-flakiness.plan.md` — shipped as `1d538fa`.
 - `fix-issue-181-ownership-contract.plan.md` — shipped as `5d01a60`.
+- `simplify-delete-cascade.plan.md` — shipped as `54d2100`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
