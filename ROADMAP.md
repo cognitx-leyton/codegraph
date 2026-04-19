@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `f8653a3` → `5888953` (PR #150 merged (issue #143 — stats scoped edge AND logic); extended `_format_stat_line` tests for interfaces and endpoints (issue #149) — 470 tests passing, v0.1.37).
+> **Last updated:** 2026-04-19 after commits `a5d0b5f` → `6ea3c20` (fix CRLF line endings in stat placeholder replacement (issue #152); PR #153 merged (issue #149 — extended `_format_stat_line` tests); 471 tests passing, v0.1.38).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-149`. Extended `_format_stat_line` tests to cover interfaces and endpoints (issue #149). PR #150 merged to main (issue #143 — scoped edge AND logic + `--include-cross-scope-edges` flag); version at v0.1.37.
-- **Tests:** 470 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-152`. Fixed CRLF line endings in stat placeholder replacement (issue #152) — `_STAT_PLACEHOLDER_RE` now matches `\r?\n`, and `_update_stat_placeholders` uses `open(..., newline="")` to preserve raw line endings. PR #153 merged to main (issue #149 — extended `_format_stat_line` tests for interfaces/endpoints); version at v0.1.38.
+- **Tests:** 471 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `f8653a3`)
+## Shipped since the last roadmap update (commit `a5d0b5f`)
 
 ```
+6ea3c20 fix(stats): handle CRLF line endings in stat placeholder replacement
+9a86b8a Merge pull request #153 from cognitx-leyton/archon/task-fix-issue-149
+d182dce chore: bump version to 0.1.38
+a5d0b5f docs(roadmap): update session handoff
 5888953 test(stats): extend _format_stat_line tests for interfaces and endpoints
 a64088f Merge pull request #150 from cognitx-leyton/archon/task-fix-issue-143
 92f0c67 chore: bump version to 0.1.37
@@ -165,7 +169,13 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Thirty-two sessions' worth of work grouped by theme:
+Thirty-three sessions' worth of work grouped by theme:
+
+### CRLF line endings in stat placeholder replacement (issue #152)
+
+- `6ea3c20 fix(stats)` — `_update_stat_placeholders` in `cli.py` failed silently on files with Windows-style CRLF (`\r\n`) line endings because `read_text()` performs universal newline translation (collapses `\r\n` → `\n`) and `write_text()` similarly normalises, yet the regex anchors in `_STAT_PLACEHOLDER_RE` expected `\n`. Two changes: **(1)** `_STAT_PLACEHOLDER_RE` anchor changed from `\n` to `\r?\n` so the pattern matches both LF and CRLF files. **(2)** `_update_stat_placeholders` switched from `Path.read_text()` / `Path.write_text()` to `open(path, encoding="utf-8", newline="")` for both read and write, bypassing Python's universal-newline translation so raw byte sequences pass through unmodified to the regex. **(3)** New test `test_update_replaces_content_crlf` in `tests/test_stats.py` (line 284–301) writes a markdown file with CRLF endings via `write_bytes` and asserts the placeholder is replaced correctly. Code-review: 0 issues (after fixing a vacuous-test issue found in round 1 where `read_text` was still used). Arch-check: 5/5 policies pass. Test count: 470 → 471.
+
+- `9a86b8a merge` + `d182dce chore` — PR #153 (branch `archon/task-fix-issue-149`, extended `_format_stat_line` tests for interfaces/endpoints, issue #149) merged to `main`; version bumped to v0.1.38.
 
 ### `_format_stat_line` tests — interfaces and endpoints (issue #149)
 
@@ -409,12 +419,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-149` |
+| Current branch | `archon/task-fix-issue-152` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`5888953` — extended _format_stat_line tests for interfaces/endpoints, pending PR) |
-| Open PR | None. PR #150 (issue #143 — stats scoped edge AND logic) merged to main. |
+| Unpushed commits | 1 (`6ea3c20` — fix CRLF line endings in stat placeholder replacement, pending PR) |
+| Open PR | None. PR #153 (issue #149 — extended `_format_stat_line` tests) merged to main. |
 | Working tree | Clean |
-| Test count | 470 passing + 1 deselected |
+| Test count | 471 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
