@@ -138,6 +138,24 @@ def test_match_codeowners_no_matching_rule() -> None:
     assert _match_codeowners("src/app.py", rules) == []
 
 
+# --- Issue #175: rooted CODEOWNERS pattern false-positive on sibling paths ---
+
+@pytest.mark.parametrize(
+    ("pat", "path", "expected"),
+    [
+        pytest.param("/docs", "docs/readme.md", True, id="rooted-no-slash-child"),
+        pytest.param("/docs", "docs-internal/readme.md", False, id="rooted-no-slash-sibling"),
+        pytest.param("/docs/", "docs/readme.md", True, id="rooted-slash-child"),
+        pytest.param("/docs/", "docs-internal/readme.md", False, id="rooted-slash-sibling"),
+    ],
+)
+def test_co_pattern_match_rooted_no_sibling_false_positive(
+    pat: str, path: str, expected: bool,
+) -> None:
+    """Rooted CODEOWNERS patterns must not false-positive match sibling directories."""
+    assert _co_pattern_match(pat, path) is expected
+
+
 def test_collect_ownership_subprocess_timeout(tmp_path: Path, caplog) -> None:
     """subprocess.TimeoutExpired must return empty ownership dict and log a warning."""
     with patch(
