@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `c4bb818` → `22d4608` (fix(ownership): deterministic contributor ordering (#167), git exit-code check (#166), OSError catch + log-prefix fix post-review (#158/#159); 480 tests passing, v0.1.41).
+> **Last updated:** 2026-04-19 after commits `fb98121` → `573b86d` (test(ownership): pattern-matching and edge-case coverage for issue #172; 490 tests passing, v0.1.42).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-167`. Fixed four issues grouped in `ownership.py` and `tests/test_ownership.py`: (1) `contributors` list is now deterministic — `counter.most_common(10)` replaced with `sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:10]` (issue #167); (2) `collect_ownership()` returns `{}` with a `logger.warning()` when git exits with a non-zero return code (issue #166); (3) `_parse_codeowners()` now also catches `OSError` (TOCTOU race) in addition to `UnicodeDecodeError` (post-review fix for #158); (4) log message prefix on the returncode branch fixed from `"collect_ownership -"` to `"collect_ownership:"` (post-review fix for #159). Version at v0.1.41.
-- **Tests:** 480 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-172`. Added 5 new test functions to `codegraph/tests/test_ownership.py` covering previously-untested ownership internals: `test_co_pattern_match_cases` (6 parametrized cases for bare/rooted/path/double-star globs), `test_match_codeowners_last_rule_wins`, `test_match_codeowners_no_matching_rule`, `test_collect_ownership_subprocess_timeout` (caplog warning check), `test_collect_ownership_empty_git_log` (all 5 dict keys present with empty values). No production code changes. Version at v0.1.42.
+- **Tests:** 490 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `c4bb818`)
+## Shipped since the last roadmap update (commit `fb98121`)
 
 ```
+573b86d test(ownership): add pattern-matching and edge-case coverage for issue #172
+45b24b9 Merge pull request #173 from cognitx-leyton/archon/task-fix-issue-167
+0205114 chore: bump version to 0.1.42
+fb98121 docs(roadmap): update session handoff
 22d4608 fix(ownership): catch OSError in _parse_codeowners and fix log prefix
 2be77af Merge pull request #169 from cognitx-leyton/archon/task-fix-issue-162
 cafff46 chore: bump version to 0.1.41
@@ -188,7 +192,11 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Thirty-six sessions' worth of work grouped by theme:
+Thirty-seven sessions' worth of work grouped by theme:
+
+### Ownership module — pattern-matching and edge-case test coverage (issue #172)
+
+- `573b86d test(ownership)` — 5 new test functions added to `codegraph/tests/test_ownership.py`, covering gaps identified in issue #172 (the existing suite lacked direct tests for `_co_pattern_match` logic, last-rule-wins semantics, the no-match-returns-empty path, subprocess timeout handling, and empty git-log output). **(1) `test_co_pattern_match_cases`** — 6 parametrized cases: bare glob match/no-match, rooted prefix match/no-match, path-pattern (`src/*.py`), double-star (`**/*.py`). **(2) `test_match_codeowners_last_rule_wins`** — two rules both matching the same path; asserts the later rule's owners win. **(3) `test_match_codeowners_no_matching_rule`** — no rule matches the path; asserts `[]` is returned. **(4) `test_collect_ownership_subprocess_timeout`** — `subprocess.run` raises `subprocess.TimeoutExpired`; asserts `{}` is returned and a `logger.warning` is emitted (via `caplog`). **(5) `test_collect_ownership_empty_git_log`** — `subprocess.run` returns exit 0 with empty `stdout`; asserts all 5 expected dict keys (`last_author`, `last_date`, `contributors`, `teams`, `codeowners`) are present with empty/zero values. Import line updated to include `_match_codeowners` and `_co_pattern_match`. Code-review: 0 issues. Arch-check: 5/5 policies pass. Test count: 480 → 490. Version bumped to v0.1.42 (`0205114`). PR #173 merged to `main` (`45b24b9`).
 
 ### Ownership module — deterministic ordering, git exit-code check, and post-review fixes (issues #166, #167)
 

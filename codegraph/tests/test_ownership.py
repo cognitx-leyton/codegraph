@@ -5,7 +5,14 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
-from codegraph.ownership import _parse_codeowners, collect_ownership
+import pytest
+
+from codegraph.ownership import (
+    _co_pattern_match,
+    _match_codeowners,
+    _parse_codeowners,
+    collect_ownership,
+)
 
 
 def test_parse_codeowners_crlf(tmp_path: Path) -> None:
@@ -98,3 +105,58 @@ def test_parse_codeowners_non_utf8(tmp_path: Path, caplog) -> None:
     rules = _parse_codeowners(co)
     assert rules == []
     assert "cannot decode" in caplog.text
+
+
+# --- Issue #172: CODEOWNERS pattern matching coverage ---
+
+@pytest.mark.parametrize(
+    ("pat", "path", "expected"),
+    [
+        pytest.param("*.py", "src/models/user.py", True, id="bare-glob-match"),
+        pytest.param("*.py", "src/models/user.ts", False, id="bare-glob-no-match"),
+        pytest.param("/docs/", "docs/readme.md", True, id="rooted-match"),
+        pytest.param("/docs/", "src/docs/readme.md", False, id="rooted-no-match"),
+        pytest.param("src/", "src/app.ts", True, id="path-pattern"),
+        pytest.param("**/*.ts", "src/deep/file.ts", True, id="double-star"),
+    ],
+)
+def test_co_pattern_match_cases(pat: str, path: str, expected: bool) -> None:
+    """_co_pattern_match must handle bare globs, rooted, path, and ** patterns."""
+    assert _co_pattern_match(pat, path) is expected
+
+
+def test_match_codeowners_last_rule_wins() -> None:
+    """Last matching rule wins (CODEOWNERS semantics)."""
+    rules = [("*.py", ["@general"]), ("src/*.py", ["@src-team"])]
+    assert _match_codeowners("src/app.py", rules) == ["@src-team"]
+
+
+def test_match_codeowners_no_matching_rule() -> None:
+    """No matching rule returns an empty list."""
+    rules = [("*.go", ["@go-team"])]
+    assert _match_codeowners("src/app.py", rules) == []
+
+
+def test_collect_ownership_subprocess_timeout(tmp_path: Path, caplog) -> None:
+    """subprocess.TimeoutExpired must return {} and log a warning."""
+    with patch(
+        "codegraph.ownership.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="git", timeout=120),
+    ):
+        result = collect_ownership(tmp_path, {"src/app.py"})
+    assert result == {}
+    assert "git log failed" in caplog.text
+
+
+def test_collect_ownership_empty_git_log(tmp_path: Path) -> None:
+    """Empty git log stdout must return dict with all keys but empty values."""
+    proc = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="", stderr="",
+    )
+    with patch("codegraph.ownership.subprocess.run", return_value=proc):
+        result = collect_ownership(tmp_path, {"src/app.py"})
+    assert result["authors"] == []
+    assert result["teams"] == []
+    assert result["last_modified"] == []
+    assert result["contributors"] == []
+    assert result["owned_by"] == []
