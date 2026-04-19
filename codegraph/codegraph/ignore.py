@@ -56,7 +56,8 @@ class IgnoreFilter:
         if not self.ignore_path.exists():
             raise IgnoreConfigError(f"{self.ignore_path} not found")
         try:
-            content = self.ignore_path.read_text(encoding="utf-8")
+            with open(self.ignore_path, encoding="utf-8", newline="") as fh:
+                content = fh.read()
         except OSError as e:
             raise IgnoreConfigError(f"Cannot read {self.ignore_path}: {e}") from e
         self._parse_patterns(content)

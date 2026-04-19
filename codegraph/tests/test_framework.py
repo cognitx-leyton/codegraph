@@ -237,6 +237,25 @@ def test_workspaces_guard_blocks_unrelated_parent(tmp_path: Path) -> None:
     assert info.framework == FrameworkType.UNKNOWN
 
 
+def test_python_deps_crlf_requirements(tmp_path: Path) -> None:
+    """requirements.txt with CRLF endings must parse dep names without \\r."""
+    pkg = tmp_path / "myapp"
+    pkg.mkdir()
+    (pkg / "requirements.txt").write_bytes(
+        b"flask>=2.0\r\n"
+        b"requests\r\n"
+        b"# a comment\r\n"
+        b"sqlalchemy[asyncio]>=2.0\r\n"
+    )
+    det = FrameworkDetector(pkg)
+    deps = det._python_dependencies
+    assert "flask" in deps
+    assert "requests" in deps
+    assert "sqlalchemy" in deps
+    # No trailing \r contamination
+    assert not any("\r" in d for d in deps)
+
+
 # ── Twenty CRM integration (opt-in) ──────────────────────────────────
 
 

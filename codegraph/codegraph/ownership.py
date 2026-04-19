@@ -94,7 +94,9 @@ _CO_LINE_RE = re.compile(r"^\s*([^\s#]+)\s+(.+)$")
 
 def _parse_codeowners(p: Path) -> list[tuple[str, list[str]]]:
     rules: list[tuple[str, list[str]]] = []
-    for line in p.read_text(errors="replace").splitlines():
+    with open(p, encoding="utf-8", errors="replace", newline="") as fh:
+        _text = fh.read()
+    for line in _text.splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
             continue

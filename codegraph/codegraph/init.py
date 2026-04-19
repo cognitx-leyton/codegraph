@@ -243,7 +243,8 @@ def _write_if_new(path: Path, content: str, *, force: bool, console: Console) ->
     if already_exists and not force:
         console.print(f"  [yellow]skip[/] {path} ([dim]exists; pass --force to overwrite[/])")
         return False
-    path.write_text(content, encoding="utf-8")
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(content)
     verb = "overwrote" if already_exists else "wrote"
     console.print(f"  [green]{verb}[/] {path}")
     return True
@@ -254,14 +255,17 @@ def _append_claude_md(root: Path, snippet: str, console: Console) -> None:
     target = root / "CLAUDE.md"
     marker = "## Using the codegraph knowledge graph"
     if target.exists():
-        existing = target.read_text(encoding="utf-8")
+        with open(target, encoding="utf-8", newline="") as fh:
+            existing = fh.read()
         if marker in existing:
             console.print(f"  [yellow]skip[/] {target} (already contains codegraph section)")
             return
-        target.write_text(existing.rstrip() + "\n\n" + snippet, encoding="utf-8")
+        with open(target, "w", encoding="utf-8", newline="") as fh:
+            fh.write(existing.rstrip() + "\n\n" + snippet)
         console.print(f"  [green]appended[/] codegraph section to {target}")
     else:
-        target.write_text(snippet, encoding="utf-8")
+        with open(target, "w", encoding="utf-8", newline="") as fh:
+            fh.write(snippet)
         console.print(f"  [green]wrote[/] {target}")
 
 

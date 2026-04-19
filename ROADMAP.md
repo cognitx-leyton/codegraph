@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `a5d0b5f` → `6ea3c20` (fix CRLF line endings in stat placeholder replacement (issue #152); PR #153 merged (issue #149 — extended `_format_stat_line` tests); 471 tests passing, v0.1.38).
+> **Last updated:** 2026-04-19 after commits `3b320b4` → `db3291e` (fix(crlf): normalise CRLF line endings across all file-read paths (issue #155); PR #156 merged; 475 tests passing, v0.1.39).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-152`. Fixed CRLF line endings in stat placeholder replacement (issue #152) — `_STAT_PLACEHOLDER_RE` now matches `\r?\n`, and `_update_stat_placeholders` uses `open(..., newline="")` to preserve raw line endings. PR #153 merged to main (issue #149 — extended `_format_stat_line` tests for interfaces/endpoints); version at v0.1.38.
-- **Tests:** 471 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-155`. Normalised CRLF line endings across all file-read paths (issue #155) — 7 call sites across `ignore.py`, `ownership.py`, `mcp.py`, `framework.py`, and `init.py` switched from `Path.read_text()` / `Path.write_text()` to `open(..., newline="")`. PR #156 merged to main; version at v0.1.39.
+- **Tests:** 475 passing + 1 deselected (Docker-slow integration test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `a5d0b5f`)
+## Shipped since the last roadmap update (commit `3b320b4`)
 
 ```
+db3291e fix(crlf): normalise CRLF line endings across all file-read paths
+fa90f98 Merge pull request #156 from cognitx-leyton/archon/task-fix-issue-152
+dfaba1f chore: bump version to 0.1.39
+3b320b4 docs(roadmap): update session handoff
 6ea3c20 fix(stats): handle CRLF line endings in stat placeholder replacement
 9a86b8a Merge pull request #153 from cognitx-leyton/archon/task-fix-issue-149
 d182dce chore: bump version to 0.1.38
@@ -170,6 +174,12 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 ```
 
 Thirty-three sessions' worth of work grouped by theme:
+
+### CRLF line endings across all file-read paths (issue #155)
+
+- `db3291e fix(crlf)` — Systematic audit of every `Path.read_text()` / `Path.write_text()` call that processes user files (ignore rules, ownership, MCP tools, framework detection, init scaffolding). **7 call sites** across 5 files switched to `open(..., encoding="utf-8", newline="")` so Python's universal-newline translation is bypassed and raw line endings are preserved through the regex/string logic. **4 new tests** added: `test_ignore_crlf_line_endings` (`.codegraphignore` with CRLF parses file/route/component patterns), `test_parse_codeowners_crlf` (CODEOWNERS with CRLF parses rules + owners), `test_append_claude_md_crlf` (CLAUDE.md with CRLF appended without `\r\r` corruption), `test_python_deps_crlf_requirements` (requirements.txt with CRLF parses dep names without trailing `\r`). Code-review: 1 issue found and fixed (`ownership.py` was missing `encoding="utf-8"`). Arch-check: 5/5 policies pass. Test count: 471 → 475.
+
+- `fa90f98 merge` + `dfaba1f chore` — PR #156 (branch `archon/task-fix-issue-155`, CRLF normalisation, issue #155) merged to `main`; version bumped to v0.1.39.
 
 ### CRLF line endings in stat placeholder replacement (issue #152)
 

@@ -115,7 +115,8 @@ def _register_query_prompts(server: FastMCP) -> None:
     if not _QUERIES_MD.exists():
         return
 
-    entries = _parse_queries_md(_QUERIES_MD.read_text(encoding="utf-8"))
+    with open(_QUERIES_MD, encoding="utf-8", newline="") as fh:
+        entries = _parse_queries_md(fh.read())
     for entry in entries:
         cypher = entry.cypher
         description = entry.description

@@ -271,6 +271,25 @@ def test_scaffold_claude_md_append_is_idempotent(tmp_path: Path):
     assert first == second
 
 
+def test_append_claude_md_crlf(tmp_path: Path):
+    """CLAUDE.md with CRLF endings must be appended without corruption."""
+    _make_git_repo(tmp_path)
+    (tmp_path / "CLAUDE.md").write_bytes(b"# My Project\r\n\r\nSome notes.\r\n")
+
+    config = InitConfig(
+        packages=["src"], cross_pairs=[],
+        install_claude=False, install_ci=False, setup_neo4j=False,
+        container_name="cognitx-codegraph-demo",
+    )
+    _scaffold_files(tmp_path, config, force=False, console=_silent_console())
+
+    with open(tmp_path / "CLAUDE.md", encoding="utf-8", newline="") as fh:
+        content = fh.read()
+    assert "# My Project" in content              # existing preserved
+    assert "codegraph knowledge graph" in content  # snippet appended
+    assert "\r\r" not in content                   # no double-CR corruption
+
+
 def test_scaffold_respects_opt_outs(tmp_path: Path):
     _make_git_repo(tmp_path)
     config = InitConfig(
