@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `1cf1384` → `c4bb818` (fix(ownership): encoding strictness, silent-failure logging, and test coverage for ownership module (issues #158, #159, #162); 376 tests passing, v0.1.40).
+> **Last updated:** 2026-04-19 after commits `c4bb818` → `22d4608` (fix(ownership): deterministic contributor ordering (#167), git exit-code check (#166), OSError catch + log-prefix fix post-review (#158/#159); 480 tests passing, v0.1.41).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-162`. Fixed three issues in `ownership.py` and `tests/test_ownership.py`: (1) `_parse_codeowners()` switched from `errors="replace"` to strict UTF-8 with `UnicodeDecodeError` catch+log (issue #158); (2) `collect_ownership()` now emits `logger.warning()` at both silent failure points — git command failure and malformed commit header lines (issue #159); (3) `test_ownership.py` grew from 1 test to 29 tests covering all 4 functions across CRLF, encoding, subprocess error, CODEOWNERS integration, and last-rule-wins scenarios (issue #162). Version at v0.1.40.
-- **Tests:** 376 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-167`. Fixed four issues grouped in `ownership.py` and `tests/test_ownership.py`: (1) `contributors` list is now deterministic — `counter.most_common(10)` replaced with `sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:10]` (issue #167); (2) `collect_ownership()` returns `{}` with a `logger.warning()` when git exits with a non-zero return code (issue #166); (3) `_parse_codeowners()` now also catches `OSError` (TOCTOU race) in addition to `UnicodeDecodeError` (post-review fix for #158); (4) log message prefix on the returncode branch fixed from `"collect_ownership -"` to `"collect_ownership:"` (post-review fix for #159). Version at v0.1.41.
+- **Tests:** 480 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,13 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `1cf1384`)
+## Shipped since the last roadmap update (commit `c4bb818`)
 
 ```
+22d4608 fix(ownership): catch OSError in _parse_codeowners and fix log prefix
+2be77af Merge pull request #169 from cognitx-leyton/archon/task-fix-issue-162
+cafff46 chore: bump version to 0.1.41
+c08ef3e docs(roadmap): fix placeholder commit hash in session handoff
 c4bb818 docs(roadmap): update session handoff
 fix(ownership): encoding strictness, silent-failure logging, and tests (issues #158, #159, #162)
 10f77a0 Merge remote-tracking branch 'origin/main' into hotfix
@@ -184,7 +188,11 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Thirty-five sessions' worth of work grouped by theme:
+Thirty-six sessions' worth of work grouped by theme:
+
+### Ownership module — deterministic ordering, git exit-code check, and post-review fixes (issues #166, #167)
+
+- `22d4608 fix(ownership)` — Four issues fixed as a batch in `codegraph/codegraph/ownership.py` and `codegraph/tests/test_ownership.py`. **(1) Issue #167 — deterministic contributor ordering:** `collect_ownership()` was calling `counter.most_common(10)` which is non-deterministic on equal-count entries (CPython 3.11 insertion-ordered, but not guaranteed across runs or implementations). Replaced with `sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:10]` — primary sort by descending count, secondary alphabetical tiebreaker. New test `test_contributors_deterministic_on_tie` verifies two contributors with identical commit counts are always returned in alphabetical order. **(2) Issue #166 — git exit-code check:** `collect_ownership()` called `subprocess.run()` but never checked `proc.returncode`. A failed `git log` (e.g. non-git directory, access error) would silently continue with an empty `stdout`, parsing zero lines and returning `{}` without any indication of failure. Fixed by adding `if proc.returncode != 0:` → `logger.warning("collect_ownership: git log exited %d for %s", proc.returncode, path)` → `return {}`. New test `test_collect_ownership_git_nonzero_exit` injects `returncode=128` and asserts the warning is emitted and `{}` is returned. **(3) Post-review fix for #158 — OSError in `_parse_codeowners`:** the initial fix only caught `UnicodeDecodeError` in the `open()` call, leaving a TOCTOU window: the file could disappear or become unreadable between the `.exists()` check and the `open()`. Added `OSError` to the `except` clause (`except (UnicodeDecodeError, OSError):`). New test `test_parse_codeowners_non_utf8` verifies the combined catch. **(4) Post-review fix for #159 — log prefix consistency:** the `returncode != 0` warning was using an em-dash (`"collect_ownership - git log …"`) instead of a colon like all other warnings in the module. Fixed to `"collect_ownership: git log exited %d for %s"`. Tests updated accordingly. Version bumped to v0.1.41 (`cafff46`). PR #169 merged to `main` (`2be77af`). Test count: 376 → 480.
 
 ### Ownership module — encoding strictness, silent-failure logging, and test coverage (issues #158, #159, #162)
 
@@ -454,12 +462,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-152` |
+| Current branch | `archon/task-fix-issue-167` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`6ea3c20` — fix CRLF line endings in stat placeholder replacement, pending PR) |
-| Open PR | None. PR #153 (issue #149 — extended `_format_stat_line` tests) merged to main. |
+| Unpushed commits | 1 (`22d4608` — fix OSError catch in `_parse_codeowners` and log prefix, pending PR) |
+| Open PR | None. PR #169 (issues #166, #167 — deterministic ordering + git exit-code check) merged to main. |
 | Working tree | Clean |
-| Test count | 471 passing + 1 deselected |
+| Test count | 480 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
