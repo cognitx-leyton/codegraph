@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `1cf1384` → `<roadmap>` (fix(ownership): encoding strictness, silent-failure logging, and test coverage for ownership module (issues #158, #159, #162); 376 tests passing, v0.1.40).
+> **Last updated:** 2026-04-19 after commits `1cf1384` → `c4bb818` (fix(ownership): encoding strictness, silent-failure logging, and test coverage for ownership module (issues #158, #159, #162); 376 tests passing, v0.1.40).
 
 ---
 
@@ -24,7 +24,7 @@
 ## Shipped since the last roadmap update (commit `1cf1384`)
 
 ```
-<roadmap> docs(roadmap): update session handoff
+c4bb818 docs(roadmap): update session handoff
 fix(ownership): encoding strictness, silent-failure logging, and tests (issues #158, #159, #162)
 10f77a0 Merge remote-tracking branch 'origin/main' into hotfix
 06d2236 Merge pull request #165 from cognitx-leyton/dev
