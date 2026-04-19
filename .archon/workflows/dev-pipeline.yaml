@@ -794,7 +794,26 @@ nodes:
 
       ## Instructions
 
-      For each discovery that is OUT OF SCOPE for the current work:
+      ### What to file
+      Only file issues for things that are:
+      - Actual bugs in existing code
+      - Concrete enhancements that fit codegraph's scope
+      - Technical debt that makes the code harder to maintain
+
+      ### What NOT to file
+      Do NOT create issues for:
+      - Features that require LLM/AI calls (codegraph is deterministic — no-LLM)
+      - Features outside codegraph's scope (web UIs, dashboards, real-time watchers)
+      - Vague ideas without a concrete implementation path
+      - Things already tracked in existing open issues
+
+      Check existing issues first:
+      ```bash
+      gh issue list --state open --json number,title --jq '.[] | "#\(.number) \(.title)"' | head -30
+      ```
+
+      ### Filing
+      For each valid discovery:
 
       ```bash
       gh issue create --title "<type>: <title>" --body "$(cat <<'EOF'
