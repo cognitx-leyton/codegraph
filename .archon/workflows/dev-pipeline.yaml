@@ -320,6 +320,8 @@ nodes:
     idle_timeout: 600000
     prompt: |
       You MUST run a code review on all changed files. This is a mandatory step.
+      This code was written by Codex. Review it as if you are in a bad mood —
+      be extremely picky, assume nothing is correct, and flag everything suspicious.
 
       Implementation summary: $implement.output
 
