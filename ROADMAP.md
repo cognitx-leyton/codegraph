@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `a1d7cb9` → `5d01a60` (fix(ownership): harden ownership contract to never return None — closes #181 and #180; 490 tests passing, v0.1.44).
+> **Last updated:** 2026-04-19 after commits `0a676e1` → `9192514` (fix(ownership): prevent rooted CODEOWNERS pattern false-positives on sibling dirs — closes #175; 494 tests passing, v0.1.45).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-181`. Hardened the ownership contract: `collect_ownership()` can never return `None`; expanded docstring documents the always-truthy return contract; two `if ownership:` guards in `cli.py` and `loader.py` tightened to `if ownership is not None:`; `_EMPTY_OWNERSHIP` error-path returns now use a dict comprehension (`{k: [] for k in _EMPTY_OWNERSHIP}`) so callers get independent list objects — closes issues #181 and #180. Version at v0.1.44.
-- **Tests:** 490 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. No new tests in this session — all 490 pass with the contract hardening. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-175`. Fixed false-positive ownership matches for rooted CODEOWNERS patterns: `/docs` (and `/docs/`) no longer incorrectly matched `docs-internal/` — replaced `pat + "*"` with `base.rstrip("/") + "/*"` in `_co_pattern_match` (`ownership.py:157-160`). Added 4 parametrized regression tests covering both slash variants against child paths (should match) and sibling paths (should not match) — closes issue #175. Version at v0.1.45.
+- **Tests:** 494 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. 4 new regression tests for issue #175 added to `tests/test_ownership.py`. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,14 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `a1d7cb9`)
+## Shipped since the last roadmap update (commit `0a676e1`)
 
 ```
+9192514 fix(ownership): prevent rooted CODEOWNERS pattern false-positives on sibling dirs
+79bc84d chore: bump version to 0.1.45
+ef625a0 feat(workflow): fix-and-file replaces file-issues — fix small bugs inline
+c3c5f48 Merge pull request #184 from cognitx-leyton/dev
+32cb8f1 Merge pull request #185 from cognitx-leyton/archon/task-fix-issue-181
 5d01a60 fix(ownership): harden ownership contract to never return None
 4b6c9fd chore: bump version to 0.1.44
 bbb0d38 chore(workflow): tell reviewer the code was written by Codex
@@ -205,7 +210,15 @@ edb8cca feat(parser):   extract docstrings, params, and return types for Python
 09822fa docs(roadmap):  session handoff document for continuing work across agents
 ```
 
-Thirty-nine sessions' worth of work grouped by theme:
+Forty-one sessions' worth of work grouped by theme:
+
+### Ownership module — rooted CODEOWNERS pattern false-positive fix (issue #175)
+
+- `9192514 fix(ownership)` — Fixed `_co_pattern_match` in `ownership.py` (lines 157-160): rooted patterns like `/docs` and `/docs/` were incorrectly matched against sibling directories such as `docs-internal/`. Root cause: the fallback glob used `pat + "*"` (producing `docs*`) instead of anchoring to children. Fix replaces this with `base + "/*"` where `base = stripped.rstrip("/")`, so `/docs` generates the glob `docs/*` which correctly matches only direct and nested children of `docs/`, not any path starting with `docs`. Added 4 parametrized regression tests in `tests/test_ownership.py` covering both `/docs` and `/docs/` variants against child paths (should match) and sibling `docs-internal/` paths (should not match). Code review: 0 actionable issues (reviewer's `fnmatch` cross-slash concern was factually wrong — Python's `fnmatch.fnmatch` matches `docs/*` against `docs/a/b/c.md`). Arch-check: 5/5 policies pass. Test count: 494 (4 new). Version bumped to v0.1.45.
+
+### Workflow — fix-and-file replaces file-issues (PR #184)
+
+- `ef625a0 feat(workflow)` — The `fix-and-file` workflow replaces the older `file-issues` approach. Fixes small bugs inline rather than filing separate issues for them, reducing issue noise for trivial one-liners found during implementation. No codegraph source changes — workflow tooling only.
 
 ### Ownership module — harden contract, docstring, and shallow-copy fix (issues #181, #180)
 

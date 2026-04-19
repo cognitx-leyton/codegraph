@@ -155,8 +155,9 @@ def _match_codeowners(path: str, rules: list[tuple[str, list[str]]]) -> list[str
 def _co_pattern_match(pat: str, path: str) -> bool:
     # /foo means rooted at repo root
     if pat.startswith("/"):
-        pat = pat[1:]
-        return fnmatch.fnmatch(path, pat) or fnmatch.fnmatch(path, pat + "*")
+        stripped = pat[1:]
+        base = stripped.rstrip("/")
+        return fnmatch.fnmatch(path, stripped) or fnmatch.fnmatch(path, base + "/*")
     # **/ pattern
     if "/" not in pat.rstrip("*/"):
         return any(fnmatch.fnmatch(seg, pat.rstrip("/")) for seg in path.split("/"))
