@@ -460,6 +460,12 @@ _STAT_NODE_LABELS = (
     "endpoints", "hooks", "decorators",
 )
 
+_LABEL_MAP = {
+    "files": "File", "classes": "Class", "functions": "Function",
+    "methods": "Method", "interfaces": "Interface", "endpoints": "Endpoint",
+    "hooks": "Hook", "decorators": "Decorator",
+}
+
 
 def _query_graph_stats(
     driver,
@@ -515,11 +521,6 @@ def _query_graph_stats(
     for row in node_rows:
         label_counts[row["label"]] = int(row["count"])
 
-    _LABEL_MAP = {
-        "files": "File", "classes": "Class", "functions": "Function",
-        "methods": "Method", "interfaces": "Interface", "endpoints": "Endpoint",
-        "hooks": "Hook", "decorators": "Decorator",
-    }
     out: dict[str, Any] = {}
     for k in _STAT_NODE_LABELS:
         out[k] = label_counts.get(_LABEL_MAP[k], 0)

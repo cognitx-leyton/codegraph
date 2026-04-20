@@ -2,17 +2,17 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `9b9d102` → `b788e81` (fix(release): CDN propagation retry loop for PyPI installs — closes #154 + #81; 514 tests passing, v0.1.54).
+> **Last updated:** 2026-04-20 after commits `4b2600b` → `55f9d52` (refactor(cli): move _LABEL_MAP to module level — closes #151 + #142; 514 tests passing, v0.1.55).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-154`. Enhanced `.github/workflows/release.yml` with two improvements to PyPI release reliability: (1) the "Verify PyPI install" step now retries up to 5 times with exponential backoff (30→60→120→240 s), fresh venv on each attempt, `--no-cache-dir` to force CDN re-fetch; (2) the "Wait for PyPI propagation" step now has a Phase 2 that extracts the wheel URL from the JSON metadata response and polls `files.pythonhosted.org` via HEAD for up to 120 s before the install retry loop starts. Closes issues #154 and #81. 514 tests passing, v0.1.54.
+- **Branch:** `archon/task-fix-issue-151`. Moved `_LABEL_MAP` from a local variable inside `_query_graph_stats()` to a module-level constant beside `_STAT_NODE_LABELS` in `cli.py`. Pure refactor — no behaviour change, all 514 tests pass. Closes issues #151 and #142 (exact duplicates). v0.1.55.
 - **Tests:** 514 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
@@ -21,7 +21,21 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `9b9d102`)
+## Shipped since the last roadmap update (commit `4b2600b`)
+
+```
+55f9d52 refactor(cli): move _LABEL_MAP to module level
+d17e8ac Merge pull request #203 from cognitx-leyton/archon/task-fix-issue-154
+b65e385 chore: bump version to 0.1.55
+```
+
+### CLI — `_LABEL_MAP` promoted to module level (issues #151 + #142)
+
+- `55f9d52 refactor(cli)` — Moved `_LABEL_MAP` (a `dict[str, str]` mapping stat node-label keys to display names) from a local variable inside `_query_graph_stats()` to a module-level constant in `cli.py`, placed immediately after the related `_STAT_NODE_LABELS` tuple (line 463). The dict is read-only inside the function (only `.get()` calls, no mutation), so the scope change is safe under CPython's GIL. No behaviour change. Code review: 0 issues. Arch-check: 5/5 policies pass. 514 tests pass, byte-compile clean. Closes #151 and its exact duplicate #142. Version bumped to v0.1.55 (`b65e385`). PR #203 merged as `d17e8ac`.
+
+---
+
+## Previously shipped (through commit `4b2600b`)
 
 ```
 b788e81 fix(release): add CDN propagation retry loop for PyPI installs
