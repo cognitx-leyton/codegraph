@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `31ee067` → `7190e84` (fix(stats): prevent multi-label nodes from inflating node counts — closes #139; 533 tests passing, v0.1.59).
+> **Last updated:** 2026-04-20 after commits `0e7c09e` → `11bea30` (test(template-sync): add drift detection test for .claude/commands templates — closes #136; 538 tests passing, v0.1.60).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-139`. Stats Cypher rewritten to use `UNWIND labels(n) AS label WHERE label IN $known_labels` instead of `labels(n)[0]`, preventing multi-label nodes (e.g. a node carrying both `:Function` and `:Method`) from being counted once per label and inflating totals. Same fix applied to `describe_schema` in the MCP server. Closes issue #139. v0.1.59.
-- **Tests:** 533 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-136`. Template sync drift detected and fixed: removed a stray line after the `<!-- codegraph:stats-end -->` marker in `.claude/commands/graph.md`. New parametrized test suite (`tests/test_template_sync.py`) checks 5 literal command templates against their bundled `codegraph/templates/commands/` sources, with stats-section normalization so per-repo stats never cause false failures. Closes issue #136. v0.1.60.
+- **Tests:** 538 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,7 +21,23 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `31ee067`)
+## Shipped since the last roadmap update (commit `0e7c09e`)
+
+```
+11bea30 test(template-sync): add drift detection test for .claude/commands templates
+5f125a8 Merge pull request #211 from cognitx-leyton/archon/task-fix-issue-139
+bfb4f97 chore: bump version to 0.1.60
+```
+
+### Template sync — drift detection test + graph.md fix (issue #136)
+
+- `11bea30 test(template-sync)` — Two changes:
+  1. **`.claude/commands/graph.md` drift fix** — Removed a stray line ("The graph is currently indexed for...") that appeared after the `<!-- codegraph:stats-end -->` marker but was not present in the bundled template at `codegraph/codegraph/templates/commands/graph.md`. The extra line was added during a prior `codegraph init` stats-injection pass that wrote outside the marker bounds.
+  2. **`tests/test_template_sync.py` (new)** — Parametrized pytest suite that verifies 5 literal command templates (`arch-check.md`, `blast-radius.md`, `graph.md`, `trace-endpoint.md`, `who-owns.md`) stay in sync between `codegraph/codegraph/templates/commands/` (source of truth) and `.claude/commands/` (live copies). The stats section between `<!-- codegraph:stats-begin -->` and `<!-- codegraph:stats-end -->` is normalized with a regex before comparison so per-repo stats don't cause false failures. On mismatch, the error message includes the `diff` command to reproduce. Code review identified and fixed 2 issues: unnecessary `Path()` wrapping of `Traversable` (breaks zip-installed packages) and missing `encoding="utf-8"` on `read_text()` calls (codebase convention). Test count: 533 → 538. Version bumped to v0.1.60 (`bfb4f97`). PR #211 merged as `5f125a8`. Arch-check: 5/5 policies pass.
+
+---
+
+## Previously shipped (through commit `7190e84`)
 
 ```
 7190e84 fix(stats): prevent multi-label nodes from inflating node counts
