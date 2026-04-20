@@ -332,6 +332,41 @@ def test_load_touched_files_always_writes_packages(captured_runs):
     assert pkg_merges[0][1][0]["name"] == "mypkg"
 
 
+def test_load_touched_files_filters_per_file_extras(captured_runs):
+    """Per-file extras (env_reads) from untouched files are skipped."""
+    idx = Index()
+    for path, envs in (("a.py", ["DB_URL"]), ("b.py", ["API_KEY"])):
+        fn = FileNode(path=path, package="p", language="py", loc=10)
+        pr = ParseResult(file=fn)
+        pr.env_reads = envs
+        idx.add(pr)
+
+    ldr = Neo4jLoader.__new__(Neo4jLoader)
+    ldr.database = "neo4j"
+
+    class FakeCtx:
+        def __enter__(self):
+            return MagicMock()
+        def __exit__(self, *a):
+            pass
+
+    ldr.driver = MagicMock()
+    ldr.driver.session.return_value = FakeCtx()
+
+    ldr.load(idx, [], touched_files={"a.py"})
+
+    # Find the READS_ENV MERGE call
+    env_merges = [
+        (cy, rows) for cy, rows in captured_runs
+        if "READS_ENV" in cy
+    ]
+    assert len(env_merges) == 1
+    env_files = {r["file"] for r in env_merges[0][1]}
+    env_names = {r["env"] for r in env_merges[0][1]}
+    assert env_files == {"a.py"}
+    assert env_names == {"DB_URL"}
+
+
 # ── Test group 4: _file_from_id ───────────────────────────────────────
 
 
