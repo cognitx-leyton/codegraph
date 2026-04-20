@@ -332,3 +332,22 @@ def test_run_init_outside_git_repo(tmp_path: Path, monkeypatch):
         console=_silent_console(),
     )
     assert exit_code == 1
+
+
+def test_run_init_returns_1_when_first_index_fails(tmp_path: Path, monkeypatch):
+    """run_init must return 1 when _run_first_index fails (issue #157)."""
+    _make_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+    monkeypatch.chdir(tmp_path)
+
+    # Stub _run_first_index to simulate failure
+    monkeypatch.setattr(init_module, "_run_first_index", lambda *a, **kw: False)
+    # Stub _start_and_wait_for_neo4j to simulate success (so we reach _run_first_index)
+    monkeypatch.setattr(init_module, "_start_and_wait_for_neo4j", lambda *a, **kw: True)
+
+    exit_code = run_init(
+        force=False, non_interactive=True,
+        skip_docker=False, skip_index=False,
+        console=_silent_console(),
+    )
+    assert exit_code == 1

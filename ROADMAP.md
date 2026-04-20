@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `f6554b5` → `8841d2e` (fix(loader): split endpoint EXPOSES batch by class-level vs file-level — closes #195; 513 tests passing, v0.1.52).
+> **Last updated:** 2026-04-20 after commits `2c8ba38` → `9b9d102` (fix(init): return exit code 1 when first index fails during non-interactive init — closes #157; 514 tests passing, v0.1.53).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-195`. Fixed file-level EXPOSES edges being silently dropped during **full batch indexing** in `loader.py`. The single endpoint UNWIND was split into two complementary batches: class-level endpoints (where `controller_class` does not start with `"file:"`) use `MATCH (c:Class {id: r.cls})`, and file-level endpoints (where `controller_class` starts with `"file:"`) use `MATCH (f:File {path: r.fpath})` with the prefix stripped. Previously PR #196 merged the companion fix for `mcp.py`'s `reindex_file()` (issue #194, v0.1.52). This PR is the full-index counterpart. Added 2 new tests in `test_loader_partitioning.py` (`test_load_file_level_endpoint_exposes`, `test_load_class_level_endpoint_exposes`). 513 tests passing, v0.1.52.
-- **Tests:** 513 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-157`. Fixed `codegraph init --yes` (non-interactive mode) silently returning exit code `0` when the first index failed. `run_init()` in `init.py` now captures the return value of `_run_first_index()` and returns `1` when it returns `False` (a `CalledProcessError` during the index run). `_print_next_steps()` is still called before the early return so the user sees guidance. One new test added: `test_run_init_returns_1_when_first_index_fails` in `test_init.py`. 514 tests passing, v0.1.53.
+- **Tests:** 514 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,7 +21,22 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `f6554b5`)
+## Shipped since the last roadmap update (commit `2c8ba38`)
+
+```
+9b9d102 fix(init): return exit code 1 when first index fails during non-interactive init
+e06c881 Merge pull request #197 from cognitx-leyton/archon/task-fix-issue-195
+da18675 chore: bump version to 0.1.53
+2c8ba38 docs(roadmap): update session handoff
+```
+
+### Init — fix silent exit 0 when first index fails in non-interactive mode (issue #157)
+
+- `9b9d102 fix(init)` — `run_init()` in `init.py` now captures the return value of `_run_first_index()`. When it returns `False` (a `CalledProcessError` during the index run), the function calls `_print_next_steps()` (so the user still sees guidance) and returns `1`. Previously the return value was discarded and the function always exited `0`, masking a failed index. The guard `config.packages` on the call site (line 429) ensures `_run_first_index` is only invoked when packages exist, so `False` from that call always means a real failure (not the soft "no packages" skip). **1 new test** `test_run_init_returns_1_when_first_index_fails` in `tests/test_init.py`: monkeypatches `_start_and_wait_for_neo4j → True` and `_run_first_index → False`, asserts `run_init()` returns `1`. Code review: 0 issues. Arch-check: 5/5 policies pass. Test count: 513 → 514. Version bumped to v0.1.53 (`da18675`). PR #197 (issue #195 — loader EXPOSES batch split) merged as `e06c881`.
+
+---
+
+## Previously shipped (through commit `8841d2e`)
 
 ```
 8841d2e fix(loader): split endpoint EXPOSES batch by class-level vs file-level
@@ -562,12 +577,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-190` |
+| Current branch | `archon/task-fix-issue-157` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`abc6776` — fix(mcp): remove duplicate structural edge writes in reindex_file, pending PR) |
-| Open PR | None. PR #191 (issue #188 — DEFINES_IFACE rename + ownership edge dedup) merged to main. |
+| Unpushed commits | 1 (`9b9d102` — fix(init): return exit code 1 when first index fails during non-interactive init, pending PR) |
+| Open PR | None. PR #197 (issue #195 — loader EXPOSES batch split) merged to main. |
 | Working tree | Clean |
-| Test count | 510 passing + 1 deselected |
+| Test count | 514 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |

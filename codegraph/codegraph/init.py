@@ -427,7 +427,9 @@ def run_init(
             return 0
 
     if not skip_index and config.packages:
-        _run_first_index(root, config, console)
+        if not _run_first_index(root, config, console):
+            _print_next_steps(root, config, console)
+            return 1
 
     _print_next_steps(root, config, console)
     return 0

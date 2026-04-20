@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cognitx-codegraph"
-version = "0.1.53"
+version = "0.1.54"
 description = "Code knowledge graph for Claude Code & AI coding agents — index TypeScript, Python, NestJS, FastAPI, React into Neo4j and query architecture in Cypher. Note: v0.2.0 is deprecated, use 0.1.x."
 readme = "README.md"
 requires-python = ">=3.10"
