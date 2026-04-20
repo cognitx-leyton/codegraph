@@ -2,13 +2,13 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `11bea30` → `0dba0bb` (fix(arch-check): render violations when sample is empty and exclude disabled policies from summary — closes #113, #107; 544 tests passing, v0.1.62).
+> **Last updated:** 2026-04-20 after commits `5b68407` → `8caf408` (feat(arch-check): add explicit disabled field to PolicyResult — closes #214; 544 tests passing, v0.1.63).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-113`. Two arch-check rendering/summary fixes: (1) `_render()` now emits a fallback message when `sample=[]` but `violation_count > 0` (empty sample due to full suppression no longer silently hides violations); (2) the passed/total summary line now excludes disabled policies from both numerator and denominator, reporting them as `(N skipped)`. Closes issues #113 and #107. v0.1.62.
+- **Branch:** `archon/task-fix-issue-214`. Adds an explicit `disabled: bool = False` field to the `PolicyResult` dataclass in `arch_check.py`. Eliminates the fragile `"(disabled" in p.detail` string-matching pattern used in both `_render()` mark logic and the summary count filter — replaced with `if p.disabled:` / `if not p.disabled`. Four test assertions updated; new JSON coverage assertion confirms `"disabled"` key serialises via `asdict`. Closes issue #214. v0.1.63.
 - **Tests:** 544 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
@@ -21,13 +21,29 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `d1526b8`)
+## Shipped since the last roadmap update (commit `0326645`)
 
 ```
-0dba0bb fix(arch-check): render violations when sample is empty and exclude disabled policies from summary
-f366968 Merge pull request #213 from cognitx-leyton/archon/task-fix-issue-116
-cc34e46 chore: bump version to 0.1.62
+8caf408 feat(arch-check): add explicit disabled field to PolicyResult
+5b68407 Merge pull request #215 from cognitx-leyton/archon/task-fix-issue-113
+2b8e0b6 chore: bump version to 0.1.63
 ```
+
+### arch-check — explicit `disabled` field on `PolicyResult` (issue #214)
+
+- `8caf408 feat(arch-check)` — Adds `disabled: bool = False` to the `PolicyResult` dataclass (after `detail`, before `suppressed_count`). The `_disabled()` helper now sets `disabled=True` on its returned `PolicyResult`. Two call sites in `_render()` that previously used fragile string matching (`"(disabled" in p.detail`) are replaced with clean boolean checks:
+
+  1. **Mark logic** (line 649): `if p.disabled:` replaces `if "(disabled" in p.detail:`.
+  2. **Summary count filter** (line 716): `if not p.disabled` replaces `if "(disabled" not in p.detail`.
+
+  - `_apply_suppressions` is unaffected: disabled policies always have `sample=[]` and hit the early-return path at line 584, preserving the original `PolicyResult` object (including `disabled=True`) without constructing a new one.
+  - **Tests** (`tests/test_arch_check.py`): 4 edits — `test_policy_result_defaults` asserts `p.disabled is False`; `test_run_arch_check_with_disabled_policy_emits_skip_marker` asserts `cycles.disabled is True`; `test_render_summary_excludes_disabled_policies` sets `disabled=True` on both disabled `PolicyResult` fixtures; `test_arch_report_to_json_is_valid_and_contains_ok_flag` asserts `"disabled"` key present in JSON output. 544 tests pass. Code review: 0 issues. Arch-check: 3/3 policies pass (2 skipped).
+
+- `5b68407` — PR #215 merged (`archon/task-fix-issue-113`). Version bumped to v0.1.63 (`2b8e0b6`).
+
+---
+
+## Previously shipped (through commit `0dba0bb`)
 
 ### arch-check — fix rendering when sample is empty + exclude disabled policies from summary (issues #113, #107)
 

@@ -77,6 +77,7 @@ class PolicyResult:
     violation_count: int
     sample: list[dict] = field(default_factory=list)
     detail: str = ""
+    disabled: bool = False
     suppressed_count: int = 0
     suppressed_sample: list[dict] = field(default_factory=list)
     incomplete_suppression_coverage: bool = False
@@ -196,6 +197,7 @@ def _disabled(name: str) -> PolicyResult:
         violation_count=0,
         sample=[],
         detail="(disabled in .arch-policies.toml)",
+        disabled=True,
     )
 
 
@@ -644,7 +646,7 @@ def _render(console: Console, report: ArchReport) -> None:
     t.add_column("suppressed", justify="right")
     t.add_column("detail", style="dim")
     for p in report.policies:
-        if "(disabled" in p.detail:
+        if p.disabled:
             mark = "[yellow]SKIP"
         elif p.passed and p.suppressed_count > 0:
             mark = "[yellow]WARN"
@@ -711,7 +713,7 @@ def _render(console: Console, report: ArchReport) -> None:
             console.print(f"  [dim]{s['policy']}[/]: {s['key']}")
 
     total_suppressed = sum(p.suppressed_count for p in report.policies)
-    active = [p for p in report.policies if "(disabled" not in p.detail]
+    active = [p for p in report.policies if not p.disabled]
     passed = sum(1 for p in active if p.passed)
     total = len(active)
     skipped = len(report.policies) - total

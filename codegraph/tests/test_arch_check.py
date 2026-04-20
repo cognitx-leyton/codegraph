@@ -101,6 +101,7 @@ def test_policy_result_defaults():
     p = PolicyResult(name="x", passed=True, violation_count=0)
     assert p.sample == []
     assert p.detail == ""
+    assert p.disabled is False
 
 
 def test_arch_report_ok_is_true_when_all_pass():
@@ -127,6 +128,7 @@ def test_arch_report_to_json_is_valid_and_contains_ok_flag():
     assert blob["ok"] is False
     assert blob["policies"][0]["violation_count"] == 2
     assert blob["policies"][0]["sample"] == [{"x": 1}]
+    assert blob["policies"][0]["disabled"] is False
 
 
 # ── import_cycles ───────────────────────────────────────────────────
@@ -508,7 +510,7 @@ def test_run_arch_check_with_disabled_policy_emits_skip_marker(monkeypatch):
 
     cycles = next(p for p in report.policies if p.name == "import_cycles")
     assert cycles.passed is True
-    assert "disabled" in cycles.detail
+    assert cycles.disabled is True
 
 
 def test_run_arch_check_runs_custom_policies(monkeypatch):
@@ -1344,6 +1346,7 @@ def test_render_summary_excludes_disabled_policies():
                 violation_count=0,
                 sample=[],
                 detail="(disabled in .arch-policies.toml)",
+                disabled=True,
             ),
             PolicyResult(
                 name="orphan_detection",
@@ -1351,6 +1354,7 @@ def test_render_summary_excludes_disabled_policies():
                 violation_count=0,
                 sample=[],
                 detail="(disabled in .arch-policies.toml)",
+                disabled=True,
             ),
         ],
     )
