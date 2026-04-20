@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `5b68407` → `8caf408` (feat(arch-check): add explicit disabled field to PolicyResult — closes #214; 544 tests passing, v0.1.63).
+> **Last updated:** 2026-04-20 after commits `865271e` → `ec94bff` (fix(resolver): resolve npm tsconfig presets from node_modules — closes #104; 551 tests passing, v0.1.64).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-214`. Adds an explicit `disabled: bool = False` field to the `PolicyResult` dataclass in `arch_check.py`. Eliminates the fragile `"(disabled" in p.detail` string-matching pattern used in both `_render()` mark logic and the summary count filter — replaced with `if p.disabled:` / `if not p.disabled`. Four test assertions updated; new JSON coverage assertion confirms `"disabled"` key serialises via `asdict`. Closes issue #214. v0.1.63.
-- **Tests:** 544 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-104`. Adds `_resolve_npm_tsconfig(start_dir, package_name)` to `resolver.py` — walks up parent directories looking for `node_modules/<package>/tsconfig.json`. Modifies the `_read_ts_paths()` extends loop to branch on relative (`./`, `/`) vs. npm package names (e.g. `@tsconfig/node20`), resolving the latter via the new helper. Graceful `None` fallback when the preset isn't installed. Closes issue #104. v0.1.64.
+- **Tests:** 551 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,13 +21,29 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `0326645`)
+## Shipped since the last roadmap update (commit `865271e`)
 
 ```
-8caf408 feat(arch-check): add explicit disabled field to PolicyResult
-5b68407 Merge pull request #215 from cognitx-leyton/archon/task-fix-issue-113
-2b8e0b6 chore: bump version to 0.1.63
+ec94bff fix(resolver): resolve npm tsconfig presets from node_modules
+4a357a8 Merge pull request #216 from cognitx-leyton/archon/task-fix-issue-214
+0c61c05 chore: bump version to 0.1.64
 ```
+
+### Resolver — npm tsconfig presets resolved from `node_modules` (issue #104)
+
+- `ec94bff fix(resolver)` — Two files changed:
+
+  1. **`codegraph/codegraph/resolver.py`** — New helper `_resolve_npm_tsconfig(start_dir: Path, package_name: str) -> Optional[Path]` walks up parent directories from `start_dir` looking for `node_modules/<package_name>/tsconfig.json`, returning the first match or `None`. The `_read_ts_paths()` extends loop is split into two branches: strings starting with `./`, `../`, or `/` use the existing relative/absolute resolution logic; anything else (bare package names like `@tsconfig/node20`, `tsconfig-node20`) calls `_resolve_npm_tsconfig()` with graceful `None` → `continue` fallback when the preset isn't installed in `node_modules`.
+
+  2. **`codegraph/tests/test_resolver_bugs.py`** — New `TestNpmTsconfigPresets` class with 7 tests: scoped preset (`@tsconfig/node20`), unscoped preset (`tsconfig-node20`), missing preset (graceful skip), child tsconfig overrides preset values, nested `node_modules` in parent directory, chained extends within preset, and relative-extends regression guard.
+
+  - **Tests**: 551 passed (7 new), 0 failures. Code review: 0 issues. Arch-check: 4/4 policies pass (1 skipped).
+
+- `4a357a8` — PR #216 merged (`archon/task-fix-issue-214`). Version bumped to v0.1.64 (`0c61c05`).
+
+---
+
+## Previously shipped (through commit `8caf408`)
 
 ### arch-check — explicit `disabled` field on `PolicyResult` (issue #214)
 
@@ -756,12 +772,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-116` |
+| Current branch | `archon/task-fix-issue-104` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`475eb4f` — fix(arch-check): respect custom sample_limit in user-defined policies, pending PR) |
-| Open PR | None. PR #212 (issues #116, #91, #108 — custom policy sample_limit + scope) merged to main. |
-| Working tree | Clean (untracked: `.claude/plans/fix-custom-policy-sample-limit.plan.md`) |
-| Test count | 542 passing + 1 deselected |
+| Unpushed commits | 1 (`ec94bff` — fix(resolver): resolve npm tsconfig presets from node_modules, pending PR) |
+| Open PR | None. PR #216 (issue #214 — arch-check disabled field) merged to main. |
+| Working tree | Clean (untracked: `.claude/plans/resolve-npm-tsconfig-presets.plan.md`) |
+| Test count | 551 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -1048,6 +1064,7 @@ Repo-local plans under `.claude/plans/`:
 - `simplify-delete-cascade.plan.md` — shipped as `54d2100`.
 - `fix-mcp-structural-edge-double-write.plan.md` — shipped as `abc6776`.
 - `fix-mcp-file-level-exposes.plan.md` — shipped as `75af831`.
+- `resolve-npm-tsconfig-presets.plan.md` — shipped as `ec94bff`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
