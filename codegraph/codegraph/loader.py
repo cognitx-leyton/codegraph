@@ -482,7 +482,7 @@ class Neo4jLoader:
             _write_edges(s, edges, stats)
 
             # ── Atom reads/writes, env reads, events (per-file) ──
-            _write_per_file_extras(s, index, stats)
+            _write_per_file_extras(s, index, stats, touched_files)
 
             # ── Test pairing (TESTS edges) ────────────────────────
             _write_test_edges(s, index, stats)
@@ -794,7 +794,7 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
     stats.edges[DECORATED_BY] = len(dec_class) + len(dec_func) + len(dec_method)
 
 
-def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
+def _write_per_file_extras(session, index: Index, stats: LoadStats, touched_files: set[str] | None = None) -> None:
     """Atom reads/writes, env reads, events — sourced from ParseResult per-file lists."""
     atom_reads: list = []
     atom_writes: list = []
@@ -803,6 +803,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats) -> None:
     event_emitters: list = []
 
     for rel, result in index.files_by_path.items():
+        if touched_files is not None and rel not in touched_files:
+            continue
         # Atom reads/writes: (component_name, atom_name) — lookup atom by name across files
         for comp, atom_name in result.atom_reads:
             atom_reads.append(dict(
