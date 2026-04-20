@@ -1076,4 +1076,32 @@ nodes:
 
       If nothing to close, say "No additional issues resolved."
 
-      Workflow complete.
+  # ═══════════════════════════════════════════════════════════════
+  # Step 14: Auto-merge PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: auto-merge
+    depends_on: [close-fixed-issues]
+    bash: |
+      echo "=== Auto-merge ==="
+
+      # Find the PR created by this workflow (most recent open PR from this branch)
+      BRANCH=$(git branch --show-current)
+      PR=$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null)
+
+      if [ -z "$PR" ]; then
+        echo "No open PR found for branch $BRANCH — skipping merge"
+        exit 0
+      fi
+
+      echo "Merging PR #$PR..."
+      gh pr merge "$PR" --merge --admin 2>&1
+
+      if [ $? -eq 0 ]; then
+        echo "PASS: PR #$PR merged"
+      else
+        echo "WARN: PR merge failed — may need manual merge"
+      fi
+
+      echo "DONE"
+    timeout: 60000
