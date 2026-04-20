@@ -845,14 +845,25 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                 s.run(
                     "MERGE (e:Endpoint {id: $id}) "
                     "SET e.method = $method, e.path = $epath, "
-                    "    e.handler = $handler, e.file = $file "
-                    "WITH e "
-                    "MATCH (c:Class {id: $cls}) "
-                    "MERGE (c)-[:EXPOSES]->(e)",
+                    "    e.handler = $handler, e.file = $file",
                     id=ep.id, method=ep.method, epath=ep.path,
                     handler=ep.handler, file=ep.file,
-                    cls=ep.controller_class,
                 )
+                if ep.controller_class.startswith("file:"):
+                    s.run(
+                        "MATCH (f:File {path: $fpath}) "
+                        "MATCH (e:Endpoint {id: $eid}) "
+                        "MERGE (f)-[:EXPOSES]->(e)",
+                        fpath=ep.controller_class[len("file:"):],
+                        eid=ep.id,
+                    )
+                else:
+                    s.run(
+                        "MATCH (c:Class {id: $cls}) "
+                        "MATCH (e:Endpoint {id: $eid}) "
+                        "MERGE (c)-[:EXPOSES]->(e)",
+                        cls=ep.controller_class, eid=ep.id,
+                    )
                 node_count += 1
 
             for gql in result.gql_operations:
@@ -900,7 +911,7 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
             # ── Load intra-file edges ───────────────────────────
             from .schema import (
                 IMPORTS, IMPORTS_SYMBOL, IMPORTS_EXTERNAL,
-                EXPOSES, HANDLES, INJECTS,
+                HANDLES, INJECTS,
                 EXTENDS, IMPLEMENTS, DECORATED_BY,
                 RENDERS, USES_HOOK,
                 RELATES_TO, REPOSITORY_OF,
@@ -913,13 +924,12 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                 READS_ATOM, WRITES_ATOM, READS_ENV,
                 BELONGS_TO,
             )
-            # HAS_METHOD, RESOLVES, HAS_COLUMN are written inline during
-            # node-creation MERGEs above — excluded here to avoid double-write.
-            # EXPOSES stays: file-level endpoints (no owning class) need the
-            # generic loop because the inline MATCH (c:Class ...) silently fails.
+            # HAS_METHOD, RESOLVES, HAS_COLUMN, EXPOSES are written inline
+            # during node-creation MERGEs above — excluded here to avoid
+            # double-write.
             _EDGE_WHITELIST = frozenset({
                 IMPORTS, IMPORTS_SYMBOL, IMPORTS_EXTERNAL,
-                EXPOSES, HANDLES, INJECTS,
+                HANDLES, INJECTS,
                 EXTENDS, IMPLEMENTS, DECORATED_BY,
                 RENDERS, USES_HOOK,
                 RELATES_TO, REPOSITORY_OF,

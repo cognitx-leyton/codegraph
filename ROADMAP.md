@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-19 after commits `ec10b5c` → `abc6776` (fix(mcp): remove duplicate structural edge writes in reindex_file — closes #190; 510 tests passing, v0.1.49).
+> **Last updated:** 2026-04-20 after commits `d454e93` → `75af831` (fix(mcp): handle file-level EXPOSES edges via File path match in reindex_file — closes #194; 511 tests passing, v0.1.50).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-190`. Fixed remaining structural edge double-writes in `mcp.py`'s `reindex_file()`: removed `HAS_METHOD`, `RESOLVES`, and `HAS_COLUMN` from `_EDGE_WHITELIST` (these are already written inline during node MERGEs). `EXPOSES` retained in whitelist (file-level endpoints have no owning class, so the generic loop is their only write path). Also extracted `_validate_max_depth()` helper (mirrors `_validate_limit()`) to eliminate 3 copy-pasted inline checks in `callers_of_class`, `calls_from`, and `callers_of`. Added 14 new tests (1 structural-edge regression + 13 for `_validate_max_depth`). 510 tests passing, v0.1.49.
-- **Tests:** 510 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-194`. Fixed file-level EXPOSES edge writes in `mcp.py`'s `reindex_file()`: endpoint nodes whose `controller_class` starts with `"file:"` now emit `MATCH (f:File {path: ...})` EXPOSES edges (instead of trying to match a non-existent Class node). Class-level endpoints continue to use `MATCH (c:Class {id: ...})`. `EXPOSES` removed from `_EDGE_WHITELIST` — both paths are now written inline. Added 1 new regression test (`test_reindex_file_file_level_exposes_edge`); updated `test_reindex_file_structural_edges_not_doubled` to assert EXPOSES is excluded from the generic loop. 511 tests passing, v0.1.50.
+- **Tests:** 511 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.32 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,7 +21,22 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `ec10b5c`)
+## Shipped since the last roadmap update (commit `d454e93`)
+
+```
+75af831 fix(mcp): handle file-level EXPOSES edges via File path match in reindex_file
+b757dfd Merge pull request #193 from cognitx-leyton/archon/task-fix-issue-190
+31d723c chore: bump version to 0.1.50
+d454e93 docs(roadmap): update session handoff
+```
+
+### MCP — fix file-level EXPOSES edge write in reindex_file (issue #194)
+
+- `75af831 fix(mcp)` — `reindex_file()` in `mcp.py` now correctly handles file-level endpoint EXPOSES edges. Previously, after the issue #190 fix removed `EXPOSES` from `_EDGE_WHITELIST` (intending to handle it inline), file-level endpoints (those whose `controller_class` starts with `"file:"`) lost their EXPOSES edge entirely — they had no owning class, so the class-level inline path didn't apply and the generic loop no longer covered them. Fix: **(1)** The inline endpoint-creation block now branches on `controller_class.startswith("file:")` — file-level endpoints use `MATCH (f:File {path: $file_path}) MERGE (f)-[:EXPOSES]->(ep)` while class-level endpoints continue to use `MATCH (c:Class {id: $class_id}) MERGE (c)-[:EXPOSES]->(ep)`. **(2)** `EXPOSES` removed from `_EDGE_WHITELIST` — both branches now write the edge inline. **(3)** `EXPOSES` removed from the `from schema import` list. Comment updated to list EXPOSES alongside HAS_METHOD, RESOLVES, HAS_COLUMN as edge types excluded from the generic loop. **1 new test** `test_reindex_file_file_level_exposes_edge` in `tests/test_mcp.py`: creates a File + Function + Endpoint result with `controller_class="file:/app/routes.py"`, confirms the Cypher contains `MATCH (f:File {path: '/app/routes.py'})` and uses `[:EXPOSES]`. Existing test `test_reindex_file_structural_edges_not_doubled` updated to assert `"EXPOSES"` is NOT in the generic edge loop. Code review: 0 issues. Arch-check: 5/5 policies pass. Test count: 510 → 511. Version bumped to v0.1.50 (`31d723c`). PR #193 merged (`b757dfd`).
+
+---
+
+## Previously shipped (through commit `abc6776`)
 
 ```
 abc6776 fix(mcp): remove duplicate structural edge writes in reindex_file
@@ -822,6 +837,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-issue-181-ownership-contract.plan.md` — shipped as `5d01a60`.
 - `simplify-delete-cascade.plan.md` — shipped as `54d2100`.
 - `fix-mcp-structural-edge-double-write.plan.md` — shipped as `abc6776`.
+- `fix-mcp-file-level-exposes.plan.md` — shipped as `75af831`.
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
@@ -900,7 +916,7 @@ asking. Do not merge the open PR #8 without asking.
 | `test_ignore.py` | 19 | `ignore.py` + cli helpers |
 | `test_framework.py` | 18 | `framework.py` (TS) |
 | `test_py_framework.py` | 13 | `framework.py` (Python Stage 2) |
-| `test_mcp.py` | 127 | `mcp.py` (15 tools: 13 read-only + `wipe_graph` + `reindex_file` + 29 prompts + describe_schema + query_graph + depth/bool validation + full coverage for calls_from, callers_of, describe_function + write-tool gating + DECORATED_BY edge loading) |
+| `test_mcp.py` | 128 | `mcp.py` (15 tools: 13 read-only + `wipe_graph` + `reindex_file` + 29 prompts + describe_schema + query_graph + depth/bool validation + full coverage for calls_from, callers_of, describe_function + write-tool gating + DECORATED_BY edge loading + file-level EXPOSES edge) |
 | `test_py_parser.py` | 28 | `py_parser.py` (Stage 1 parsing) |
 | `test_py_parser_calls.py` | 12 | Method-body CALLS emission |
 | `test_py_parser_endpoints.py` | 18 | Python Stage 2 endpoint parsing |
