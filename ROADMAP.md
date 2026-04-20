@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `4b2600b` → `55f9d52` (refactor(cli): move _LABEL_MAP to module level — closes #151 + #142; 514 tests passing, v0.1.55).
+> **Last updated:** 2026-04-20 after commits `8f3280d` → `dc51b95` (test(stats): add failure-path and lifecycle tests for _query_graph_stats — closes #148; 519 tests passing, v0.1.56).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-151`. Moved `_LABEL_MAP` from a local variable inside `_query_graph_stats()` to a module-level constant beside `_STAT_NODE_LABELS` in `cli.py`. Pure refactor — no behaviour change, all 514 tests pass. Closes issues #151 and #142 (exact duplicates). v0.1.55.
-- **Tests:** 514 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-148`. Added 5 failure-path and lifecycle tests for `_query_graph_stats` and the `stats` CLI command (empty results, session raises, driver-ownership contract, `finally`-close on error, `finally`-close on success). No production code changes. Closes issue #148. v0.1.56.
+- **Tests:** 519 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,7 +21,27 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `4b2600b`)
+## Shipped since the last roadmap update (commit `8f3280d`)
+
+```
+dc51b95 test(stats): add failure-path and lifecycle tests for _query_graph_stats
+a91fe4c Merge pull request #204 from cognitx-leyton/archon/task-fix-issue-151
+e60a0db chore: bump version to 0.1.56
+```
+
+### Tests — failure-path and lifecycle coverage for `_query_graph_stats` (issue #148)
+
+- `dc51b95 test(stats)` — Added 5 new test functions to `tests/test_stats.py` (23 → 28 tests), covering previously-untested failure and lifecycle paths for `_query_graph_stats` and the `stats` CLI command:
+  - `test_query_graph_stats_empty_results` — all node counts are `0` and `edges == {}` when Neo4j returns no rows.
+  - `test_query_graph_stats_session_raises` — exception from `session.run()` propagates; `_query_graph_stats` has no internal `try/except`.
+  - `test_query_graph_stats_driver_closed_on_success` — documents the lifecycle contract: `_query_graph_stats` does NOT close the driver (it doesn't own it).
+  - `test_stats_cli_closes_driver_on_neo4j_error` — verifies the `try/finally` block in `stats()` (`cli.py:891-898`) calls `driver.close()` even when the session raises.
+  - `test_stats_cli_closes_driver_on_success` — verifies `driver.close()` is called via `finally` on the happy path too.
+  - No production code changes. Uses the same `_constant_driver` / generator-throw pattern established in `test_arch_check.py`. Code review: 0 issues. Arch-check: 5/5 policies pass. 519 tests pass, byte-compile clean. Version bumped to v0.1.56 (`e60a0db`). PR #204 merged as `a91fe4c`.
+
+---
+
+## Previously shipped (through commit `8f3280d`)
 
 ```
 55f9d52 refactor(cli): move _LABEL_MAP to module level

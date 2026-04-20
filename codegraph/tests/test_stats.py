@@ -435,6 +435,82 @@ def test_stats_auto_scope(monkeypatch):
     assert "STARTS WITH" in node_cypher
 
 
+# ── failure-path tests ────────────────────────────────────────────
+
+
+def test_query_graph_stats_empty_results():
+    """All node counts are 0 and edges is {} when Neo4j returns no rows."""
+    driver = _constant_driver({})
+    result = _query_graph_stats(driver, scope=None)
+    assert result["files"] == 0
+    assert result["classes"] == 0
+    assert result["functions"] == 0
+    assert result["methods"] == 0
+    assert result["interfaces"] == 0
+    assert result["endpoints"] == 0
+    assert result["hooks"] == 0
+    assert result["decorators"] == 0
+    assert result["edges"] == {}
+
+
+def test_query_graph_stats_session_raises():
+    """Exception from session.run propagates — _query_graph_stats has no try/except."""
+    driver = _constant_driver({})
+    driver._session._resolver = lambda *a, **kw: (_ for _ in ()).throw(
+        Exception("connection lost")
+    )
+    with pytest.raises(Exception, match="connection lost"):
+        _query_graph_stats(driver, scope=None)
+
+
+def test_query_graph_stats_driver_closed_on_success():
+    """_query_graph_stats does NOT own driver lifecycle — driver stays open."""
+    driver = _constant_driver({
+        "labels(n)": _SAMPLE_NODES,
+        "type(r)": _SAMPLE_EDGES,
+    })
+    _query_graph_stats(driver, scope=None)
+    assert driver.closed is False
+
+
+def test_stats_cli_closes_driver_on_neo4j_error(monkeypatch):
+    """CLI stats ensures driver.close() runs even when the session raises."""
+    from typer.testing import CliRunner
+
+    from codegraph.cli import app
+    from neo4j import GraphDatabase
+
+    driver = _constant_driver({})
+    driver._session._resolver = lambda *a, **kw: (_ for _ in ()).throw(
+        Exception("connection lost")
+    )
+    monkeypatch.setattr(GraphDatabase, "driver", lambda *a, **kw: driver)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["stats", "--json", "--no-scope"])
+    assert result.exit_code != 0
+    assert driver.closed is True
+
+
+def test_stats_cli_closes_driver_on_success(monkeypatch):
+    """CLI stats ensures driver.close() runs after a successful query."""
+    from typer.testing import CliRunner
+
+    from codegraph.cli import app
+    from neo4j import GraphDatabase
+
+    driver = _constant_driver({
+        "labels(n)": _SAMPLE_NODES,
+        "type(r)": _SAMPLE_EDGES,
+    })
+    monkeypatch.setattr(GraphDatabase, "driver", lambda *a, **kw: driver)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["stats", "--json", "--no-scope"])
+    assert result.exit_code == 0, result.output
+    assert driver.closed is True
+
+
 def test_stats_include_cross_scope_edges_flag(monkeypatch):
     """--include-cross-scope-edges makes edge query use OR logic."""
     from typer.testing import CliRunner
