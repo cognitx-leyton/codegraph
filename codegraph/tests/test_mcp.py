@@ -1102,9 +1102,8 @@ def test_reindex_file_ownership_edges_not_doubled(monkeypatch, tmp_path):
 
 
 def test_reindex_file_structural_edges_not_doubled(monkeypatch, tmp_path):
-    """Structural edges (HAS_METHOD, RESOLVES, HAS_COLUMN) come only from
-    inline node-creation MERGEs, not the generic edge loop.  EXPOSES stays
-    in the generic loop for file-level endpoints with no owning class."""
+    """Structural edges (HAS_METHOD, EXPOSES, RESOLVES, HAS_COLUMN) come only
+    from inline node-creation MERGEs, not the generic edge loop."""
     monkeypatch.setattr(mcp_mod, "_allow_write", True)
 
     py_file = tmp_path / "ctrl.py"
@@ -1166,12 +1165,65 @@ def test_reindex_file_structural_edges_not_doubled(monkeypatch, tmp_path):
         if "MATCH (a {id: $src})" in cypher and "MATCH (b {id: $dst})" in cypher
     ]
 
-    # HAS_METHOD, RESOLVES, HAS_COLUMN must NOT appear in the generic loop
+    # HAS_METHOD, EXPOSES, RESOLVES, HAS_COLUMN must NOT appear in the generic loop
     for cypher, _ in generic_edge_calls:
         assert "HAS_METHOD" not in cypher
+        assert "EXPOSES" not in cypher
         assert "RESOLVES" not in cypher
         assert "HAS_COLUMN" not in cypher
 
-    # EXPOSES MUST appear in the generic loop (kept deliberately)
-    exposes_in_generic = [c for c, _ in generic_edge_calls if "EXPOSES" in c]
-    assert len(exposes_in_generic) == 1
+
+def test_reindex_file_file_level_exposes_edge(monkeypatch, tmp_path):
+    """File-level endpoints (controller_class='file:<path>') get EXPOSES edges
+    written via MATCH (f:File {path: ...}), not MATCH (c:Class ...)."""
+    monkeypatch.setattr(mcp_mod, "_allow_write", True)
+
+    py_file = tmp_path / "app.py"
+    py_file.write_text("@app.get('/')\ndef index(): ...\n")
+
+    driver = _patch(monkeypatch, [[]])
+
+    from codegraph.py_parser import PyParser
+    from codegraph.schema import (
+        EXPOSES, Edge, FileNode, FunctionNode, EndpointNode, ParseResult,
+    )
+
+    file_id = f"file:{py_file}"
+    ep = EndpointNode(
+        method="GET", path="/",
+        controller_class=file_id,
+        file=str(py_file), handler="index",
+    )
+    fake_result = ParseResult(
+        file=FileNode(path=str(py_file), package="pkg", language="py", loc=2),
+        functions=[FunctionNode(name="index", file=str(py_file))],
+        endpoints=[ep],
+        edges=[Edge(kind=EXPOSES, src_id=file_id, dst_id=ep.id)],
+    )
+
+    monkeypatch.setattr(PyParser, "parse_file", lambda *a, **kw: fake_result)
+
+    out = mcp_mod.reindex_file(str(py_file), package="pkg")
+    assert out["ok"] is True
+
+    # EXPOSES must use File path match, not Class id match
+    exposes_calls = [
+        (cypher, params) for cypher, params in driver.session_obj.calls
+        if "EXPOSES" in cypher
+    ]
+    assert len(exposes_calls) >= 1
+    file_exposes = [c for c, _ in exposes_calls if "File {path:" in c]
+    class_exposes = [c for c, _ in exposes_calls if "Class {id:" in c]
+    assert len(file_exposes) == 1
+    assert len(class_exposes) == 0
+
+    # No EXPOSES in the generic edge loop
+    generic_edge_calls = [
+        (cypher, params) for cypher, params in driver.session_obj.calls
+        if "MATCH (a {id: $src})" in cypher and "MATCH (b {id: $dst})" in cypher
+    ]
+    for cypher, _ in generic_edge_calls:
+        assert "EXPOSES" not in cypher
+
+    # File + Function + Endpoint = 3 nodes
+    assert out["nodes"] == 3
