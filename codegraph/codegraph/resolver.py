@@ -78,6 +78,19 @@ def _strip_jsonc(raw: str) -> str:
     return "".join(out)
 
 
+def _resolve_npm_tsconfig(start_dir: Path, package_name: str) -> Optional[Path]:
+    """Walk up from *start_dir* looking for node_modules/<package_name>/tsconfig.json."""
+    current = start_dir.resolve()
+    while True:
+        candidate = current / "node_modules" / package_name / "tsconfig.json"
+        if candidate.exists():
+            return candidate
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
 def _read_ts_paths(tsconfig: Path, _seen: Optional[set[str]] = None) -> dict[str, list[str]]:
     if not tsconfig.exists():
         return {}
@@ -106,10 +119,16 @@ def _read_ts_paths(tsconfig: Path, _seen: Optional[set[str]] = None) -> dict[str
         for ext in extends:
             if not isinstance(ext, str):
                 continue
-            parent = (tsconfig.parent / ext).resolve()
-            # If extends points to a directory or has no .json suffix, try adding it
-            if not parent.suffix:
-                parent = parent.with_suffix(".json")
+            if ext.startswith(".") or ext.startswith("/"):
+                # Relative or absolute path — existing logic
+                parent = (tsconfig.parent / ext).resolve()
+                if not parent.suffix:
+                    parent = parent.with_suffix(".json")
+            else:
+                # npm package — resolve from node_modules
+                parent = _resolve_npm_tsconfig(tsconfig.parent, ext)
+                if parent is None:
+                    continue
             paths.update(_read_ts_paths(parent, _seen))
     child_paths = (data.get("compilerOptions") or {}).get("paths") or {}
     paths.update(child_paths)

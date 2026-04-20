@@ -483,3 +483,123 @@ class TestTsconfigExtends:
         assert r.resolve("app/src/index.ts", "@base/a") == "app/base/a.ts"
         assert r.resolve("app/src/index.ts", "@extra/b") == "app/extra/b.ts"
         assert r.resolve("app/src/index.ts", "@child/c") == "app/child/c.ts"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Bug 5: npm-hosted tsconfig presets (issue #104)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestNpmTsconfigPresets:
+    """Verify that npm-hosted tsconfig presets resolve from node_modules."""
+
+    def test_scoped_npm_preset(self, tmp_path: Path):
+        """``"extends": "@tsconfig/node20"`` resolves from node_modules."""
+        pkg = tmp_path / "app"
+        nm = pkg / "node_modules" / "@tsconfig" / "node20"
+        nm.mkdir(parents=True)
+        _write(nm, "tsconfig.json", '''{
+            "compilerOptions": { "paths": { "@lib/*": ["./lib/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '{ "extends": "@tsconfig/node20" }')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "lib/utils.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@lib/utils")
+        assert hit == "app/lib/utils.ts"
+
+    def test_unscoped_npm_preset(self, tmp_path: Path):
+        """``"extends": "tsconfig-preset"`` resolves from node_modules."""
+        pkg = tmp_path / "app"
+        nm = pkg / "node_modules" / "tsconfig-preset"
+        nm.mkdir(parents=True)
+        _write(nm, "tsconfig.json", '''{
+            "compilerOptions": { "paths": { "@preset/*": ["./preset/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '{ "extends": "tsconfig-preset" }')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "preset/foo.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@preset/foo")
+        assert hit == "app/preset/foo.ts"
+
+    def test_missing_preset_graceful(self, tmp_path: Path):
+        """Missing npm preset → no crash, child paths still work."""
+        pkg = tmp_path / "app"
+        _write(pkg, "tsconfig.json", '''{
+            "extends": "@tsconfig/nonexistent",
+            "compilerOptions": { "paths": { "@/*": ["./src/*"] } }
+        }''')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "src/utils.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@/utils")
+        assert hit == "app/src/utils.ts"
+
+    def test_npm_preset_child_overrides(self, tmp_path: Path):
+        """Child paths override npm preset paths for the same alias key."""
+        pkg = tmp_path / "app"
+        nm = pkg / "node_modules" / "@tsconfig" / "base"
+        nm.mkdir(parents=True)
+        _write(nm, "tsconfig.json", '''{
+            "compilerOptions": { "paths": { "@/*": ["./from-preset/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '''{
+            "extends": "@tsconfig/base",
+            "compilerOptions": { "paths": { "@/*": ["./from-child/*"] } }
+        }''')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "from-child/utils.ts")
+        _write(pkg, "from-preset/utils.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@/utils")
+        assert hit == "app/from-child/utils.ts"
+
+    def test_npm_preset_nested_node_modules(self, tmp_path: Path):
+        """node_modules in a parent directory is found by walking up."""
+        pkg = tmp_path / "app"
+        # node_modules at tmp_path level, not inside pkg
+        nm = tmp_path / "node_modules" / "@tsconfig" / "node20"
+        nm.mkdir(parents=True)
+        _write(nm, "tsconfig.json", '''{
+            "compilerOptions": { "paths": { "@upper/*": ["./upper/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '{ "extends": "@tsconfig/node20" }')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "upper/a.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@upper/a")
+        assert hit == "app/upper/a.ts"
+
+    def test_npm_preset_chained_extends(self, tmp_path: Path):
+        """npm preset itself uses relative extends → both levels merge."""
+        pkg = tmp_path / "app"
+        nm = pkg / "node_modules" / "@tsconfig" / "node20"
+        nm.mkdir(parents=True)
+        _write(nm, "strict.json", '''{
+            "compilerOptions": { "paths": { "@strict/*": ["./strict/*"] } }
+        }''')
+        _write(nm, "tsconfig.json", '''{
+            "extends": "./strict.json",
+            "compilerOptions": { "paths": { "@base/*": ["./base/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '{ "extends": "@tsconfig/node20" }')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "strict/a.ts")
+        _write(pkg, "base/b.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        assert r.resolve("app/src/index.ts", "@strict/a") == "app/strict/a.ts"
+        assert r.resolve("app/src/index.ts", "@base/b") == "app/base/b.ts"
+
+    def test_relative_extends_unchanged(self, tmp_path: Path):
+        """Regression guard: relative extends still works after the npm branch."""
+        pkg = tmp_path / "app"
+        _write(pkg, "tsconfig.base.json", '''{
+            "compilerOptions": { "paths": { "@shared/*": ["./shared/*"] } }
+        }''')
+        _write(pkg, "tsconfig.json", '{ "extends": "./tsconfig.base.json" }')
+        _write(pkg, "src/index.ts")
+        _write(pkg, "shared/utils.ts")
+        r = _make_resolver(tmp_path, [pkg])
+        hit = r.resolve("app/src/index.ts", "@shared/utils")
+        assert hit == "app/shared/utils.ts"
