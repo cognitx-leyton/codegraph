@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `529b70c` → `98b3360` (fix(cli): surface Neo4j connection errors instead of swallowing them — closes #147; 528 tests passing, v0.1.57).
+> **Last updated:** 2026-04-20 after commits `7554891` → `02a007d` (fix(cli): catch Neo4j connection and auth errors in wipe and index commands — closes #208; 532 tests passing, v0.1.58).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-147`. All four affected CLI commands (`stats`, `query`, `validate`, `arch_check`) now catch `ServiceUnavailable | AuthError` from neo4j driver, emit a structured `connection` error via `_emit_error()`, and exit with code 2 instead of swallowing exceptions. Closes issue #147. v0.1.57.
-- **Tests:** 528 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-208`. All 6 Neo4j-touching CLI commands now catch `ServiceUnavailable | AuthError` and emit structured `connection` errors — completing the work started in #147. `wipe` and `index` were the final two commands to gain this coverage. `validate` also gained a `try/finally` to prevent driver leaks. Closes issue #208. v0.1.58.
+- **Tests:** 532 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,25 +21,29 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `529b70c`)
+## Shipped since the last roadmap update (commit `7554891`)
 
 ```
-98b3360 fix(cli): surface Neo4j connection errors instead of swallowing them
-4a5c2a4 Merge pull request #205 from cognitx-leyton/archon/task-fix-issue-148
-af582c9 chore: bump version to 0.1.57
+02a007d fix(cli): catch Neo4j connection and auth errors in wipe and index commands
+cf63c7c Merge pull request #209 from cognitx-leyton/archon/task-fix-issue-147
+1612e70 fix(validate): wrap driver usage in try/finally to prevent leak on error
+b19ed9e revert(workflow): remove auto-merge — PR approval stays manual
+8e5e028 chore: bump version to 0.1.58
 ```
 
-### CLI — surface Neo4j connection errors in `stats`, `query`, `validate`, `arch_check` (issue #147)
+### CLI — catch Neo4j errors in `wipe` and `index`; fix `validate` driver leak (issues #208 + #147)
 
-- `98b3360 fix(cli)` — Four CLI commands previously swallowed `ServiceUnavailable` and `AuthError` from the Neo4j driver, leaving users with no actionable output. Changes:
-  - Added `from neo4j.exceptions import AuthError, ServiceUnavailable` to `cli.py`.
-  - `stats()` — `driver.verify_connectivity()` called before the main try/finally; outer `except ServiceUnavailable | AuthError` catches driver-level failures and calls `_emit_error(as_json, "connection", str(e))` then `raise typer.Exit(2)`.
-  - `query()` — same `verify_connectivity()` + catch pattern.
-  - `validate()` — try/except wrapping the `run_validation()` call.
-  - `arch_check()` — try/except wrapping the `run_arch_check()` call.
-  - All four emit a structured `{"error": {"type": "connection", "message": "..."}}` in JSON mode or a Rich-formatted error panel in default mode, then exit code 2.
-  - **Tests:** 2 new tests added to `tests/test_stats.py` (`_FakeDriver` extended with `verify_connectivity()`); new file `tests/test_cli_neo4j_errors.py` with 7 tests covering `query` (3), `validate` (2), `arch_check` (2) for both exception types and Rich mode output. Total: 519 → 528 tests.
-  - Code review found and fixed 1 bug (double `driver.close()` in except + finally blocks) and 2 minor issues (unused `import pytest`, unused `tmp_path` fixture). Arch-check: 5/5 policies pass. Version bumped to v0.1.57 (`af582c9`). PR #205 merged as `4a5c2a4`.
+- `1612e70 fix(validate)` — `validate()` in `cli.py` now wraps driver usage in `try/finally` so `driver.close()` is guaranteed even when `run_validation()` raises. Previously the driver was leaked on error paths.
+
+- `02a007d fix(cli)` — Completes the Neo4j error-handling sweep started in #147. The final two commands (`wipe` and `index`) were missing `ServiceUnavailable` / `AuthError` catch blocks:
+  - `wipe()` — `except (ServiceUnavailable, AuthError)` added between the `try` body and `finally: loader.close()`. Calls `_emit_error(as_json, "connection", str(e))` + `raise typer.Exit(code=2)`. The `finally` still fires after `raise`.
+  - `index()` — third `except` clause added after `ConfigError` / `IgnoreConfigError`. Same pattern. `ServiceUnavailable` / `AuthError` propagate from `_run_index()` → `loader.init_schema()` / `.wipe()` / `.load()` through the inner `finally: loader.close()` first, then caught by the new outer `except`.
+  - **Tests** (`tests/test_cli_neo4j_errors.py`): `_FakeLoader` helper class added; 4 new tests — `test_wipe_service_unavailable_json`, `test_wipe_auth_error_json`, `test_index_service_unavailable_json`, `test_index_auth_error_json`. Stale module docstring fixed. Test count: 528 → 532.
+  - All 6 Neo4j-touching CLI commands now emit clean JSON/Rich error messages instead of raw tracebacks. Arch-check: 5/5 policies pass. Version bumped to v0.1.58 (`8e5e028`). PR #209 merged as `cf63c7c`.
+
+### Workflow — remove auto-merge
+
+- `b19ed9e revert(workflow)` — Removed auto-merge behaviour from the PR workflow. PR approval stays manual.
 
 ---
 
@@ -662,12 +666,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-154` |
+| Current branch | `archon/task-fix-issue-208` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`b788e81` — fix(release): CDN propagation retry loop for PyPI installs, pending PR) |
-| Open PR | None. PR #202 (issue #157 — init exit-code fix) merged to main. |
-| Working tree | Clean (untracked: `.claude/plans/pypi-install-retry.plan.md`) |
-| Test count | 514 passing + 1 deselected |
+| Unpushed commits | 1 (`02a007d` — fix(cli): catch Neo4j connection and auth errors in wipe and index commands, pending PR) |
+| Open PR | None. PR #209 (issue #147 — validate driver leak fix) merged to main. |
+| Working tree | Clean (untracked: `.claude/plans/fix-neo4j-error-handling-wipe-index.plan.md`) |
+| Test count | 532 passing + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
