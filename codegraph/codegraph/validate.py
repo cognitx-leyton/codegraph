@@ -37,10 +37,12 @@ class ValidationReport:
 def run_validation(uri, user, password, repo_root, console=None) -> ValidationReport:
     console = console or Console()
     driver = GraphDatabase.driver(uri, auth=(user, password))
-    coverage = _coverage_metrics(driver)
-    assertions = _ground_truth_assertions(driver, repo_root)
-    smoke = _smoke_queries(driver)
-    driver.close()
+    try:
+        coverage = _coverage_metrics(driver)
+        assertions = _ground_truth_assertions(driver, repo_root)
+        smoke = _smoke_queries(driver)
+    finally:
+        driver.close()
     _render(console, coverage, assertions, smoke)
     return ValidationReport(coverage=coverage, assertions=assertions, smoke=smoke)
 
