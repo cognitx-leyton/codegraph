@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `8f3280d` → `dc51b95` (test(stats): add failure-path and lifecycle tests for _query_graph_stats — closes #148; 519 tests passing, v0.1.56).
+> **Last updated:** 2026-04-20 after commits `529b70c` → `98b3360` (fix(cli): surface Neo4j connection errors instead of swallowing them — closes #147; 528 tests passing, v0.1.57).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-148`. Added 5 failure-path and lifecycle tests for `_query_graph_stats` and the `stats` CLI command (empty results, session raises, driver-ownership contract, `finally`-close on error, `finally`-close on success). No production code changes. Closes issue #148. v0.1.56.
-- **Tests:** 519 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-147`. All four affected CLI commands (`stats`, `query`, `validate`, `arch_check`) now catch `ServiceUnavailable | AuthError` from neo4j driver, emit a structured `connection` error via `_emit_error()`, and exit with code 2 instead of swallowing exceptions. Closes issue #147. v0.1.57.
+- **Tests:** 528 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,7 +21,29 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `8f3280d`)
+## Shipped since the last roadmap update (commit `529b70c`)
+
+```
+98b3360 fix(cli): surface Neo4j connection errors instead of swallowing them
+4a5c2a4 Merge pull request #205 from cognitx-leyton/archon/task-fix-issue-148
+af582c9 chore: bump version to 0.1.57
+```
+
+### CLI — surface Neo4j connection errors in `stats`, `query`, `validate`, `arch_check` (issue #147)
+
+- `98b3360 fix(cli)` — Four CLI commands previously swallowed `ServiceUnavailable` and `AuthError` from the Neo4j driver, leaving users with no actionable output. Changes:
+  - Added `from neo4j.exceptions import AuthError, ServiceUnavailable` to `cli.py`.
+  - `stats()` — `driver.verify_connectivity()` called before the main try/finally; outer `except ServiceUnavailable | AuthError` catches driver-level failures and calls `_emit_error(as_json, "connection", str(e))` then `raise typer.Exit(2)`.
+  - `query()` — same `verify_connectivity()` + catch pattern.
+  - `validate()` — try/except wrapping the `run_validation()` call.
+  - `arch_check()` — try/except wrapping the `run_arch_check()` call.
+  - All four emit a structured `{"error": {"type": "connection", "message": "..."}}` in JSON mode or a Rich-formatted error panel in default mode, then exit code 2.
+  - **Tests:** 2 new tests added to `tests/test_stats.py` (`_FakeDriver` extended with `verify_connectivity()`); new file `tests/test_cli_neo4j_errors.py` with 7 tests covering `query` (3), `validate` (2), `arch_check` (2) for both exception types and Rich mode output. Total: 519 → 528 tests.
+  - Code review found and fixed 1 bug (double `driver.close()` in except + finally blocks) and 2 minor issues (unused `import pytest`, unused `tmp_path` fixture). Arch-check: 5/5 policies pass. Version bumped to v0.1.57 (`af582c9`). PR #205 merged as `4a5c2a4`.
+
+---
+
+## Previously shipped (through commit `529b70c`)
 
 ```
 dc51b95 test(stats): add failure-path and lifecycle tests for _query_graph_stats
