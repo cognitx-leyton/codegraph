@@ -1,5 +1,6 @@
-"""Tests for Neo4j connection error handling in query, validate, and arch-check commands.
+"""Tests for Neo4j connection error handling in CLI commands.
 
+Covers: query, validate, arch-check, wipe, and index.
 All tests use monkeypatched drivers — no live Neo4j instance required.
 """
 from __future__ import annotations
@@ -44,6 +45,22 @@ class _FakeDriver:
 
     def close(self):
         self.closed = True
+
+
+class _FakeLoader:
+    """Stub for Neo4jLoader — raises on any mutating method."""
+
+    def __init__(self, error):
+        self._error = error
+
+    def wipe(self):
+        raise self._error
+
+    def init_schema(self):
+        raise self._error
+
+    def close(self):
+        pass
 
 
 # ── query command ────────────────────────────────────────────────────
@@ -138,3 +155,79 @@ def test_arch_check_auth_error(monkeypatch):
     data = json.loads(result.output)
     assert data["ok"] is False
     assert data["error"] == "connection"
+
+
+# ── wipe command ────────────────────────────────────────────────────
+
+
+def test_wipe_service_unavailable_json(monkeypatch):
+    """wipe --json emits clean error on ServiceUnavailable."""
+    err = ServiceUnavailable("Connection refused")
+    monkeypatch.setattr(
+        "codegraph.cli.Neo4jLoader", lambda *a, **kw: _FakeLoader(err),
+    )
+
+    result = runner.invoke(app, ["wipe", "--json"])
+    assert result.exit_code == 2
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "connection"
+    assert "Connection refused" in data["message"]
+
+
+def test_wipe_auth_error_json(monkeypatch):
+    """wipe --json emits clean error on AuthError."""
+    err = AuthError("Unauthorized")
+    monkeypatch.setattr(
+        "codegraph.cli.Neo4jLoader", lambda *a, **kw: _FakeLoader(err),
+    )
+
+    result = runner.invoke(app, ["wipe", "--json"])
+    assert result.exit_code == 2
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "connection"
+    assert "Unauthorized" in data["message"]
+
+
+# ── index command ───────────────────────────────────────────────────
+
+
+def test_index_service_unavailable_json(monkeypatch, tmp_path):
+    """index --json emits clean error on ServiceUnavailable."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.codegraph]\npackages = ["pkg"]\n',
+    )
+    err = ServiceUnavailable("Connection refused")
+    monkeypatch.setattr(
+        "codegraph.cli.Neo4jLoader", lambda *a, **kw: _FakeLoader(err),
+    )
+
+    result = runner.invoke(app, ["index", str(tmp_path), "--json"])
+    assert result.exit_code == 2
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "connection"
+    assert "Connection refused" in data["message"]
+
+
+def test_index_auth_error_json(monkeypatch, tmp_path):
+    """index --json emits clean error on AuthError."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.codegraph]\npackages = ["pkg"]\n',
+    )
+    err = AuthError("Unauthorized")
+    monkeypatch.setattr(
+        "codegraph.cli.Neo4jLoader", lambda *a, **kw: _FakeLoader(err),
+    )
+
+    result = runner.invoke(app, ["index", str(tmp_path), "--json"])
+    assert result.exit_code == 2
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "connection"
+    assert "Unauthorized" in data["message"]

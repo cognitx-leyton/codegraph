@@ -196,6 +196,9 @@ def index(
     except IgnoreConfigError as e:
         _emit_error(as_json, "ignore", str(e))
         raise typer.Exit(code=2)
+    except (ServiceUnavailable, AuthError) as e:
+        _emit_error(as_json, "connection", str(e))
+        raise typer.Exit(code=2)
 
     if as_json:
         print(json.dumps({"ok": True, "stats": stats}, indent=2))
@@ -835,6 +838,9 @@ def wipe(
     loader = Neo4jLoader(uri, user, password)
     try:
         loader.wipe()
+    except (ServiceUnavailable, AuthError) as e:
+        _emit_error(as_json, "connection", str(e))
+        raise typer.Exit(code=2)
     finally:
         loader.close()
     if as_json:
