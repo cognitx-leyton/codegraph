@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `11bea30` → `475eb4f` (fix(arch-check): respect custom sample_limit in user-defined policies — closes #116, #91, #108; 542 tests passing, v0.1.61).
+> **Last updated:** 2026-04-20 after commits `11bea30` → `0dba0bb` (fix(arch-check): render violations when sample is empty and exclude disabled policies from summary — closes #113, #107; 544 tests passing, v0.1.62).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-116`. Custom arch-check policies now respect `sample_limit` and support `$scope` parameter injection. `_check_custom()` passes `limit=sample_limit` and `scope=scope` to every `s.run()` call so `LIMIT $limit` / `$scope` in user Cypher honour the global settings. Parse-time `UserWarning` emitted when a custom `sample_cypher` contains a hardcoded `LIMIT <n>`. All built-in docs + test fixtures updated to `LIMIT $limit`. Closes issues #116 (sample_limit), #91 and #108 (scope injection). v0.1.61.
-- **Tests:** 542 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-113`. Two arch-check rendering/summary fixes: (1) `_render()` now emits a fallback message when `sample=[]` but `violation_count > 0` (empty sample due to full suppression no longer silently hides violations); (2) the passed/total summary line now excludes disabled policies from both numerator and denominator, reporting them as `(N skipped)`. Closes issues #113 and #107. v0.1.62.
+- **Tests:** 544 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,13 +21,31 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `11bea30`)
+## Shipped since the last roadmap update (commit `d1526b8`)
 
 ```
-475eb4f fix(arch-check): respect custom sample_limit in user-defined policies
-6058fac Merge pull request #212 from cognitx-leyton/archon/task-fix-issue-136
-0273558 chore: bump version to 0.1.61
+0dba0bb fix(arch-check): render violations when sample is empty and exclude disabled policies from summary
+f366968 Merge pull request #213 from cognitx-leyton/archon/task-fix-issue-116
+cc34e46 chore: bump version to 0.1.62
 ```
+
+### arch-check — fix rendering when sample is empty + exclude disabled policies from summary (issues #113, #107)
+
+- `0dba0bb fix(arch-check)` — Two fixes to `arch_check.py` `_render()`:
+
+  1. **Issue #113 — empty sample with violations still renders:** The guard `if p.passed or not p.sample: continue` silently swallowed policies where all sampled rows were suppressed (`sample=[]`) but `violation_count > 0`. Guard changed to `if p.passed or (not p.sample and p.violation_count == 0): continue`. When `sample=[]` and `violation_count > 0`, a fallback line is printed: `<PolicyName> — N violation(s) beyond the sample window (all sampled rows were suppressed)`.
+
+  2. **Issue #107 — disabled policies excluded from summary count:** The `passed/total` summary previously counted disabled policies in both numerator and denominator, showing e.g. `5/5 policies passed` when 2 were disabled. Now `active = [p for p in report.policies if "(disabled" not in p.detail]` filters them out; disabled count reported as `(N skipped)`. Mirrors the existing `"(disabled"` string convention already used at line 647 for the SKIP mark.
+
+  - **Tests** (`tests/test_arch_check.py`): 2 new tests — `test_render_violation_section_when_sample_empty_but_violations_exist` (verifies fallback message renders); `test_render_summary_excludes_disabled_policies` (verifies disabled policies don't inflate count). ANSI codes stripped via `re.sub` because Rich's `highlight=True` injects codes around numbers. 542 → 544 tests pass, byte-compile clean. Arch-check: 3/3 policies pass (2 skipped).
+
+### arch-check — custom policies honour `sample_limit` and support `$scope` (issues #116, #91, #108)
+
+- Shipped in `475eb4f` (previous session); PR #213 merged as `f366968`. Version bumped to v0.1.62 (`cc34e46`).
+
+---
+
+## Previously shipped (through commit `d1526b8`)
 
 ### arch-check — custom policies honour `sample_limit` and support `$scope` (issues #116, #91, #108)
 

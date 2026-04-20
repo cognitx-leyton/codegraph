@@ -1292,3 +1292,70 @@ def test_render_incomplete_warning_references_config():
     assert "settings.sample_limit" in output
     assert ".arch-policies.toml" in output
     assert "SAMPLE_LIMIT" not in output
+
+
+def test_render_violation_section_when_sample_empty_but_violations_exist():
+    """_render shows fallback message when sample=[] but violation_count > 0."""
+    import re
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=False,
+                violation_count=5,
+                sample=[],
+                suppressed_count=10,
+                suppressed_sample=[{"cycle": ["c.py", "d.py", "c.py"], "hops": 2}],
+                incomplete_suppression_coverage=True,
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+    assert "beyond the sample window" in output
+    assert "import_cycles" in output
+    assert "5 violation(s)" in output
+
+
+def test_render_summary_excludes_disabled_policies():
+    """Summary line should not count disabled policies in passed/total."""
+    import re
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=True,
+                violation_count=0,
+                sample=[],
+                detail="",
+            ),
+            PolicyResult(
+                name="cross_package",
+                passed=True,
+                violation_count=0,
+                sample=[],
+                detail="(disabled in .arch-policies.toml)",
+            ),
+            PolicyResult(
+                name="orphan_detection",
+                passed=True,
+                violation_count=0,
+                sample=[],
+                detail="(disabled in .arch-policies.toml)",
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+    assert "1/1 policies passed" in output
+    assert "2 skipped" in output

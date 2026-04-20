@@ -658,7 +658,13 @@ def _render(console: Console, report: ArchReport) -> None:
 
     # Failing policies — unsuppressed violations.
     for p in report.policies:
-        if p.passed or not p.sample:
+        if p.passed or (not p.sample and p.violation_count == 0):
+            continue
+        if not p.sample:
+            console.print(
+                f"\n[bold red]{p.name}[/] — {p.violation_count} violation(s) "
+                f"beyond the sample window (all sampled rows were suppressed)"
+            )
             continue
         console.print(f"\n[bold red]{p.name}[/] — first {len(p.sample)} of {p.violation_count}")
         headers = list(p.sample[0].keys())
@@ -705,10 +711,14 @@ def _render(console: Console, report: ArchReport) -> None:
             console.print(f"  [dim]{s['policy']}[/]: {s['key']}")
 
     total_suppressed = sum(p.suppressed_count for p in report.policies)
-    passed = sum(1 for p in report.policies if p.passed)
-    total = len(report.policies)
+    active = [p for p in report.policies if "(disabled" not in p.detail]
+    passed = sum(1 for p in active if p.passed)
+    total = len(active)
+    skipped = len(report.policies) - total
     style = "bold green" if passed == total else "bold red"
     summary = f"{passed}/{total} policies passed"
+    if skipped:
+        summary += f" ({skipped} skipped)"
     if total_suppressed:
         summary += f" ({total_suppressed} violation(s) suppressed)"
     console.print(f"\n[{style}]{summary}[/]")
