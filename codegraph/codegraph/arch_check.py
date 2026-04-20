@@ -182,7 +182,7 @@ def _run_all(
 
     for custom in config.custom:
         if custom.enabled:
-            out.append(_check_custom(driver, custom, sample_limit))
+            out.append(_check_custom(driver, custom, scope, sample_limit))
         else:
             out.append(_disabled(custom.name))
 
@@ -475,14 +475,23 @@ def _check_orphans(
     )
 
 
-def _check_custom(driver: Driver, custom: CustomPolicy, sample_limit: int = 10) -> PolicyResult:
-    """Run a user-authored policy from :class:`CustomPolicy`."""
+def _check_custom(
+    driver: Driver, custom: CustomPolicy,
+    scope: list[str] | None = None, sample_limit: int = 10,
+) -> PolicyResult:
+    """Run a user-authored policy from :class:`CustomPolicy`.
+
+    Injects ``$limit`` (from *sample_limit*) and ``$scope`` (list of path
+    prefixes, empty when unscoped) as Cypher parameters so user-authored
+    queries can reference them.
+    """
+    scope_param = scope or []
     with driver.session() as s:
-        count_result = s.run(custom.count_cypher).single()
+        count_result = s.run(custom.count_cypher, scope=scope_param).single()
         total = int((count_result["v"] if count_result else 0) or 0)
         sample: list[dict] = []
         if total > 0:
-            sample = [dict(r) for r in s.run(custom.sample_cypher)][:sample_limit]
+            sample = [dict(r) for r in s.run(custom.sample_cypher, limit=sample_limit, scope=scope_param)][:sample_limit]
     return PolicyResult(
         name=custom.name,
         passed=(total == 0),

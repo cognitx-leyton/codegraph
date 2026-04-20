@@ -270,20 +270,20 @@ kinds       = ["function", "class", "atom", "endpoint"]  # which categories to c
 name          = "no_fat_files"
 description   = "Files over 500 LOC"
 count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
-sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file, f.loc AS loc LIMIT 10"
+sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file, f.loc AS loc LIMIT $limit"
 enabled       = true   # optional, defaults to true
 
 [[policies.custom]]
 name          = "no_dead_endpoints"
 description   = "Endpoints without a HANDLES method"
 count_cypher  = "MATCH (e:Endpoint) WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e) } RETURN count(e) AS v"
-sample_cypher = "MATCH (e:Endpoint) WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e) } RETURN e.path AS route LIMIT 10"
+sample_cypher = "MATCH (e:Endpoint) WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e) } RETURN e.path AS route LIMIT $limit"
 ```
 
 ### Rules
 - Every section is optional. Omit to use defaults.
 - Every `count_cypher` must return a single row with column `v` containing an integer ≥ 0.
-- Every `sample_cypher` should return at most 10 rows — each row becomes a dict in the JSON report's `sample` array.
+- Every `sample_cypher` should use `LIMIT $limit` — the `$limit` parameter is injected automatically from `settings.sample_limit` (default 10). Avoid hardcoding a LIMIT integer; it will cap results below `sample_limit` and trigger a deprecation warning. A `$scope` parameter (list of path prefixes, empty when unscoped) is also available for queries that need to respect `--scope`.
 - Custom policy names must be unique and must not collide with built-in names (`import_cycles`, `cross_package`, `layer_bypass`, `coupling_ceiling`, `orphan_detection`).
 - Malformed TOML or invalid fields → exit code 2 with a clear error message (not exit code 1, which means policy violations).
 
@@ -316,7 +316,7 @@ enabled = false
 name          = "no_views_calling_models_directly"
 description   = "Django views should go through a service"
 count_cypher  = "MATCH (:Class {name:'View'})-[:HAS_METHOD]->(:Method)-[:CALLS]->(:Method)<-[:HAS_METHOD]-(m:Class) WHERE m.name ENDS WITH 'Model' RETURN count(m) AS v"
-sample_cypher = "MATCH (v:Class {name:'View'})-[:HAS_METHOD]->(:Method)-[:CALLS]->(:Method)<-[:HAS_METHOD]-(m:Class) WHERE m.name ENDS WITH 'Model' RETURN v.name AS view, m.name AS model LIMIT 10"
+sample_cypher = "MATCH (v:Class {name:'View'})-[:HAS_METHOD]->(:Method)-[:CALLS]->(:Method)<-[:HAS_METHOD]-(m:Class) WHERE m.name ENDS WITH 'Model' RETURN v.name AS view, m.name AS model LIMIT $limit"
 ```
 
 **Shared types package** — must be leaf (no outbound imports to any app):

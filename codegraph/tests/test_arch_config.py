@@ -6,6 +6,7 @@ Every test writes a tiny TOML file into ``tmp_path`` and calls
 """
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import pytest
@@ -265,7 +266,7 @@ def test_single_custom_policy(tmp_path: Path):
 name          = "no_fat_files"
 description   = "Files over 500 LOC"
 count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
-sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path LIMIT 10"
+sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path LIMIT $limit"
 """)
     cfg = load_arch_config(tmp_path)
     assert len(cfg.custom) == 1
@@ -280,13 +281,13 @@ def test_multiple_custom_policies(tmp_path: Path):
 [[policies.custom]]
 name          = "a"
 count_cypher  = "MATCH (n) RETURN count(n) AS v"
-sample_cypher = "MATCH (n) RETURN n LIMIT 1"
+sample_cypher = "MATCH (n) RETURN n LIMIT $limit"
 
 [[policies.custom]]
 name          = "b"
 enabled       = false
 count_cypher  = "MATCH (x) RETURN count(x) AS v"
-sample_cypher = "MATCH (x) RETURN x LIMIT 1"
+sample_cypher = "MATCH (x) RETURN x LIMIT $limit"
 """)
     cfg = load_arch_config(tmp_path)
     assert [c.name for c in cfg.custom] == ["a", "b"]
@@ -350,6 +351,31 @@ count_cypher  = "MATCH (n) RETURN count(n) AS v"
 """)
     with pytest.raises(ArchConfigError, match="sample_cypher"):
         load_arch_config(tmp_path)
+
+
+def test_custom_hardcoded_limit_emits_warning(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "warn_me"
+count_cypher  = "MATCH (f:File) RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) RETURN f LIMIT 10"
+""")
+    with pytest.warns(UserWarning, match="hardcoded LIMIT"):
+        cfg = load_arch_config(tmp_path)
+    assert len(cfg.custom) == 1  # config still loads
+
+
+def test_custom_parameterised_limit_no_warning(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "no_warn"
+count_cypher  = "MATCH (f:File) RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) RETURN f LIMIT $limit"
+""")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cfg = load_arch_config(tmp_path)
+    assert len(cfg.custom) == 1
 
 
 # ── Orphan detection ──────────────────────────────────────────

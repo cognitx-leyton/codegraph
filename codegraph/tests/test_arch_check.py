@@ -418,6 +418,54 @@ def test_custom_policy_detects_violations():
     assert result.detail == "Files over 500 LOC"
 
 
+def test_check_custom_passes_limit_param():
+    """_check_custom injects limit= into s.run() for sample_cypher."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        if "count(f)" in cypher:
+            return [{"v": 2}]
+        return [{"path": "a.py"}, {"path": "b.py"}]
+
+    driver = _FakeDriver(resolver)
+    custom = CustomPolicy(
+        name="fat_files",
+        description="Files over 500 LOC",
+        count_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v",
+        sample_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS path LIMIT $limit",
+    )
+    result = _check_custom(driver, custom, sample_limit=25)
+    assert result.violation_count == 2
+    # The sample_cypher call should have received limit=25
+    sample_call_params = captured_params[-1]
+    assert sample_call_params["limit"] == 25
+
+
+def test_check_custom_passes_scope_param():
+    """_check_custom injects scope= into s.run() for both queries."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        if "count(f)" in cypher:
+            return [{"v": 1}]
+        return [{"path": "src/a.py"}]
+
+    driver = _FakeDriver(resolver)
+    custom = CustomPolicy(
+        name="fat_files",
+        description="Files over 500 LOC",
+        count_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v",
+        sample_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS path LIMIT $limit",
+    )
+    result = _check_custom(driver, custom, scope=["src/"], sample_limit=10)
+    assert result.violation_count == 1
+    # Both count and sample calls should have received scope=["src/"]
+    assert captured_params[0]["scope"] == ["src/"]
+    assert captured_params[1]["scope"] == ["src/"]
+
+
 # ── Orchestrator ────────────────────────────────────────────────────
 
 
@@ -485,7 +533,7 @@ def test_run_arch_check_runs_custom_policies(monkeypatch):
         name="my_rule",
         description="demo",
         count_cypher="MATCH (custom_node) RETURN count(custom_node) AS v",
-        sample_cypher="MATCH (n) RETURN n AS x LIMIT 10",
+        sample_cypher="MATCH (n) RETURN n AS x LIMIT $limit",
     )
     config = ArchConfig(custom=[custom])
     report = run_arch_check("bolt://fake:7687", "neo4j", "pw", console=None, config=config)

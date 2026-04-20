@@ -45,11 +45,13 @@ TOML schema (all sections optional):
     name          = "no_fat_files"
     description   = "Files over 500 LOC"
     count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
-    sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file LIMIT 10"
+    sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file LIMIT $limit"
 """
 from __future__ import annotations
 
+import re
 import sys
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -393,6 +395,13 @@ def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:
         if not isinstance(description, str):
             raise ArchConfigError(
                 f"{path}: policies.custom[{i}].description must be a string"
+            )
+        if re.search(r'LIMIT\s+\d+', sample_cypher, re.IGNORECASE):
+            warnings.warn(
+                f"{path}: policies.custom[{i}] ('{name}') sample_cypher contains a "
+                f"hardcoded LIMIT. Use LIMIT $limit instead — the value is injected "
+                f"from settings.sample_limit at runtime.",
+                stacklevel=2,
             )
         out.append(CustomPolicy(
             name=name,
