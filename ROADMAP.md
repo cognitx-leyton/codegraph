@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-22 after commits `a6a5ee2` → `c1ed081` (fix(loader): add interface: to _FILE_BEARING_PREFIXES and fix iface: typo in test — closes #96; 556 tests passing, v0.1.69).
+> **Last updated:** 2026-04-22 after commits `20fe092` → `b0e8739` (fix(arch-check): validate suppression policy names and suggest corrections — closes #94; 560 tests passing, v0.1.70).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-96`. Fixes incremental re-indexing dropping `interface:` nodes from `touched_files` tracking — `"interface:"` was absent from `_FILE_BEARING_PREFIXES` in `loader.py`, so `_file_from_id()` returned `None` for interface node IDs and their subgraphs were never cleaned during incremental runs. Also fixes a secondary `iface:` typo in `test_mcp.py` that never matched any real node ID. Closes issue #96. v0.1.69.
-- **Tests:** 556 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-94`. Validates suppression policy names at config-load time in `arch_config.py` — unknown names now raise a `ConfigError` with a "did you mean?" suggestion (via `difflib.get_close_matches`) or the full list of known policies. Closes issue #94. v0.1.70.
+- **Tests:** 560 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,13 +21,33 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `a6a5ee2`)
+## Shipped since the last roadmap update (commit `20fe092`)
 
 ```
-c1ed081 fix(loader): add interface: to _FILE_BEARING_PREFIXES and fix iface: typo in test
-b5bccba Merge pull request #222 from cognitx-leyton/archon/task-fix-issue-220
-80acca4 chore: bump version to 0.1.69
+b0e8739 fix(arch-check): validate suppression policy names and suggest corrections
+0829e4d Merge pull request #223 from cognitx-leyton/archon/task-fix-issue-96
+b001c70 chore: bump version to 0.1.70
 ```
+
+### arch-check — validate suppression policy names at config load time (issue #94)
+
+- `b0e8739 fix(arch-check)` — Three files changed:
+
+  1. **`codegraph/codegraph/arch_config.py`** — Extracted `BUILTIN_POLICIES: frozenset[str]` as a module-level constant (the 5 built-in policy names: `import_cycles`, `cross_package_imports`, `controller_repo_bypass`, `orphan_nodes`, `layer_violations`). Added `import difflib`. `_parse_suppressions()` gains a `valid_policies: frozenset[str]` parameter; for each entry, if `entry["policy"]` is not in `valid_policies`, a `ConfigError` is raised — with a "did you mean `<X>`?" hint when `difflib.get_close_matches` finds a close match (cutoff=0.6), or a full list of known policies otherwise. `load_arch_config()` computes `valid_policies = BUILTIN_POLICIES | frozenset(c.name for c in custom)` and threads it into the `_parse_suppressions()` call.
+
+  2. **`codegraph/tests/test_arch_config.py`** — Four new tests:
+     - `test_suppression_typo_policy_rejected_with_suggestion`: `"import_cycle"` → suggests `"import_cycles"`.
+     - `test_suppression_unknown_policy_rejected_with_known_list`: `"totally_bogus"` → no close match, full list shown.
+     - `test_suppression_custom_policy_name_accepted`: custom policy `"no_fat_files"` in both `[[policy]]` and `[[suppress]]` loads cleanly.
+     - `test_suppression_typo_of_custom_policy_rejected`: `"no_fat_file"` (off-by-one) is caught as unknown with a suggestion.
+
+  - **Tests**: 57/57 in `test_arch_config.py` (4 new), 560/560 full suite, 0 failures. Code review: 0 issues. Arch-check: 4/4 policies pass (1 skipped).
+
+- `0829e4d` — PR #223 merged (`archon/task-fix-issue-96`). Version bumped to v0.1.70 (`b001c70`).
+
+---
+
+## Previously shipped (through commit `c1ed081`)
 
 ### Loader — add `interface:` to `_FILE_BEARING_PREFIXES` (issue #96)
 
