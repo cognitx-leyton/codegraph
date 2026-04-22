@@ -1067,7 +1067,7 @@ def test_reindex_file_ownership_edges_not_doubled(monkeypatch, tmp_path):
         edges=[
             Edge(kind=DEFINES_CLASS, src_id=f"file:{py_file}", dst_id=f"class:{py_file}#Foo"),
             Edge(kind=DEFINES_FUNC, src_id=f"file:{py_file}", dst_id=f"func:{py_file}#bar"),
-            Edge(kind=DEFINES_IFACE, src_id=f"file:{py_file}", dst_id=f"iface:{py_file}#IFoo"),
+            Edge(kind=DEFINES_IFACE, src_id=f"file:{py_file}", dst_id=f"interface:{py_file}#IFoo"),
             Edge(kind=DEFINES_ATOM, src_id=f"file:{py_file}", dst_id=f"atom:{py_file}#myAtom"),
         ],
     )

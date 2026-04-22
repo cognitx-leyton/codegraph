@@ -422,6 +422,7 @@ def test_per_file_extras_atom_stats_use_len_not_db_count(captured_runs):
     ("func:codegraph/cli.py#bar", "codegraph/cli.py"),
     ("method:class:codegraph/cli.py#Cls#run", "codegraph/cli.py"),
     ("atom:codegraph/cli.py#myAtom", "codegraph/cli.py"),
+    ("interface:codegraph/cli.py#IFoo", "codegraph/cli.py"),
     ("endpoint:GET:/api@codegraph/cli.py#handler", "codegraph/cli.py"),
     ("gqlop:query:Users@codegraph/cli.py#resolve", "codegraph/cli.py"),
 ])

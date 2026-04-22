@@ -62,7 +62,7 @@ log = logging.getLogger(__name__)
 BATCH = 1000
 
 # Prefixes that encode a file path as ``<prefix>:<path>#<rest>``.
-_FILE_BEARING_PREFIXES = ("file:", "class:", "func:", "method:", "endpoint:", "gqlop:", "atom:")
+_FILE_BEARING_PREFIXES = ("file:", "class:", "func:", "method:", "endpoint:", "gqlop:", "atom:", "interface:")
 
 
 def _file_from_id(node_id: str) -> str | None:
