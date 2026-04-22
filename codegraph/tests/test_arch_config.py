@@ -547,6 +547,62 @@ def test_suppression_wrong_type_rejected(tmp_path: Path):
         load_arch_config(tmp_path)
 
 
+def test_suppression_typo_policy_rejected_with_suggestion(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycle"
+key    = "a.py -> b.py"
+reason = "some reason"
+""")
+    with pytest.raises(ArchConfigError, match=r"did you mean 'import_cycles'\?"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_unknown_policy_rejected_with_known_list(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "totally_bogus"
+key    = "a.py -> b.py"
+reason = "some reason"
+""")
+    with pytest.raises(ArchConfigError, match=r"does not match any known policy.*known policies:"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_custom_policy_name_accepted(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "no_fat_files"
+description   = "Files over 500 LOC"
+count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file LIMIT $limit"
+
+[[suppress]]
+policy = "no_fat_files"
+key    = "src/big.py"
+reason = "legacy module"
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.suppressions[0].policy == "no_fat_files"
+
+
+def test_suppression_typo_of_custom_policy_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "no_fat_files"
+description   = "Files over 500 LOC"
+count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file LIMIT $limit"
+
+[[suppress]]
+policy = "no_fat_file"
+key    = "src/big.py"
+reason = "legacy module"
+""")
+    with pytest.raises(ArchConfigError, match=r"did you mean 'no_fat_files'\?"):
+        load_arch_config(tmp_path)
+
+
 # ── Settings ──────────────────────────────────────────────────
 
 

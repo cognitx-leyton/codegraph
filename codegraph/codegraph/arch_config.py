@@ -49,6 +49,7 @@ TOML schema (all sections optional):
 """
 from __future__ import annotations
 
+import difflib
 import re
 import sys
 import warnings
@@ -65,6 +66,10 @@ else:  # pragma: no cover
 DEFAULT_CONFIG_FILENAME = ".arch-policies.toml"
 CURRENT_SCHEMA_VERSION = 1
 VALID_ORPHAN_KINDS = frozenset({"function", "class", "atom", "endpoint"})
+BUILTIN_POLICIES = frozenset({
+    "import_cycles", "cross_package", "layer_bypass",
+    "coupling_ceiling", "orphan_detection",
+})
 
 
 class ArchConfigError(ValueError):
@@ -222,14 +227,21 @@ def load_arch_config(repo_root: Path, path: Optional[Path] = None) -> ArchConfig
             f"{config_path}: [policies] must be a table, got {type(policies).__name__}"
         )
 
+    custom = _parse_custom(policies.get("custom", []), config_path)
+    valid_policies = BUILTIN_POLICIES | frozenset(c.name for c in custom)
+
     return ArchConfig(
         import_cycles=_parse_import_cycles(policies.get("import_cycles", {}), config_path),
         cross_package=_parse_cross_package(policies.get("cross_package", {}), config_path),
         layer_bypass=_parse_layer_bypass(policies.get("layer_bypass", {}), config_path),
         coupling_ceiling=_parse_coupling_ceiling(policies.get("coupling_ceiling", {}), config_path),
         orphan_detection=_parse_orphan_detection(policies.get("orphan_detection", {}), config_path),
-        custom=_parse_custom(policies.get("custom", []), config_path),
-        suppressions=_parse_suppressions(raw.get("suppress", []), config_path),
+        custom=custom,
+        suppressions=_parse_suppressions(
+            raw.get("suppress", []),
+            config_path,
+            valid_policies,
+        ),
         schema_version=schema_version,
         sample_limit=sample_limit,
     )
@@ -358,7 +370,6 @@ def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:
             f"{path}: policies.custom must be an array of tables, got {type(raw).__name__}"
         )
     seen: set[str] = set()
-    builtins = {"import_cycles", "cross_package", "layer_bypass", "coupling_ceiling", "orphan_detection"}
     out: list[CustomPolicy] = []
     for i, p in enumerate(raw):
         if not isinstance(p, dict):
@@ -377,7 +388,7 @@ def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:
                 raise ArchConfigError(
                     f"{path}: policies.custom[{i}].{field_name} must be a non-empty string"
                 )
-        if name in builtins:
+        if name in BUILTIN_POLICIES:
             raise ArchConfigError(
                 f"{path}: custom policy name '{name}' collides with a built-in policy"
             )
@@ -413,7 +424,7 @@ def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:
     return out
 
 
-def _parse_suppressions(raw: list, path: Path) -> list[Suppression]:
+def _parse_suppressions(raw: list, path: Path, valid_policies: frozenset[str]) -> list[Suppression]:
     if not isinstance(raw, list):
         raise ArchConfigError(
             f"{path}: suppress must be an array of tables, got {type(raw).__name__}"
@@ -430,8 +441,21 @@ def _parse_suppressions(raw: list, path: Path) -> list[Suppression]:
                 raise ArchConfigError(
                     f"{path}: suppress[{i}].{field_name} must be a non-empty string"
                 )
+        policy = entry["policy"]
+        if policy not in valid_policies:
+            suggestions = difflib.get_close_matches(
+                policy, sorted(valid_policies), n=3, cutoff=0.6,
+            )
+            if suggestions:
+                hint = f"; did you mean {suggestions[0]!r}?"
+            else:
+                hint = f" (known policies: {', '.join(sorted(valid_policies))})"
+            raise ArchConfigError(
+                f"{path}: suppress[{i}].policy = {policy!r} does not match "
+                f"any known policy{hint}"
+            )
         out.append(Suppression(
-            policy=entry["policy"],
+            policy=policy,
             key=entry["key"],
             reason=entry["reason"],
         ))
