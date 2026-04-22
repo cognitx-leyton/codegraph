@@ -27,6 +27,8 @@ from codegraph.schema import (
     IMPORTS,
     IMPORTS_SYMBOL,
     ParseResult,
+    READS_ATOM,
+    WRITES_ATOM,
 )
 
 
@@ -365,6 +367,50 @@ def test_load_touched_files_filters_per_file_extras(captured_runs):
     env_names = {r["env"] for r in env_merges[0][1]}
     assert env_files == {"a.py"}
     assert env_names == {"DB_URL"}
+
+
+def test_per_file_extras_atom_stats_use_len_not_db_count(captured_runs):
+    """READS_ATOM / WRITES_ATOM stats must count the local batch, not DB-wide.
+
+    Regression test for #220: in incremental mode only touched files' atoms
+    are MERGEd, so stats must reflect the batch size, not a global count.
+    """
+    idx = Index()
+    for path, reads, writes in (
+        ("a.py", [("CompA", "countAtom")], [("CompA", "userAtom")]),
+        ("b.py", [("CompB", "themeAtom")], []),
+    ):
+        fn = FileNode(path=path, package="p", language="py", loc=10)
+        pr = ParseResult(file=fn)
+        pr.atom_reads = reads
+        pr.atom_writes = writes
+        idx.add(pr)
+
+    ldr = Neo4jLoader.__new__(Neo4jLoader)
+    ldr.database = "neo4j"
+
+    class FakeCtx:
+        def __enter__(self):
+            return MagicMock()
+        def __exit__(self, *a):
+            pass
+
+    ldr.driver = MagicMock()
+    ldr.driver.session.return_value = FakeCtx()
+
+    stats = ldr.load(idx, [], touched_files={"a.py"})
+
+    # Only a.py's atoms should be in the MERGE calls
+    atom_read_merges = [
+        (cy, rows) for cy, rows in captured_runs
+        if "READS_ATOM" in cy
+    ]
+    assert len(atom_read_merges) == 1
+    assert len(atom_read_merges[0][1]) == 1  # only CompA→countAtom
+
+    # Stats must equal the batch length (1), not a DB-wide count
+    assert stats.edges[READS_ATOM] == 1
+    assert stats.edges[WRITES_ATOM] == 1
 
 
 # ── Test group 4: _file_from_id ───────────────────────────────────────

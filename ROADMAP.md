@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-20 after commits `865271e` → `f937391` (fix(loader): skip per-file extras for untouched files in incremental mode — closes #97; 554 tests passing, v0.1.67).
+> **Last updated:** 2026-04-22 after commits `865271e` → `2083622` (fix(loader): use batch len() for READS_ATOM/WRITES_ATOM stats instead of DB-wide count — closes #220; 555 tests passing, v0.1.68).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-97`. Fixes incremental mode writing per-file extras (env reads, event handlers, event emissions) for all files instead of only touched files. Added `touched_files: set[str] | None = None` parameter to `_write_per_file_extras` in `loader.py` with a `continue` guard; passed through from `load()`. Closes issue #97. v0.1.67.
-- **Tests:** 554 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-220`. Fixes READS_ATOM / WRITES_ATOM edge stats using DB-wide `session.run("MATCH ... RETURN count(r)")` instead of `len()` of the current batch — causing incremental-mode stats to report the global DB total rather than edges created this run. Replaced both queries with `len(atom_reads)` / `len(atom_writes)`. Closes issue #220. v0.1.68.
+- **Tests:** 555 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,14 +21,30 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `21cb2c9`)
+## Shipped since the last roadmap update (commit `f937391`)
 
 ```
-f937391 fix(loader): skip per-file extras for untouched files in incremental mode
-9ff85c7 Merge pull request #219 from cognitx-leyton/archon/task-fix-issue-98
-de077d9 chore: bump version to 0.1.67
-23db317 docs(roadmap): update session handoff
+2083622 fix(loader): use batch len() for READS_ATOM/WRITES_ATOM stats instead of DB-wide count
+a97cf5f Merge pull request #221 from cognitx-leyton/archon/task-fix-issue-97
+1420d26 chore: bump version to 0.1.68
+650c32d docs(roadmap): update session handoff
 ```
+
+### Loader — fix READS_ATOM/WRITES_ATOM stats using DB-wide count (issue #220)
+
+- `2083622 fix(loader)` — Two files changed:
+
+  1. **`codegraph/codegraph/loader.py`** — Replaced two `session.run("MATCH ()-[r:READS_ATOM]->() RETURN count(r)")` / `WRITES_ATOM` equivalent DB-wide count queries in `_write_per_file_extras()` with `len(atom_reads)` / `len(atom_writes)`. All 25 other edge types in the function already used `len()` of the batch list; these two were anomalous holdovers that reported the global Neo4j total instead of edges created this run — causing inflated stats in incremental mode.
+
+  2. **`codegraph/tests/test_incremental.py`** — New `test_per_file_extras_atom_stats_use_len_not_db_count` test: sets up a two-file `ParseResult` (a.py has 1 atom_read + 1 atom_write; b.py has 1 atom_read + 0 atom_writes), loads with only `a.py` touched, asserts `stats.edges[READS_ATOM] == 1` and `stats.edges[WRITES_ATOM] == 1`. Uses the existing `captured_runs` fixture and `FakeCtx` pattern.
+
+  - **Tests**: 555 passed (1 new), 0 failures. Code review: 0 issues. Arch-check: 4/4 policies pass (1 skipped).
+
+- `a97cf5f` — PR #221 merged (`archon/task-fix-issue-97`). Version bumped to v0.1.68 (`1420d26`).
+
+---
+
+## Previously shipped (through commit `f937391`)
 
 ### Loader — skip per-file extras for untouched files in incremental mode (issue #97)
 
