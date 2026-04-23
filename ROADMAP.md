@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `8cffb56` (fix(arch_check): pass limit param only to sample query in _check_orphans — closes #90; 563 tests passing, v0.1.72).
+> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `2ab4cfb` (feat(py_parser): track module-level calls and resolve bare function calls — closes #88; 574 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-90`. `_check_orphans` in `arch_check.py` now passes `limit` only to the sample query that references `$limit`, removing the spurious `$limit` parameter from the count query. Pattern now consistent with all sibling policies. Closes issue #90. v0.1.72.
-- **Tests:** 563 passing (10 skipped, 1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-88`. Python parser now emits CALLS edges from function bodies (previously only methods) and module-level expression statements (including `if __name__ == "__main__"`, try/except/else/elif/finally blocks). Resolver Phase 4 falls back to `_resolve_call_target_func` for bare function calls with no receiver. Also closes #86/#83 (stale `CROSS_PACKAGE_PAIRS` docs replaced with correct TOML syntax). Closes issue #88. v0.1.72.
+- **Tests:** 574 passing (10 skipped, 1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,24 +24,52 @@
 ## Shipped since the last roadmap update (commit `4a0d1f7`)
 
 ```
-8cffb56  fix(arch_check): pass limit param only to sample query in _check_orphans
+2ab4cfb  feat(py_parser): track module-level calls and resolve bare function calls (#88)
+1d900d5  fix(arch_check): pass limit param only to sample query in _check_orphans (#226)
 3c9d5fa  Merge pull request #225 from cognitx-leyton/archon/task-fix-issue-93
 8843871  fix(arch_check): exact suppression counts via Cypher for built-in policies (#93)
 826bb89  chore: bump version to 0.1.72
 4a0d1f7  docs(roadmap): update session handoff
 ```
 
+### Python parser — CALLS edges from function bodies + module-level code (issue #88)
+
+- `2ab4cfb feat(py_parser)` — Six files changed:
+
+  1. **`codegraph/codegraph/py_parser.py`**:
+     - `_scan_body_for_calls` widened to accept any caller (`MethodNode | FunctionNode`) instead of only `MethodNode` — duck-typed on `.id`.
+     - `_handle_function` now calls `_scan_body_for_calls(fn, node)` after endpoint detection, mirroring the existing method-body pattern. Emits `CallEdge` with `func:<file>#<name>` caller IDs.
+     - `_walk_top_stmt` handles `expression_statement` at module scope — scans for call expressions and emits module-level `CallEdge` with `file:<path>` as the caller.
+     - Compound statement recursion in `_walk_top_stmt` extended to include `elif_clause` and `finally_clause` (previously only `else_clause`, `except_clause`, and `block` were handled — calls inside `elif`/`finally` were silently dropped).
+
+  2. **`codegraph/codegraph/resolver.py`**:
+     - Phase 4 (`_resolve_calls`) gains a fallback: when class-based resolution returns no match and `recv_kind == "name"` with no receiver, calls the new `_resolve_call_target_func` helper.
+     - `_resolve_call_target_func(call, idx)` — 3-step resolution: (1) same-file `FunctionNode` by name, (2) imported symbol in the same file, (3) unique global function name across the whole index. Returns the first match or `None`.
+
+  3. **`codegraph/tests/test_py_parser_calls.py`** — 9 new tests (replaced 1 negative test + 8 new): function body calls, attribute calls on functions, module-level bare/if-main/attribute/try-nested/elif-nested/finally-nested calls, `func:` prefix verification.
+
+  4. **`codegraph/tests/test_py_resolver.py`** — 3 new resolver integration tests: same-file func→func, cross-file func→func, module-level file→func CALLS edge.
+
+  5. **`codegraph/docs/arch-policies.md`**:
+     - Replaced stale Python code block referencing `CROSS_PACKAGE_PAIRS` constant in "What it detects" with the correct `.arch-policies.toml` TOML syntax (closes #86/#83).
+     - Replaced stale "Extending the rule set" section (which pointed to editing `arch_check.py`) with correct `.arch-policies.toml` instructions.
+     - Removed "Python module-level callers aren't tracked" false-positive caveat (feature now shipped).
+
+  6. **`codegraph/codegraph/templates/claude/commands/dead-code.md`** — Removed "Python module-level callers aren't tracked" false-positive caveat.
+
+  - **Tests**: 574 passed, 10 skipped, 0 failures. Code review: 1 issue found (missing `elif_clause`/`finally_clause` handlers) and fixed. Arch-check: 4/4 policies pass (1 skipped).
+
 ### arch-check — fix orphan limit param passed only to sample query (issue #90)
 
-- `8cffb56 fix(arch_check)` — One file changed:
+- `1d900d5 fix(arch_check)` — One file changed:
 
   1. **`codegraph/codegraph/arch_check.py`** — In `_check_orphans()`:
-     - **Line 463**: `params: dict = {"limit": sample_limit}` → `params: dict = {}` — removed `$limit` from the shared params dict used by both count and sample queries.
-     - **Line 470**: `s.run(sample_cypher, **params)` → `s.run(sample_cypher, limit=sample_limit, **params)` — pass `limit` only to the sample query that actually contains `LIMIT $limit`.
+     - Removed `$limit` from the shared params dict used by both count and sample queries.
+     - Pass `limit` only to the sample query that actually contains `LIMIT $limit`.
 
-     The `count_cypher` query has no `LIMIT` clause and was receiving a spurious `$limit` parameter. This aligns `_check_orphans` with the count/sample param-split pattern already used by `_check_import_cycles`, `_check_layer_bypass`, and `_check_coupling_ceiling`.
+     The `count_cypher` query has no `LIMIT` clause and was receiving a spurious `$limit` parameter. Aligns `_check_orphans` with the count/sample param-split pattern already used by sibling policies.
 
-  - **Tests**: 563 passed, 10 skipped, 0 failures. Code review: 0 issues. Arch-check: 4/4 policies pass (1 skipped).
+  - **Tests**: 563 passed at time of fix. PR #226.
 
 - `3c9d5fa` — PR #225 merged (`archon/task-fix-issue-93`). Version bumped to v0.1.72 (`826bb89`).
 

@@ -41,12 +41,12 @@ Each row in the sample lists one cycle as a path: `["a.py", "b.py", "a.py"]` mea
 
 ### What it detects
 
-Imports that cross a forbidden package boundary. The default set has one pair:
+Imports that cross a forbidden package boundary. The default pair (configured in `.arch-policies.toml`) is:
 
-```python
-CROSS_PACKAGE_PAIRS = [
-    ("twenty-front", "twenty-server"),
-]
+```toml
+[[policies.cross_package.pairs]]
+importer = "twenty-front"
+importee = "twenty-server"
 ```
 
 Any `:File` in `twenty-front` that imports from `:File` in `twenty-server` is a violation:
@@ -63,17 +63,19 @@ Frontend and backend have different runtimes, different bundlers, different secu
 
 ### Extending the rule set
 
-Edit `codegraph/codegraph/arch_check.py` and append tuples to `CROSS_PACKAGE_PAIRS`:
+Add pairs to `[policies.cross_package]` in `.arch-policies.toml`:
 
-```python
-CROSS_PACKAGE_PAIRS = [
-    ("twenty-front", "twenty-server"),
-    ("packages/docs", "packages/twenty-server"),   # docs must not import from app
-    ("packages/twenty-types", "packages/twenty-server"),  # shared types must be leaf
+```toml
+[policies.cross_package]
+enabled = true
+pairs = [
+  { importer = "twenty-front",      importee = "twenty-server" },
+  { importer = "packages/docs",     importee = "packages/twenty-server" },   # docs must not import from app
+  { importer = "packages/twenty-types", importee = "packages/twenty-server" },  # shared types must be leaf
 ]
 ```
 
-Every pair becomes an additional violation bucket. The report aggregates them so CI output stays compact.
+Every pair becomes an additional violation bucket. The report aggregates them so CI output stays compact. See [Configuring policies](#configuring-policies--arch-policiestoml) for the full schema.
 
 ### Interpreting a violation
 
@@ -218,7 +220,6 @@ Each row in the sample has three columns: `kind` (which category), `name` (the s
 ### False positives
 
 - **Decorator exclusion is broad**: any function with *any* decorator (`@staticmethod`, `@property`, `@dataclass`, etc.) is excluded, not just framework entry points. This is intentionally conservative — it may hide a genuinely dead decorated function, but it eliminates most false positives from framework dispatchers.
-- **Python module-level callers**: the Python parser (Stage 1) doesn't emit `CALLS` edges from top-level code. A function called only from `if __name__ == "__main__":` blocks will appear as orphan. Spot-check before deleting.
 - **Protocol / duck-typed implementations**: a class that satisfies a protocol without an explicit `EXTENDS` edge (no `class Foo(Protocol)` base) will show as `orphan_class`. Use `/graph` to double-check inheritance.
 - **CLI entry points in `pyproject.toml`**: functions registered as `[console_scripts]` or `[gui_scripts]` entry points aren't in the graph. They'll appear as orphans unless they also have a decorator.
 
