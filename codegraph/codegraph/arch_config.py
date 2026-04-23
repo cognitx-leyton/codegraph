@@ -37,9 +37,11 @@ TOML schema (all sections optional):
     max_imports = 20
 
     [policies.orphan_detection]
-    enabled     = true
-    path_prefix = ""
-    kinds       = ["function", "class", "atom", "endpoint"]
+    enabled          = true
+    path_prefix      = ""
+    kinds            = ["function", "class", "atom", "endpoint"]
+    exclude_prefixes = ["test_"]
+    exclude_names    = ["setup_module", "teardown_module"]  # + other xunit hooks
 
     [[policies.custom]]
     name          = "no_fat_files"
@@ -124,6 +126,15 @@ class OrphanDetectionConfig:
     path_prefix: str = ""
     kinds: list[str] = field(default_factory=lambda: [
         "function", "class", "atom", "endpoint",
+    ])
+    exclude_prefixes: list[str] = field(default_factory=lambda: [
+        "test_",
+    ])
+    exclude_names: list[str] = field(default_factory=lambda: [
+        "setup_module", "teardown_module",
+        "setup_function", "teardown_function",
+        "setup_class", "teardown_class",
+        "setup_method", "teardown_method",
     ])
 
 
@@ -361,7 +372,37 @@ def _parse_orphan_detection(raw: dict, path: Path) -> OrphanDetectionConfig:
                 f"{path}: policies.orphan_detection.kinds[{i}] = '{k}' is not valid "
                 f"(choose from: {', '.join(sorted(VALID_ORPHAN_KINDS))})"
             )
-    return OrphanDetectionConfig(enabled=enabled, path_prefix=path_prefix, kinds=list(kinds_raw))
+    # ── exclude_prefixes ──
+    exclude_prefixes_raw = raw.get("exclude_prefixes", defaults.exclude_prefixes)
+    if not isinstance(exclude_prefixes_raw, list):
+        raise ArchConfigError(
+            f"{path}: policies.orphan_detection.exclude_prefixes must be a list of strings"
+        )
+    for i, ep in enumerate(exclude_prefixes_raw):
+        if not isinstance(ep, str):
+            raise ArchConfigError(
+                f"{path}: policies.orphan_detection.exclude_prefixes[{i}] must be a string"
+            )
+
+    # ── exclude_names ──
+    exclude_names_raw = raw.get("exclude_names", defaults.exclude_names)
+    if not isinstance(exclude_names_raw, list):
+        raise ArchConfigError(
+            f"{path}: policies.orphan_detection.exclude_names must be a list of strings"
+        )
+    for i, en in enumerate(exclude_names_raw):
+        if not isinstance(en, str):
+            raise ArchConfigError(
+                f"{path}: policies.orphan_detection.exclude_names[{i}] must be a string"
+            )
+
+    return OrphanDetectionConfig(
+        enabled=enabled,
+        path_prefix=path_prefix,
+        kinds=list(kinds_raw),
+        exclude_prefixes=list(exclude_prefixes_raw),
+        exclude_names=list(exclude_names_raw),
+    )
 
 
 def _parse_custom(raw: list, path: Path) -> list[CustomPolicy]:

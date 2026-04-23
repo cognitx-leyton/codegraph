@@ -200,13 +200,27 @@ Dead code is a maintenance tax: it confuses readers, inflates bundle sizes, and 
 
 ```toml
 [policies.orphan_detection]
-enabled     = true                                       # false disables entirely
-path_prefix = ""                                         # scope to a sub-path (e.g. "src/core/")
-kinds       = ["function", "class", "atom", "endpoint"]  # which categories to check
+enabled          = true                                       # false disables entirely
+path_prefix      = ""                                         # scope to a sub-path (e.g. "src/core/")
+kinds            = ["function", "class", "atom", "endpoint"]  # which categories to check
+exclude_prefixes = ["test_"]                                  # function name prefixes to skip
+exclude_names    = ["setup_module", "teardown_module", "setup_function", "teardown_function",
+                    "setup_class", "teardown_class", "setup_method", "teardown_method"]
 ```
 
 - **`path_prefix`**: when non-empty, only symbols whose `file` starts with this prefix are scanned. Useful for focusing on a specific package in a monorepo.
 - **`kinds`**: choose which orphan categories to enforce. For example, a pure backend project with no React state can set `kinds = ["function", "class", "endpoint"]` to skip atom checks.
+- **`exclude_prefixes`**: function name prefixes excluded from orphan detection. Defaults to `["test_"]` (pytest conventions). Set to `[]` to disable prefix-based exclusion entirely.
+- **`exclude_names`**: exact function names excluded from orphan detection. Defaults to pytest/xunit setup/teardown hooks. Override for other frameworks, e.g. `exclude_names = ["setUp", "tearDown", "setUpClass", "tearDownClass"]` for unittest.
+
+#### unittest example
+
+```toml
+[policies.orphan_detection]
+exclude_prefixes = ["test_", "test"]       # pytest + unittest naming
+exclude_names    = ["setUp", "tearDown", "setUpClass", "tearDownClass",
+                    "setUpModule", "tearDownModule"]
+```
 
 ### Interpreting a violation
 
@@ -261,9 +275,11 @@ enabled     = true   # false disables this policy entirely
 max_imports = 20     # flag files importing more than this many distinct files
 
 [policies.orphan_detection]
-enabled     = true                                       # false disables entirely
-path_prefix = ""                                         # scope to a sub-path (e.g. "src/core/")
-kinds       = ["function", "class", "atom", "endpoint"]  # which categories to check
+enabled          = true                                       # false disables entirely
+path_prefix      = ""                                         # scope to a sub-path (e.g. "src/core/")
+kinds            = ["function", "class", "atom", "endpoint"]  # which categories to check
+exclude_prefixes = ["test_"]                                  # function name prefixes to skip
+exclude_names    = ["setup_module", "teardown_module"]         # exact names to skip (defaults include all xunit hooks)
 
 # ── Custom policies: user-authored Cypher ──────────────────────
 

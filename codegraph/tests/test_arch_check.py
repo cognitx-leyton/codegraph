@@ -361,18 +361,87 @@ def test_orphan_detection_respects_kinds_config():
 
 
 def test_orphan_detection_excludes_pytest_entry_points():
-    """test_* functions and xunit setup/teardown helpers must not be flagged."""
+    """Default config injects exclude_prefixes and exclude_names as Cypher params."""
     captured: list[str] = []
+    captured_params: list[dict] = []
 
-    def resolver(cypher: str, **_params):
+    def resolver(cypher: str, **params):
         captured.append(cypher)
+        captured_params.append(params)
         return [{"v": 0}] if "count(*) AS v" in cypher else []
 
     driver = _FakeDriver(resolver)
     _check_orphans(driver, OrphanDetectionConfig(kinds=["function"]))
     all_cypher = "\n".join(captured)
-    assert "test_" in all_cypher
-    assert "setup_module" in all_cypher
+    assert "$exclude_prefixes" in all_cypher
+    assert "$exclude_names" in all_cypher
+    assert any(p.get("exclude_prefixes") == ["test_"] for p in captured_params)
+    assert any("setup_module" in p.get("exclude_names", []) for p in captured_params)
+
+
+def test_orphan_detection_custom_exclude_prefixes_in_cypher():
+    """Custom exclude_prefixes are passed as Cypher params."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = OrphanDetectionConfig(kinds=["function"], exclude_prefixes=["check_"])
+    _check_orphans(driver, cfg)
+    assert any(p.get("exclude_prefixes") == ["check_"] for p in captured_params)
+
+
+def test_orphan_detection_custom_exclude_names_in_params():
+    """Custom exclude_names are passed as Cypher params."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = OrphanDetectionConfig(kinds=["function"], exclude_names=["setUp", "tearDown"])
+    _check_orphans(driver, cfg)
+    assert any(p.get("exclude_names") == ["setUp", "tearDown"] for p in captured_params)
+
+
+def test_orphan_detection_empty_exclude_lists_still_generate_clauses():
+    """Empty exclude lists produce valid Cypher (NONE(x IN [] WHERE ...) is valid)."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = OrphanDetectionConfig(
+        kinds=["function"], exclude_prefixes=[], exclude_names=[],
+    )
+    result = _check_orphans(driver, cfg)
+    assert result.passed is True
+    all_cypher = "\n".join(captured)
+    assert "$exclude_prefixes" in all_cypher
+    assert "$exclude_names" in all_cypher
+
+
+def test_orphan_detection_class_query_has_no_exclude_params():
+    """Class/atom/endpoint queries should NOT contain exclude_prefixes/names clauses."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = OrphanDetectionConfig(kinds=["class"])
+    _check_orphans(driver, cfg)
+    all_cypher = "\n".join(captured)
+    # The params are still passed (they're in the dict), but the Cypher
+    # for class queries should not reference them.
+    assert "orphan_class" in all_cypher
+    assert "NONE(pfx" not in all_cypher
 
 
 # ── custom policies ─────────────────────────────────────────────────

@@ -401,11 +401,8 @@ def _check_orphans(
             "WHERE NOT EXISTS { ()-[:CALLS]->(f) }\n"
             "  AND NOT EXISTS { ()-[:RENDERS]->(f) }\n"
             "  AND NOT EXISTS { (f)-[:DECORATED_BY]->(:Decorator) }\n"
-            "  AND NOT f.name STARTS WITH 'test_'\n"
-            "  AND NOT f.name IN ['setup_module', 'teardown_module',\n"
-            "                     'setup_function', 'teardown_function',\n"
-            "                     'setup_class', 'teardown_class',\n"
-            "                     'setup_method', 'teardown_method']\n"
+            "  AND NONE(pfx IN $exclude_prefixes WHERE f.name STARTS WITH pfx)\n"
+            "  AND NOT f.name IN $exclude_names\n"
             "{prefix_filter}"
             "RETURN 'orphan_function' AS kind, f.name AS name, f.file AS file"
         ),
@@ -460,7 +457,10 @@ def _check_orphans(
         f"LIMIT $limit"
     )
 
-    params: dict = {}
+    params: dict = {
+        "exclude_prefixes": cfg.exclude_prefixes,
+        "exclude_names": cfg.exclude_names,
+    }
     if cfg.path_prefix:
         params["prefix"] = cfg.path_prefix
     params.update(scope_extra)
@@ -620,11 +620,8 @@ def _count_unsuppressed_orphans(
             "WHERE NOT EXISTS { ()-[:CALLS]->(f) }\n"
             "  AND NOT EXISTS { ()-[:RENDERS]->(f) }\n"
             "  AND NOT EXISTS { (f)-[:DECORATED_BY]->(:Decorator) }\n"
-            "  AND NOT f.name STARTS WITH 'test_'\n"
-            "  AND NOT f.name IN ['setup_module', 'teardown_module',\n"
-            "                     'setup_function', 'teardown_function',\n"
-            "                     'setup_class', 'teardown_class',\n"
-            "                     'setup_method', 'teardown_method']\n"
+            "  AND NONE(pfx IN $exclude_prefixes WHERE f.name STARTS WITH pfx)\n"
+            "  AND NOT f.name IN $exclude_names\n"
             "{prefix_filter}"
             "  AND NOT ('orphan_function:' + f.name) IN $suppressed_keys\n"
             "RETURN 'orphan_function' AS kind, f.name AS name, f.file AS file"
@@ -675,7 +672,11 @@ def _count_unsuppressed_orphans(
     union = "\nUNION ALL\n".join(parts)
     cypher = f"CALL () {{\n{union}\n}}\nRETURN count(*) AS v"
 
-    params: dict = {"suppressed_keys": suppressed_keys}
+    params: dict = {
+        "suppressed_keys": suppressed_keys,
+        "exclude_prefixes": cfg.exclude_prefixes,
+        "exclude_names": cfg.exclude_names,
+    }
     if cfg.path_prefix:
         params["prefix"] = cfg.path_prefix
     params.update(scope_extra)

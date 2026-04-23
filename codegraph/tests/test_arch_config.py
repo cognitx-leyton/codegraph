@@ -52,6 +52,8 @@ def test_missing_file_returns_defaults(tmp_path: Path):
     assert cfg.orphan_detection.enabled is True
     assert cfg.orphan_detection.path_prefix == ""
     assert cfg.orphan_detection.kinds == ["function", "class", "atom", "endpoint"]
+    assert cfg.orphan_detection.exclude_prefixes == ["test_"]
+    assert cfg.orphan_detection.exclude_names[0] == "setup_module"
     assert cfg.custom == []
     assert cfg.schema_version == 1
     assert cfg.sample_limit == 10
@@ -387,6 +389,13 @@ def test_orphan_detection_defaults(tmp_path: Path):
     assert cfg.orphan_detection.enabled is True
     assert cfg.orphan_detection.path_prefix == ""
     assert cfg.orphan_detection.kinds == ["function", "class", "atom", "endpoint"]
+    assert cfg.orphan_detection.exclude_prefixes == ["test_"]
+    assert cfg.orphan_detection.exclude_names == [
+        "setup_module", "teardown_module",
+        "setup_function", "teardown_function",
+        "setup_class", "teardown_class",
+        "setup_method", "teardown_method",
+    ]
 
 
 def test_orphan_detection_disabled(tmp_path: Path):
@@ -431,6 +440,78 @@ def test_orphan_detection_empty_kinds_rejected(tmp_path: Path):
 kinds = []
 """)
     with pytest.raises(ArchConfigError, match="must not be empty"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_custom_exclude_prefixes(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_prefixes = ["test_", "check_"]
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.exclude_prefixes == ["test_", "check_"]
+
+
+def test_orphan_detection_custom_exclude_names(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_names = ["setUp", "tearDown"]
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.exclude_names == ["setUp", "tearDown"]
+
+
+def test_orphan_detection_empty_exclude_prefixes_allowed(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_prefixes = []
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.exclude_prefixes == []
+
+
+def test_orphan_detection_empty_exclude_names_allowed(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_names = []
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.exclude_names == []
+
+
+def test_orphan_detection_exclude_prefixes_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_prefixes = "test_"
+""")
+    with pytest.raises(ArchConfigError, match="exclude_prefixes must be a list"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_exclude_names_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_names = 42
+""")
+    with pytest.raises(ArchConfigError, match="exclude_names must be a list"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_exclude_prefixes_non_string_element_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_prefixes = [42]
+""")
+    with pytest.raises(ArchConfigError, match="exclude_prefixes\\[0\\] must be a string"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_exclude_names_non_string_element_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_names = [true]
+""")
+    with pytest.raises(ArchConfigError, match="exclude_names\\[0\\] must be a string"):
         load_arch_config(tmp_path)
 
 
