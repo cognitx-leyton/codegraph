@@ -15,6 +15,9 @@ from pathlib import Path
 
 import pytest
 
+_TEST_BOLT_PORT = 17687
+_TEST_HTTP_PORT = 17474
+
 
 def _docker_available() -> bool:
     return shutil.which("docker") is not None
@@ -86,7 +89,9 @@ def test_init_full_flow_with_docker(fake_monorepo: Path):
     """Full end-to-end: scaffold + Neo4j + first index. Tears down the container on exit."""
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "codegraph.cli", "init", "--yes"],
+            [sys.executable, "-m", "codegraph.cli", "init", "--yes",
+             "--bolt-port", str(_TEST_BOLT_PORT),
+             "--http-port", str(_TEST_HTTP_PORT)],
             cwd=fake_monorepo, capture_output=True, text=True, timeout=300,
         )
         assert result.returncode == 0, (

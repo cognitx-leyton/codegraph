@@ -136,6 +136,8 @@ def _prompt_config(
     detected: RepoShape,
     non_interactive: bool,
     console: Console,
+    bolt_port: int | None = None,
+    http_port: int | None = None,
 ) -> InitConfig:
     """Run the interactive Q&A. With ``--yes``, every answer defaults to True
     and every path comes from detection.
@@ -153,6 +155,8 @@ def _prompt_config(
             install_ci=True,
             setup_neo4j=True,
             container_name=f"cognitx-codegraph-{repo_name}-{path_hash}",
+            bolt_port=bolt_port if bolt_port is not None else _DEFAULT_BOLT_PORT,
+            http_port=http_port if http_port is not None else _DEFAULT_HTTP_PORT,
             default_package_prefix=default_packages[0] + "/" if default_packages[0] != "." else "",
         )
 
@@ -199,6 +203,8 @@ def _prompt_config(
         install_ci=install_ci,
         setup_neo4j=setup_neo4j,
         container_name=f"cognitx-codegraph-{repo_name}-{path_hash}",
+        bolt_port=bolt_port if bolt_port is not None else _DEFAULT_BOLT_PORT,
+        http_port=http_port if http_port is not None else _DEFAULT_HTTP_PORT,
         default_package_prefix=packages[0] + "/" if packages and packages[0] != "." else "",
     )
 
@@ -405,6 +411,8 @@ def run_init(
     skip_docker: bool,
     skip_index: bool,
     console: Console,
+    bolt_port: int | None = None,
+    http_port: int | None = None,
 ) -> int:
     """Main orchestrator. Returns the exit code the CLI should propagate."""
     cwd = Path.cwd()
@@ -416,7 +424,10 @@ def run_init(
 
     console.rule("[bold cyan]codegraph init")
     detected = _detect_repo_shape(root)
-    config = _prompt_config(detected, non_interactive=non_interactive, console=console)
+    config = _prompt_config(
+        detected, non_interactive=non_interactive, console=console,
+        bolt_port=bolt_port, http_port=http_port,
+    )
 
     _scaffold_files(root, config, force=force, console=console)
 
