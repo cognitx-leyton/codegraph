@@ -134,14 +134,16 @@ def run_arch_check(
     sample_limit = config.sample_limit
 
     driver = GraphDatabase.driver(uri, auth=(user, password))
+    stale: list[dict] = []
     try:
         policies = _run_all(driver, config, scope, sample_limit)
+        if config.suppressions:
+            policies, stale = _apply_suppressions(
+                policies, config.suppressions, sample_limit,
+                driver=driver, scope=scope, config=config,
+            )
     finally:
         driver.close()
-
-    stale: list[dict] = []
-    if config.suppressions:
-        policies, stale = _apply_suppressions(policies, config.suppressions, sample_limit)
 
     report = ArchReport(policies=policies, stale_suppressions=stale)
     if console is not None:
@@ -503,6 +505,235 @@ def _check_custom(
     )
 
 
+# ── Exact suppression counting ─────────────────────────────
+
+
+def _count_unsuppressed(
+    driver: Driver,
+    policy_name: str,
+    suppressed_keys: list[str],
+    scope: list[str] | None,
+    config: ArchConfig,
+) -> int | None:
+    """Return the exact unsuppressed violation count for a built-in policy.
+
+    Builds a filtered Cypher ``COUNT`` query that mirrors the original
+    ``_check_*`` count query but adds ``WHERE NOT`` clauses to exclude
+    violations whose keys appear in *suppressed_keys*.  Returns ``None``
+    for custom (user-authored) policies — those fall back to Python-side
+    sample counting in :func:`_apply_suppressions`.
+    """
+    if policy_name == "coupling_ceiling":
+        return _count_unsuppressed_coupling(driver, suppressed_keys, scope, config.coupling_ceiling)
+    if policy_name == "cross_package":
+        return _count_unsuppressed_cross_package(driver, suppressed_keys, scope, config.cross_package)
+    if policy_name == "layer_bypass":
+        return _count_unsuppressed_layer_bypass(driver, suppressed_keys, scope, config.layer_bypass)
+    if policy_name == "orphan_detection":
+        return _count_unsuppressed_orphans(driver, suppressed_keys, scope, config.orphan_detection)
+    if policy_name == "import_cycles":
+        return _count_unsuppressed_import_cycles(driver, suppressed_keys, scope, config.import_cycles)
+    # Custom / unknown policy — caller falls back to Python counting.
+    return None
+
+
+def _count_unsuppressed_coupling(
+    driver: Driver, suppressed_keys: list[str],
+    scope: list[str] | None, cfg: CouplingCeilingConfig,
+) -> int:
+    scope_frag, scope_params = _scope_filter("f", "path", scope)
+    where = f"WHERE {scope_frag}\n" if scope_frag else ""
+    cypher = (
+        "MATCH (f:File)-[:IMPORTS]->(g:File)\n"
+        f"{where}"
+        "WITH f, count(g) AS deps\n"
+        "WHERE deps > $threshold\n"
+        "  AND NOT f.path IN $suppressed_keys\n"
+        "RETURN count(f) AS v"
+    )
+    with driver.session() as s:
+        return int(s.run(cypher, threshold=cfg.max_imports,
+                         suppressed_keys=suppressed_keys, **scope_params).single()["v"] or 0)
+
+
+def _count_unsuppressed_cross_package(
+    driver: Driver, suppressed_keys: list[str],
+    scope: list[str] | None, cfg: CrossPackageConfig,
+) -> int:
+    scope_frag, scope_params = _scope_filter("a", "path", scope)
+    scope_clause = f" AND {scope_frag}" if scope_frag else ""
+    total = 0
+    with driver.session() as s:
+        for pair in cfg.pairs:
+            count = int(s.run(
+                "MATCH (a:File)-[:IMPORTS]->(b:File) "
+                "WHERE a.package = $a AND b.package = $b"
+                f"{scope_clause} "
+                "AND NOT (a.path + ' -> ' + b.path) IN $suppressed_keys "
+                "RETURN count(*) AS v",
+                a=pair.importer, b=pair.importee,
+                suppressed_keys=suppressed_keys, **scope_params,
+            ).single()["v"] or 0)
+            total += count
+    return total
+
+
+def _count_unsuppressed_layer_bypass(
+    driver: Driver, suppressed_keys: list[str],
+    scope: list[str] | None, cfg: LayerBypassConfig,
+) -> int:
+    labels_or = "|".join(cfg.controller_labels)
+    depth = f"*1..{cfg.call_depth}"
+    scope_frag, scope_params = _scope_filter("ctrl", "file", scope)
+    scope_clause = f"  AND {scope_frag}\n" if scope_frag else ""
+    cypher = (
+        f"MATCH (ctrl:{labels_or})-[:HAS_METHOD]->(m:Method)"
+        f"-[:CALLS{depth}]->(target:Method)\n"
+        f"MATCH (repo:Class)-[:HAS_METHOD]->(target)\n"
+        f"WHERE repo.name ENDS WITH $repo_suffix\n"
+        f"{scope_clause}"
+        f"  AND NOT EXISTS {{\n"
+        f"    MATCH (ctrl)-[:HAS_METHOD]->(:Method)-[:CALLS{depth}]->(:Method)"
+        f"<-[:HAS_METHOD]-(svc:Class)\n"
+        f"    WHERE svc.name ENDS WITH $svc_suffix\n"
+        f"  }}\n"
+        f"  AND NOT (ctrl.name + ' -> ' + repo.name + '.' + target.name) IN $suppressed_keys\n"
+        f"RETURN count(DISTINCT ctrl) AS v"
+    )
+    with driver.session() as s:
+        return int(s.run(
+            cypher,
+            repo_suffix=cfg.repository_suffix,
+            svc_suffix=cfg.service_suffix,
+            suppressed_keys=suppressed_keys,
+            **scope_params,
+        ).single()["v"] or 0)
+
+
+def _count_unsuppressed_orphans(
+    driver: Driver, suppressed_keys: list[str],
+    scope: list[str] | None, cfg: OrphanDetectionConfig,
+) -> int:
+    _kind_queries = {
+        "function": (
+            "MATCH (f:Function)\n"
+            "WHERE NOT EXISTS { ()-[:CALLS]->(f) }\n"
+            "  AND NOT EXISTS { ()-[:RENDERS]->(f) }\n"
+            "  AND NOT EXISTS { (f)-[:DECORATED_BY]->(:Decorator) }\n"
+            "  AND NOT f.name STARTS WITH 'test_'\n"
+            "  AND NOT f.name IN ['setup_module', 'teardown_module',\n"
+            "                     'setup_function', 'teardown_function',\n"
+            "                     'setup_class', 'teardown_class',\n"
+            "                     'setup_method', 'teardown_method']\n"
+            "{prefix_filter}"
+            "  AND NOT ('orphan_function:' + f.name) IN $suppressed_keys\n"
+            "RETURN 'orphan_function' AS kind, f.name AS name, f.file AS file"
+        ),
+        "class": (
+            "MATCH (c:Class)\n"
+            "WHERE NOT EXISTS { ()-[:EXTENDS]->(c) }\n"
+            "  AND NOT EXISTS { ()-[:INJECTS]->(c) }\n"
+            "  AND NOT EXISTS { ()-[:RESOLVES]->(c) }\n"
+            "  AND NOT EXISTS { (:File)-[:IMPORTS_SYMBOL {symbol: c.name}]->(:File) }\n"
+            "{prefix_filter}"
+            "  AND NOT ('orphan_class:' + c.name) IN $suppressed_keys\n"
+            "RETURN 'orphan_class' AS kind, c.name AS name, c.file AS file"
+        ),
+        "atom": (
+            "MATCH (a:Atom)\n"
+            "WHERE NOT EXISTS { ()-[:READS_ATOM]->(a) }\n"
+            "  AND NOT EXISTS { ()-[:WRITES_ATOM]->(a) }\n"
+            "{prefix_filter}"
+            "  AND NOT ('orphan_atom:' + a.name) IN $suppressed_keys\n"
+            "RETURN 'orphan_atom' AS kind, a.name AS name, a.file AS file"
+        ),
+        "endpoint": (
+            "MATCH (e:Endpoint)\n"
+            "WHERE NOT EXISTS { (:Method)-[:HANDLES]->(e) }\n"
+            "{prefix_filter}"
+            "  AND NOT ('orphan_endpoint:' + e.method + ' ' + e.path) IN $suppressed_keys\n"
+            "RETURN 'orphan_endpoint' AS kind, "
+            "(e.method + ' ' + e.path) AS name, e.file AS file"
+        ),
+    }
+    _kind_var = {"function": "f", "class": "c", "atom": "a", "endpoint": "e"}
+
+    scope_extra: dict = {}
+    parts: list[str] = []
+    for kind in cfg.kinds:
+        tmpl = _kind_queries[kind]
+        if cfg.path_prefix:
+            pf = f"  AND {_kind_var[kind]}.file STARTS WITH $prefix\n"
+        elif scope:
+            sf, sp = _scope_filter(_kind_var[kind], "file", scope)
+            pf = f"  AND {sf}\n"
+            scope_extra.update(sp)
+        else:
+            pf = ""
+        parts.append(tmpl.replace("{prefix_filter}", pf))
+
+    union = "\nUNION ALL\n".join(parts)
+    cypher = f"CALL () {{\n{union}\n}}\nRETURN count(*) AS v"
+
+    params: dict = {"suppressed_keys": suppressed_keys}
+    if cfg.path_prefix:
+        params["prefix"] = cfg.path_prefix
+    params.update(scope_extra)
+
+    with driver.session() as s:
+        return int(s.run(cypher, **params).single()["v"] or 0)
+
+
+def _count_unsuppressed_import_cycles(
+    driver: Driver, suppressed_keys: list[str],
+    scope: list[str] | None, cfg: ImportCyclesConfig,
+) -> int:
+    hops = f"*{cfg.min_hops}..{cfg.max_hops}"
+    scope_frag, scope_params = _scope_filter("a", "path", scope)
+    where = f"WHERE {scope_frag}\n" if scope_frag else ""
+
+    # Separate edge-pair keys ("A -> B") from full-cycle keys ("A -> B -> C -> A").
+    edge_pairs: list[list[str]] = []
+    full_cycle_keys: list[str] = []
+    for key in suppressed_keys:
+        parts = [p.strip() for p in key.split(" -> ")]
+        if len(parts) == 2:
+            edge_pairs.append(parts)
+        else:
+            full_cycle_keys.append(key)
+
+    # Build WHERE NOT clauses for each type.
+    filters: list[str] = []
+    params: dict = {**scope_params}
+    if edge_pairs:
+        filters.append(
+            "NONE(pair IN $edge_pairs WHERE\n"
+            "  ANY(i IN range(0, size(cycle)-2) WHERE cycle[i] = pair[0] AND cycle[i+1] = pair[1]))"
+        )
+        params["edge_pairs"] = edge_pairs
+    if full_cycle_keys:
+        filters.append(
+            "NOT reduce(s = '', x IN cycle | s + CASE WHEN s = '' THEN '' ELSE ' -> ' END + x)"
+            " IN $full_cycle_keys"
+        )
+        params["full_cycle_keys"] = full_cycle_keys
+
+    filter_clause = ""
+    if filters:
+        filter_clause = "  AND " + "\n  AND ".join(filters) + "\n"
+
+    cypher = (
+        f"MATCH path = (a:File)-[:IMPORTS{hops}]->(a)\n"
+        f"{where}"
+        f"WITH [n IN nodes(path) | n.path] AS cycle, path\n"
+        f"WHERE size(cycle) > 0\n"
+        f"{filter_clause}"
+        f"RETURN count(DISTINCT path) AS v"
+    )
+    with driver.session() as s:
+        return int(s.run(cypher, **params).single()["v"] or 0)
+
+
 # ── Suppression matching ────────────────────────────────────
 
 
@@ -557,8 +788,17 @@ def _apply_suppressions(
     policies: list[PolicyResult],
     suppressions: list[Suppression],
     sample_limit: int = 10,
+    *,
+    driver: Driver | None = None,
+    scope: list[str] | None = None,
+    config: ArchConfig | None = None,
 ) -> tuple[list[PolicyResult], list[dict]]:
     """Match suppressions against policy results.
+
+    When *driver* and *config* are provided the function queries Neo4j for
+    the exact unsuppressed count (built-in policies only).  Without a
+    driver it falls back to sample-based subtraction — the pre-#93
+    behaviour.
 
     Returns ``(updated_policies, stale_suppressions)``.
     """
@@ -599,22 +839,29 @@ def _apply_suppressions(
                 kept.append(row)
 
         suppressed_count = len(suppressed)
-        new_violation_count = max(0, p.violation_count - suppressed_count)
-        incomplete = (
-            p.violation_count > len(p.sample)
-            and suppressed_count > 0
-        )
-        # Invariant: incomplete=True implies passed=False.
-        # Suppressed rows are drawn from the sample, so
-        # suppressed_count <= len(sample) < violation_count (when
-        # incomplete is True), therefore new_violation_count > 0.
-        assert not (incomplete and new_violation_count == 0), (
-            f"invariant violated: incomplete_suppression_coverage={incomplete} "
-            f"but new_violation_count={new_violation_count}"
-        )
-        # Only mark as passing when the full violation count is accounted
-        # for.  When violation_count > len(sample) we can't be certain that
-        # unseen violations beyond the sample window are also suppressed.
+
+        # Try exact Cypher count when a driver is available.
+        exact_count: int | None = None
+        if driver is not None and config is not None:
+            exact_count = _count_unsuppressed(
+                driver, p.name,
+                [s.key for s in policy_supps],
+                scope, config,
+            )
+
+        if exact_count is not None:
+            # Authoritative count from Neo4j — no guessing.
+            new_violation_count = exact_count
+            incomplete = False
+        else:
+            # Fallback: sample-based subtraction (custom policies, or
+            # no driver).
+            new_violation_count = max(0, p.violation_count - suppressed_count)
+            incomplete = (
+                p.violation_count > len(p.sample)
+                and suppressed_count > 0
+            )
+
         updated.append(PolicyResult(
             name=p.name,
             passed=(new_violation_count == 0),

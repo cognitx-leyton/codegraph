@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-22 after commits `20fe092` → `b0e8739` (fix(arch-check): validate suppression policy names and suggest corrections — closes #94; 560 tests passing, v0.1.70).
+> **Last updated:** 2026-04-22 after commits `2460d3a` → `archon/task-fix-issue-93` (fix(arch-check): exact suppression counts via Cypher COUNT filter — closes #93; 573 tests passing, v0.1.71).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-94`. Validates suppression policy names at config-load time in `arch_config.py` — unknown names now raise a `ConfigError` with a "did you mean?" suggestion (via `difflib.get_close_matches`) or the full list of known policies. Closes issue #94. v0.1.70.
-- **Tests:** 560 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-93`. Suppression matching now uses Cypher COUNT filter for exact unsuppressed totals — `_count_unsuppressed()` dispatcher + 5 per-policy filtered count builders added to `arch_check.py`. `_apply_suppressions()` accepts `driver=`, `scope=`, `config=` kwargs and uses exact counts when a driver is available, with sample-based fallback otherwise. Closes issue #93. v0.1.71.
+- **Tests:** 573 passing (1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,13 +21,29 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `20fe092`)
+## Shipped since the last roadmap update (commit `2460d3a`)
 
 ```
-b0e8739 fix(arch-check): validate suppression policy names and suggest corrections
-0829e4d Merge pull request #223 from cognitx-leyton/archon/task-fix-issue-96
-b001c70 chore: bump version to 0.1.70
+archon/task-fix-issue-93  fix(arch-check): exact suppression counts via Cypher COUNT filter
+bbc12fd  Merge pull request #224 from cognitx-leyton/archon/task-fix-issue-94
+e1bdcd0  chore: bump version to 0.1.71
+2460d3a  docs(roadmap): update session handoff
+b0e8739  fix(arch-check): validate suppression policy names and suggest corrections
 ```
+
+### arch-check — exact suppression counts via Cypher COUNT filter (issue #93)
+
+- `archon/task-fix-issue-93` — Two files changed:
+
+  1. **`codegraph/codegraph/arch_check.py`** — Added `_count_unsuppressed()` dispatcher function + 5 per-policy filtered count builders (`_count_unsuppressed_coupling`, `_count_unsuppressed_cross_package`, `_count_unsuppressed_layer_bypass`, `_count_unsuppressed_orphans`, `_count_unsuppressed_import_cycles`). Each mirrors the original `_check_*` count query but adds `WHERE NOT ... IN $suppressed_keys` clauses so the Neo4j engine filters suppressed rows before counting. Returns `None` for custom policies (fallback). Refactored `_apply_suppressions()` with new optional `driver=`, `scope=`, `config=` kwargs; when driver is available, calls `_count_unsuppressed()` for exact remaining counts instead of relying on sample-subtraction heuristics. Moved `_apply_suppressions` call inside the `try` block in `run_arch_check()` so the driver is still open, passing `driver=`, `scope=`, `config=`.
+
+  2. **`codegraph/tests/test_arch_check.py`** — 15 new tests:
+     - 8 `_count_unsuppressed` unit tests (one per built-in policy + custom returns `None` + scope threading)
+     - 4 `_apply_suppressions` scenario tests (issue #93 exact count, partial count, custom policy fallback, driver path sets no `incomplete_suppression_coverage` flag)
+     - 1 integration test `test_run_arch_check_suppression_exact_count_integration` (50 violations, all suppressed, count=0)
+     - Updated 2 existing integration tests to handle filtered count queries in the fake driver
+
+  - **Tests**: 82/82 in `test_arch_check.py` (15 new), 573/573 full suite, 0 failures. Code review: 0 issues. Arch-check: 4/4 policies pass (1 skipped).
 
 ### arch-check — validate suppression policy names at config load time (issue #94)
 
@@ -41,9 +57,9 @@ b001c70 chore: bump version to 0.1.70
      - `test_suppression_custom_policy_name_accepted`: custom policy `"no_fat_files"` in both `[[policy]]` and `[[suppress]]` loads cleanly.
      - `test_suppression_typo_of_custom_policy_rejected`: `"no_fat_file"` (off-by-one) is caught as unknown with a suggestion.
 
-  - **Tests**: 57/57 in `test_arch_config.py` (4 new), 560/560 full suite, 0 failures. Code review: 0 issues. Arch-check: 4/4 policies pass (1 skipped).
+  - **Tests**: 57/57 in `test_arch_config.py` (4 new), 560/560 full suite (pre-#93), 0 failures. Code review: 0 issues. Arch-check: 4/4 policies pass (1 skipped).
 
-- `0829e4d` — PR #223 merged (`archon/task-fix-issue-96`). Version bumped to v0.1.70 (`b001c70`).
+- `bbc12fd` — PR #224 merged (`archon/task-fix-issue-94`). Version bumped to v0.1.71 (`e1bdcd0`).
 
 ---
 
