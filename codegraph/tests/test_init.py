@@ -25,6 +25,7 @@ from codegraph.init import (
     _find_git_root,
     _prompt_config,
     _render,
+    _sanitize_container_segment,
     _scaffold_files,
     _template_vars,
     _warn_orphaned_containers,
@@ -90,6 +91,34 @@ def test_detect_empty_repo(tmp_path: Path):
     assert shape.package_candidates == []
 
 
+# ── _sanitize_container_segment ────────────────────────────
+
+
+def test_sanitize_replaces_spaces_and_special_chars():
+    assert _sanitize_container_segment("my project") == "my-project"
+    assert _sanitize_container_segment("foo@bar!baz") == "foo-bar-baz"
+
+
+def test_sanitize_collapses_repeated_dashes():
+    assert _sanitize_container_segment("a - - b") == "a-b"
+
+
+def test_sanitize_strips_leading_trailing():
+    assert _sanitize_container_segment("-leading") == "leading"
+    assert _sanitize_container_segment("trailing-") == "trailing"
+    assert _sanitize_container_segment(".dotted.") == "dotted"
+
+
+def test_sanitize_preserves_valid_names():
+    assert _sanitize_container_segment("my-repo") == "my-repo"
+    assert _sanitize_container_segment("my_repo.v2") == "my_repo.v2"
+
+
+def test_sanitize_fallback_on_empty():
+    assert _sanitize_container_segment("---") == "repo"
+    assert _sanitize_container_segment("") == "repo"
+
+
 # ── _template_vars ──────────────────────────────────────────
 
 
@@ -148,6 +177,27 @@ def test_container_name_is_deterministic(tmp_path: Path):
     cfg1 = _prompt_config(shape, non_interactive=True, console=_silent_console())
     cfg2 = _prompt_config(shape, non_interactive=True, console=_silent_console())
     assert cfg1.container_name == cfg2.container_name
+
+
+def test_container_name_sanitizes_special_chars(tmp_path: Path):
+    """Directory with spaces/special chars produces a valid Docker name."""
+    spaced = tmp_path / "my project"
+    spaced.mkdir()
+    cfg = _prompt_config(
+        RepoShape(root=spaced), non_interactive=True, console=_silent_console(),
+    )
+    assert " " not in cfg.container_name
+    assert re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", cfg.container_name)
+
+
+def test_container_name_sanitizes_segment_value(tmp_path: Path):
+    """Sanitized segment is 'my-project', not 'my project'."""
+    spaced = tmp_path / "my project"
+    spaced.mkdir()
+    cfg = _prompt_config(
+        RepoShape(root=spaced), non_interactive=True, console=_silent_console(),
+    )
+    assert "my-project" in cfg.container_name
 
 
 # ── _warn_orphaned_containers ─────────────────────────────

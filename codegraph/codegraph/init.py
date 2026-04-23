@@ -23,6 +23,7 @@ Templates live in :mod:`codegraph.templates` and use ``string.Template``
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 import sys
 import time
@@ -44,6 +45,14 @@ _TEMPLATES_ROOT = _pkg_files("codegraph") / "templates"
 _DEFAULT_BOLT_PORT = 7687
 _DEFAULT_HTTP_PORT = 7474
 _NEO4J_READY_TIMEOUT_SEC = 90
+
+
+def _sanitize_container_segment(name: str) -> str:
+    """Replace chars invalid in Docker container names and collapse dashes."""
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
+    safe = re.sub(r"-{2,}", "-", safe)
+    safe = safe.strip("-.")
+    return safe or "repo"
 
 
 # ── Detection ────────────────────────────────────────────────
@@ -144,7 +153,7 @@ def _prompt_config(
     """
     default_packages = detected.package_candidates or ["."]
     default_pkg_str = ",".join(default_packages)
-    repo_name = detected.root.name
+    repo_name = _sanitize_container_segment(detected.root.name)
     path_hash = hashlib.sha1(str(detected.root.resolve()).encode()).hexdigest()[:8]
 
     if non_interactive:
@@ -333,7 +342,7 @@ def _warn_orphaned_containers(
     console: Console,
 ) -> None:
     """Detect pre-0.1.10 containers (no hash suffix) and print a warning."""
-    repo_name = root.name
+    repo_name = _sanitize_container_segment(root.name)
     old_prefix = f"cognitx-codegraph-{repo_name}"
     try:
         result = subprocess.run(
