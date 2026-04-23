@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `0913656` (fix(init): sanitize directory names with special chars in container names — closes #74; 602 tests passing, v0.1.72).
+> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `9483e33` (fix(mcp): move query_graph limit slice into _run_read to avoid wasted serialisation — closes #71; 604 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-74`. `codegraph init` now sanitizes directory names with special characters (spaces, dots, colons, etc.) before using them in Docker container names. Added `_sanitize_container_segment()` helper that replaces any char not in `[a-zA-Z0-9_.-]` with `-`, collapses consecutive dashes, strips leading/trailing `-` and `.`, and falls back to `"repo"` if the result is empty. Applied at both container-name construction sites: `_prompt_config` and `_warn_orphaned_containers`. Closes issue #74. v0.1.72.
-- **Tests:** 602 passing (10 skipped, 1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-71`. `_run_read()` in `mcp.py` now accepts a `limit: int | None = None` keyword-only parameter and slices records *before* calling `clean_row()`, so discarded rows are never serialised. `query_graph()` updated from `_run_read(cypher)[:limit]` to `_run_read(cypher, limit=limit)`. Closes issues #71 and #65. v0.1.72.
+- **Tests:** 604 passing (145 MCP tests, was 143), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,26 +21,36 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `88eeabb`)
+## Shipped since the last roadmap update (commit `b4d8a25`)
 
 ```
-0913656  fix(init): sanitize directory names with special chars in container names (#74)
-88eeabb  feat(init): warn when orphaned containers from old naming scheme are found (#233)
+9483e33  fix(mcp): move query_graph limit slice into _run_read to avoid wasted serialisation
+b4d8a25  fix(init): sanitize directory names with special chars in container names (#234)
 ```
+
+### mcp — move limit slice into _run_read to avoid wasted serialisation (issues #71 + #65)
+
+- `9483e33 fix(mcp)` — Two files changed:
+
+  1. **`codegraph/codegraph/mcp.py`** — Added `limit: int | None = None` keyword-only parameter (after `*`) to `_run_read()`. Records are now sliced (`records = records[:limit]` guarded by `if limit is not None`) *before* `clean_row()` is called in the comprehension, so discarded rows are never deserialised or serialised. Updated `query_graph()` from `_run_read(cypher)[:limit]` to `_run_read(cypher, limit=limit)`. All 14 existing `_run_read()` call sites use `**params` as keyword args — the `*` separator is fully backwards-compatible.
+
+  2. **`codegraph/tests/test_mcp.py`** — Strengthened `test_query_graph_respects_limit` to assert the *correct* first N rows are returned (not just the count). Added `test_run_read_limit_slices_before_clean` (verifies `clean_row` is called exactly `limit` times, not N-then-slice) and `test_run_read_no_limit_returns_all` (verifies `limit=None` default returns all rows).
+
+  - **Code review**: 0 issues. Tests: 604 passed (2 new + 1 strengthened), 10 skipped. Arch-check: 4/4 policies pass (1 skipped).
+
+---
+
+## Previously shipped (through commit `88eeabb`)
 
 ### init — sanitize directory names with special chars in container names (issue #74)
 
-- `0913656 fix(init)` — Two files changed:
+- `b4d8a25 fix(init)` — Two files changed:
 
   1. **`codegraph/codegraph/init.py`** — Added `import re`. Added `_sanitize_container_segment(name: str) -> str` helper that: replaces any character not in `[a-zA-Z0-9_.-]` with `-`; collapses consecutive `-` into one; strips leading/trailing `-` and `.`; falls back to `"repo"` if the result is empty. Applied at both container-name construction call sites — `_prompt_config` (segment before hash suffix) and `_warn_orphaned_containers` (old-scheme prefix comparison). Closes issue #74.
 
   2. **`codegraph/tests/test_init.py`** — Added `_sanitize_container_segment` to imports. 5 unit tests: spaces/special chars replaced with `-`, consecutive dashes collapsed, leading/trailing dashes/dots stripped, valid name passes through unchanged, empty-after-strip falls back to `"repo"`. 2 integration tests through `_prompt_config`: container name with a special-char dir is Docker-valid (`re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", ...)`), and the segment value matches `_sanitize_container_segment(root.name)`.
 
   - **Code review**: 0 issues. Tests: 602 passed (7 new), 10 skipped. Arch-check: 4/4 policies pass (1 skipped).
-
----
-
-## Previously shipped (through commit `88eeabb`)
 
 ### init — warn on orphaned containers from pre-0.1.10 naming scheme (issue #75)
 
