@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `0c56a81` (fix(py_parser): walk for/while loops in _walk_top_stmt for module-level call discovery — closes #227; 576 tests passing, v0.1.72).
+> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `c086f71` (feat(arch_config): add exclude_prefixes/exclude_names to orphan_detection policy — closes #87; 590 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-227`. Python parser's `_walk_top_stmt` now recurses into `for_statement` and `while_statement` nodes, so calls and imports inside module-level loops are captured. Two new tests added. Inline comment updated. Closes issue #227. v0.1.72.
-- **Tests:** 576 passing (10 skipped, 1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-87`. `OrphanDetectionConfig` now accepts `exclude_prefixes` and `exclude_names` so users on unittest, nose, or custom naming conventions can configure orphan exclusions. Hardcoded `'test_'`/`setup_module` literals in `arch_check.py` replaced with parameterised Cypher params. 12 new tests (+8 config, +4 Cypher). Docs updated with unittest example. Closes issue #87. v0.1.72.
+- **Tests:** 590 passing (10 skipped, 1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,7 +24,8 @@
 ## Shipped since the last roadmap update (commit `4a0d1f7`)
 
 ```
-0c56a81  fix(py_parser): walk for/while loops in _walk_top_stmt for module-level call discovery (#227)
+c086f71  feat(arch_config): add exclude_prefixes/exclude_names to orphan_detection policy (#87)
+34e4c96  fix(py_parser): walk for/while loops and match statements in _walk_top_stmt (#229)
 da606ba  feat(py_parser): track module-level calls and fix arch-policies docs (#228)
 1d900d5  fix(arch_check): pass limit param only to sample query in _check_orphans (#226)
 3c9d5fa  Merge pull request #225 from cognitx-leyton/archon/task-fix-issue-93
@@ -33,20 +34,33 @@ da606ba  feat(py_parser): track module-level calls and fix arch-policies docs (#
 4a0d1f7  docs(roadmap): update session handoff
 ```
 
-### Python parser — walk for/while loops in _walk_top_stmt (issue #227)
+### arch-check — configurable orphan exclusions in orphan_detection policy (issue #87)
 
-- `0c56a81 fix(py_parser)` — Two files changed:
+- `c086f71 feat(arch_config)` — Five files changed:
+
+  1. **`codegraph/codegraph/arch_config.py`** — Added `exclude_prefixes: list[str]` (default `["test_"]`) and `exclude_names: list[str]` (default `["setup_module", "teardown_module", "setUpModule", "tearDownModule"]`) to `OrphanDetectionConfig`. Extended `_parse_orphan_detection()` with validation for both new list[str] fields — wrong types raise `ConfigError`, non-string elements raise `ConfigError`, empty lists allowed (user explicitly opts out of all exclusions).
+
+  2. **`codegraph/codegraph/arch_check.py`** — Replaced hardcoded `'test_'` / `['setup_module', ...]` string literals in both `_check_orphans()` and `_count_unsuppressed_orphans()` with `$exclude_prefixes` / `$exclude_names` Cypher parameters threaded from `OrphanDetectionConfig`. Params now pass through `params` dict to `s.run()` in both count and sample queries.
+
+  3. **`codegraph/tests/test_arch_config.py`** — +8 new tests: custom values round-trip, empty lists allowed, wrong type (string instead of list) rejected, non-string elements rejected; updated defaults test.
+
+  4. **`codegraph/tests/test_arch_check.py`** — +4 new tests: custom prefixes/names appear in Cypher params, empty lists produce empty params, class query exclusion; updated existing pytest entry points test.
+
+  5. **`codegraph/docs/arch-policies.md`** — Documented new fields in both Configuration and full-schema sections; added unittest example (`exclude_prefixes = ["test_"]`, `exclude_names = ["setUp", "tearDown"]`). Fixed `...` placeholder that would inject a literal string as an exclude name.
+
+  - **Tests**: 590 passed (12 new: +8 config, +4 arch_check), 10 skipped, 0 failures. Code review: 1 issue found (`...` TOML placeholder) and fixed. Arch-check: 4/4 policies pass (1 skipped).
+
+### Python parser — walk for/while loops and match statements in _walk_top_stmt (issue #229)
+
+- `34e4c96 fix(py_parser)` — Two files changed:
 
   1. **`codegraph/codegraph/py_parser.py`**:
-     - Added `"for_statement"` and `"while_statement"` to the compound-statement tuple in `_walk_top_stmt` (line 229). The recursion pattern `for c in node.children: self._walk_top_stmt(c)` is safe — tree-sitter `for_statement`/`while_statement` children include a `block` that is already handled at line 234; loop variable/condition fall through harmlessly.
-     - Updated inline comment at line 230-231 from "catches try/except imports, conditional imports" to also mention "loop-wrapped calls, with-block calls" so the comment accurately describes all handled statement types.
-     - Updated `walk_module` docstring to list `for_statement` and `while_statement` among the compound statement types that are recursed.
+     - Added `"for_statement"`, `"while_statement"`, and `"match_statement"` to the compound-statement tuple in `_walk_top_stmt`. The recursion pattern `for c in node.children: self._walk_top_stmt(c)` is safe — loop variable/condition children fall through harmlessly; only `block` descendants produce actual call/import matches.
+     - Updated inline comment and `walk_module` docstring to reflect all handled statement types including loops and match.
 
-  2. **`codegraph/tests/test_py_parser_calls.py`** — 2 new tests:
-     - `test_module_level_nested_in_for`: asserts a call inside a `for` loop at module scope emits a `CallEdge`.
-     - `test_module_level_nested_in_while`: asserts a call inside a `while` loop at module scope emits a `CallEdge`.
+  2. **`codegraph/tests/test_py_parser_calls.py`** — 2+ new tests covering calls inside `for` loops, `while` loops, and `match` statements at module scope.
 
-  - **Tests**: 576 passed, 10 skipped, 0 failures. Code review: 1 issue found (stale comment) and fixed. Arch-check: 4/4 policies pass (1 skipped).
+  - **Tests**: 578 passed at time of fix, 10 skipped, 0 failures. Code review: 1 issue found (stale comment) and fixed. Arch-check: 4/4 policies pass (1 skipped).
 
 ### Python parser — CALLS edges from function bodies + module-level code (issue #88)
 
