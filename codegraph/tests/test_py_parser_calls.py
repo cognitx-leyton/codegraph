@@ -246,6 +246,22 @@ while not ready:
     assert ("name", "", "setup") in file_calls
 
 
+def test_module_level_nested_in_match(tmp_path):
+    """Module-level call inside match/case block (Python 3.10+)."""
+    src = """
+match command:
+    case 'quit':
+        shutdown()
+    case 'help':
+        show_help()
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "shutdown") in file_calls
+    assert ("name", "", "show_help") in file_calls
+
+
 def test_function_body_caller_id_is_func(tmp_path):
     """Caller ID for function-body calls uses func: prefix."""
     src = """

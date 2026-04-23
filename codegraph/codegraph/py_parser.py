@@ -187,8 +187,9 @@ class _PyWalker:
 
         Iterates children of the ``module`` root and recurses into
         ``try_statement`` / ``if_statement`` / ``for_statement`` /
-        ``while_statement`` bodies so try/except imports, conditional
-        imports, and loop-wrapped calls are captured. Class / function
+        ``while_statement`` / ``match_statement`` bodies so try/except
+        imports, conditional imports, loop-wrapped calls, and
+        match/case calls are captured. Class / function
         bodies are handled by dedicated helpers.
         """
         for child in root.children:
@@ -226,7 +227,7 @@ class _PyWalker:
             # `:External {specifier:"__future__"}`.
             spec = ImportSpec(specifier="__future__", symbols=self._from_import_symbols(node))
             self.result.imports.append(spec)
-        elif t in ("try_statement", "if_statement", "with_statement", "for_statement", "while_statement"):
+        elif t in ("try_statement", "if_statement", "with_statement", "for_statement", "while_statement", "match_statement"):
             # Walk into the body — catches try/except imports, conditional
             # imports, loop-wrapped calls, with-block calls, etc.
             for c in node.children:
@@ -237,7 +238,7 @@ class _PyWalker:
         elif t == "except_clause":
             for c in node.children:
                 self._walk_top_stmt(c)
-        elif t in ("else_clause", "elif_clause", "finally_clause"):
+        elif t in ("else_clause", "elif_clause", "finally_clause", "case_clause"):
             for c in node.children:
                 self._walk_top_stmt(c)
         elif t == "expression_statement":
