@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `5d62ff8` (feat(init): add --bolt-port and --http-port options to codegraph init — closes #80/#73; 590 tests passing, v0.1.72).
+> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `797fe52` (feat(init): warn when orphaned containers from old naming scheme are found — closes #75; 595 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-80`. `codegraph init` now accepts `--bolt-port` and `--http-port` CLI flags (and matching `bolt_port`/`http_port` kwargs in `run_init()`/`_prompt_config()`). The integration test `test_init_full_flow_with_docker` is now isolated to ports 17687/17474 so it never collides with a running Neo4j. Logic bug fixed: `bolt_port if bolt_port is not None else _DEFAULT_BOLT_PORT` instead of falsy `or`. Closes issues #80 and #73. v0.1.72.
-- **Tests:** 590 passing (10 skipped, 1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-75`. `codegraph init` now warns when orphaned containers from the pre-0.1.10 naming scheme (`cognitx-codegraph-{repo_name}` without hash suffix) are found running. The check runs `docker ps --filter name=<old_prefix>`, filters out the current container and any false-positive superstring matches from other repos, and prints a yellow `docker rm -f` instruction for each orphan. Gracefully handles no-docker and daemon-down scenarios. Closes issue #75. v0.1.72.
+- **Tests:** 595 passing (10 skipped, 1 excluded: MCP test requires `fastmcp` optional dep not installed in this env), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,7 +24,8 @@
 ## Shipped since the last roadmap update (commit `4a0d1f7`)
 
 ```
-5d62ff8  feat(init): add --bolt-port and --http-port options to codegraph init (#80/#73)
+797fe52  feat(init): warn when orphaned containers from old naming scheme are found (#75)
+3680df5  feat(init): add --bolt-port and --http-port options to codegraph init (#232)
 bb7023d  feat(arch_config): add exclude_prefixes/exclude_names to orphan_detection policy (#231)
 34e4c96  fix(py_parser): walk for/while loops and match statements in _walk_top_stmt (#229)
 da606ba  feat(py_parser): track module-level calls and fix arch-policies docs (#228)
@@ -34,6 +35,16 @@ da606ba  feat(py_parser): track module-level calls and fix arch-policies docs (#
 826bb89  chore: bump version to 0.1.72
 4a0d1f7  docs(roadmap): update session handoff
 ```
+
+### init — warn on orphaned containers from pre-0.1.10 naming scheme (issue #75)
+
+- `797fe52 feat(init)` — Two files changed:
+
+  1. **`codegraph/codegraph/init.py`** — Added `_warn_orphaned_containers(root, config, console)` that runs `docker ps --filter name=cognitx-codegraph-{repo_name}`, strips any container matching the current `config.container_name` (hash-suffixed), and also filters out false positives from other repos whose names are superstrings of the old prefix (e.g. `cognitx-codegraph-myrepo-v2`). Uses exact prefix match (`name == old_prefix`) rather than just `!= config.container_name`. Prints a yellow Rich warning with `docker rm -f` instructions per orphan. Silently ignores `FileNotFoundError` (no docker) and `CalledProcessError` (daemon down). Called from `run_init()` after `InitConfig` is built, gated on `config.setup_neo4j and not skip_docker`.
+
+  2. **`codegraph/tests/test_init.py`** — 5 new unit tests: orphan name triggers warning, current container not flagged, superstring from other repo not flagged (false-positive regression), `FileNotFoundError` handled silently, `CalledProcessError` handled silently.
+
+  - **Code review**: 1 issue found (`name != config.container_name` was too broad — substring match from `docker ps --filter` could flag other repos' containers) and fixed to exact `name == old_prefix`. Tests: 595 passed (10 skipped). Arch-check: 4/4 policies pass (1 skipped).
 
 ### init — custom Neo4j ports + fix silent integration-test failure (issues #80 / #73)
 
