@@ -236,9 +236,22 @@ class _PyWalker:
         elif t == "except_clause":
             for c in node.children:
                 self._walk_top_stmt(c)
-        elif t == "else_clause":
+        elif t in ("else_clause", "elif_clause", "finally_clause"):
             for c in node.children:
                 self._walk_top_stmt(c)
+        elif t == "expression_statement":
+            # Module-level calls: register_plugin(), main(), etc.
+            for c in _descend(node):
+                if c.type != "call":
+                    continue
+                fn = c.child_by_field_name("function")
+                if fn is None:
+                    continue
+                recv_kind, recv_name, target = self._classify_py_call(fn)
+                if target:
+                    self.result.method_calls.append(
+                        (self.result.file.id, recv_kind, recv_name or "", target)
+                    )
 
     # ── imports ───────────────────────────────────────────────────────
 
@@ -601,8 +614,11 @@ class _PyWalker:
 
     # ── call classification ──────────────────────────────────────────
 
-    def _scan_body_for_calls(self, body, method: MethodNode) -> None:
-        """Walk every ``call`` node under a method body and emit call-graph refs.
+    def _scan_body_for_calls(self, body, caller) -> None:
+        """Walk every ``call`` node under a method/function body and emit call-graph refs.
+
+        *caller* can be a :class:`MethodNode` or :class:`FunctionNode` — any
+        object with an ``.id`` attribute.
 
         Populates ``result.method_calls`` — the resolver then wires typed +
         name-based :data:`~.schema.CALLS` edges across files in Phase 4.
@@ -618,7 +634,7 @@ class _PyWalker:
             recv_kind, recv_name, target = self._classify_py_call(fn)
             if target:
                 self.result.method_calls.append(
-                    (method.id, recv_kind, recv_name or "", target)
+                    (caller.id, recv_kind, recv_name or "", target)
                 )
 
     def _classify_py_call(self, fn) -> tuple[str, Optional[str], Optional[str]]:
@@ -740,6 +756,11 @@ class _PyWalker:
             self.result.endpoints.append(ep)
             self.result.edges.append(Edge(kind=EXPOSES, src_id=self.result.file.id, dst_id=ep.id))
             self.result.edges.append(Edge(kind=HANDLES, src_id=fn.id, dst_id=ep.id))
+
+        # Function call graph — same as method scanning
+        body = self._child_by_field(node, "body")
+        if body is not None:
+            self._scan_body_for_calls(body, fn)
 
     # ── signature + docstring extraction ──────────────────────────────
 

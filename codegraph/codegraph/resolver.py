@@ -649,6 +649,18 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
                     rel, caller_mid, recv_kind, recv_name, index
                 )
             if target_class_id is None:
+                # Bare function call — try resolving as a function
+                if recv_kind == "name" and not recv_name:
+                    target_func = _resolve_call_target_func(
+                        rel, target_method, index, resolver
+                    )
+                    if target_func is not None:
+                        edges.append(Edge(
+                            kind=CALLS,
+                            src_id=caller_mid,
+                            dst_id=target_func.id,
+                            props={"confidence": "name"},
+                        ))
                 continue
             # Does target class have target_method?
             key = (target_class_id, target_method)
@@ -843,4 +855,33 @@ def _find_func(importer: str, symbol: str, index: Index, resolver: Resolver) -> 
     files = index.func_name_to_files.get(symbol, [])
     if len(files) == 1:
         return files[0]
+    return None
+
+
+def _resolve_call_target_func(
+    importer: str,
+    func_name: str,
+    index: Index,
+    resolver: Resolver,
+) -> Optional[FunctionNode]:
+    """Resolve a bare function call to a FunctionNode.
+
+    Checks: (1) same-file function, (2) imported symbol, (3) unique global name.
+    """
+    # Same file
+    key = (importer, func_name)
+    if key in index.func_by_name_in_file:
+        return index.func_by_name_in_file[key]
+    # Imported symbol
+    result = index.files_by_path.get(importer)
+    if result is not None:
+        for spec in result.imports:
+            if func_name in spec.symbols:
+                target_path = resolver.resolve(importer, spec.specifier)
+                if target_path and (target_path, func_name) in index.func_by_name_in_file:
+                    return index.func_by_name_in_file[(target_path, func_name)]
+    # Unique global name
+    files = index.func_name_to_files.get(func_name, [])
+    if len(files) == 1:
+        return index.func_by_name_in_file.get((files[0], func_name))
     return None
