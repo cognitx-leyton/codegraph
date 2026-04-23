@@ -460,14 +460,14 @@ def _check_orphans(
         f"LIMIT $limit"
     )
 
-    params: dict = {"limit": sample_limit}
+    params: dict = {}
     if cfg.path_prefix:
         params["prefix"] = cfg.path_prefix
     params.update(scope_extra)
 
     with driver.session() as s:
         total = int(s.run(count_cypher, **params).single()["v"] or 0)
-        sample = [dict(r) for r in s.run(sample_cypher, **params)]
+        sample = [dict(r) for r in s.run(sample_cypher, limit=sample_limit, **params)]
 
     kinds_str = ", ".join(cfg.kinds)
     return PolicyResult(
