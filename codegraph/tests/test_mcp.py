@@ -95,6 +95,22 @@ def test_query_graph_respects_limit(monkeypatch):
     _patch(monkeypatch, [[{"n": i} for i in range(50)]])
     out = mcp_mod.query_graph("MATCH (n) RETURN n", limit=5)
     assert len(out) == 5
+    assert out == [{"n": i} for i in range(5)]
+
+
+def test_run_read_limit_slices_before_clean(monkeypatch):
+    """_run_read(limit=N) returns exactly N rows from a larger result set."""
+    _patch(monkeypatch, [[{"x": i} for i in range(10)]])
+    out = mcp_mod._run_read("RETURN 1", limit=3)
+    assert out == [{"x": 0}, {"x": 1}, {"x": 2}]
+
+
+def test_run_read_no_limit_returns_all(monkeypatch):
+    """_run_read without limit returns every row."""
+    rows = [{"x": i} for i in range(10)]
+    _patch(monkeypatch, [rows])
+    out = mcp_mod._run_read("RETURN 1")
+    assert len(out) == 10
 
 
 def test_query_graph_rejects_bad_limit(monkeypatch):

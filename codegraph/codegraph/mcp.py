@@ -216,12 +216,17 @@ def _validate_max_depth(max_depth: int, *, max_val: int = 5) -> Optional[str]:
     return None
 
 
-def _run_read(cypher: str, **params: Any) -> list[dict]:
+def _run_read(cypher: str, *, limit: int | None = None, **params: Any) -> list[dict]:
     """Execute a read-only Cypher query and return JSON-clean rows.
 
     Catches every Neo4j exception we know how to recover from and returns
     ``[{"error": "..."}]`` so the calling agent can reason about the failure
     instead of having the MCP client surface a tool-call error.
+
+    Args:
+        cypher: Cypher query string.
+        limit: If given, slice records to this many *before* calling
+            ``clean_row``, avoiding wasted serialisation work.
     """
     try:
         with _read_session() as s:
@@ -232,6 +237,8 @@ def _run_read(cypher: str, **params: Any) -> list[dict]:
         return [{"error": f"Neo4j rejected query: {_err_msg(e)}"}]
     except ServiceUnavailable as e:
         return [{"error": f"Neo4j is unreachable: {e}"}]
+    if limit is not None:
+        records = records[:limit]
     return [clean_row(r) for r in records]
 
 
@@ -258,7 +265,7 @@ def query_graph(cypher: str, limit: int = 20) -> list[dict]:
     err = _validate_limit(limit)
     if err:
         return [{"error": err}]
-    return _run_read(cypher)[:limit]
+    return _run_read(cypher, limit=limit)
 
 
 @mcp.tool()
