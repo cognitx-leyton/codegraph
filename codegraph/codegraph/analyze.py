@@ -455,7 +455,8 @@ def persist_communities(
             "SET n.community_id = r.cid "
             "WITH n, r "
             "MATCH (eg:EdgeGroup {id: r.egid}) "
-            "MERGE (n)-[:MEMBER_OF]->(eg)",
+            "MERGE (n)-[rel:MEMBER_OF]->(eg) "
+            "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
             rows=member_rows,
         )
 

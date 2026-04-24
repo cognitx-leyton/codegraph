@@ -222,14 +222,14 @@ def test_ts_import_unaffected_by_python_dispatch(tmp_path: Path):
     no_pkg.set_path_index(PathIndex(fileset))
 
     # Python-aware resolver resolves the relative import.
-    assert py_aware.resolve("pkg/a.py", ".b") == "pkg/b.py"
+    assert py_aware.resolve("pkg/a.py", ".b").path == "pkg/b.py"
     # No-package resolver falls into the TS code path and either returns
     # None (no .ts/.tsx extension candidates match) or a non-Python file.
     # Critically: it does NOT try Python rules and does NOT crash.
     result = no_pkg.resolve("pkg/a.py", ".b")
     # The TS path would try pkg/a/../.b + TS extensions; none exist, so None.
     # (We just want no crash and no accidental Python resolution.)
-    assert result is None or not result.endswith(".py")
+    assert result is None or not result.path.endswith(".py")
 
 
 # ── Phase 4: method CALLS resolution (Python) ───────────────────────
@@ -256,7 +256,7 @@ def test_self_call_resolves_typed(tmp_path: Path):
     assert any(
         e.src_id == "method:class:pkg/a.py#A#run"
         and e.dst_id == "method:class:pkg/a.py#A#foo"
-        and e.props.get("confidence") == "typed"
+        and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed self.foo() edge; got {calls}"
 
@@ -282,7 +282,7 @@ def test_super_call_resolves_to_parent(tmp_path: Path):
     assert any(
         e.src_id == "method:class:pkg/child.py#A#run"
         and e.dst_id == "method:class:pkg/base.py#B#run"
-        and e.props.get("confidence") == "typed"
+        and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed super().run() edge; got {calls}"
 
@@ -306,7 +306,7 @@ def test_cls_call_resolves_like_self(tmp_path: Path):
     assert any(
         e.src_id == "method:class:pkg/a.py#A#make"
         and e.dst_id == "method:class:pkg/a.py#A#foo"
-        and e.props.get("confidence") == "typed"
+        and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed cls.foo() edge; got {calls}"
 

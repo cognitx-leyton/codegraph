@@ -118,7 +118,7 @@ RETURN DISTINCT callee.name, callee.file LIMIT 50
 
 ```cypher
 // Who calls a specific method (high confidence only)
-MATCH (caller:Method)-[r:CALLS {confidence:'typed'}]->(callee:Method {name:'signIn'})
+MATCH (caller:Method)-[r:CALLS {resolution:'typed'}]->(callee:Method {name:'signIn'})
 RETURN caller.name, caller.file
 ```
 

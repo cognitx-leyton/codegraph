@@ -53,7 +53,7 @@ def test_decorated_by_partitions_function_src_ids(captured_runs):
     func_runs = [
         (cypher, rows) for cypher, rows in captured_runs
         if "MATCH (a:Function {id: r.src})" in cypher
-        and "MERGE (a)-[:DECORATED_BY]->(d)" in cypher
+        and "MERGE (a)-[rel:DECORATED_BY]->(d)" in cypher
     ]
     assert len(func_runs) == 1, "expected exactly one Function DECORATED_BY MERGE"
     rows = func_runs[0][1]
@@ -218,3 +218,59 @@ def test_load_class_level_endpoint_exposes(monkeypatch, captured_runs):
     ]
     for _, rows in file_runs:
         assert len(rows) == 0
+
+
+# ── Confidence fields in Cypher rows ──────────────────────────────
+
+
+def test_calls_edges_carry_confidence(captured_runs):
+    """CALLS bucket rows must contain confidence and confidence_score."""
+    from codegraph.schema import CALLS as CALLS_KIND
+
+    edges = [
+        Edge(
+            kind=CALLS_KIND,
+            src_id="method:class:a.py#A#run",
+            dst_id="method:class:a.py#A#foo",
+            props={"resolution": "typed"},
+            confidence="EXTRACTED",
+            confidence_score=1.0,
+        ),
+    ]
+    loader._write_edges(session=None, edges=edges, stats=_Stats())
+
+    calls_runs = [
+        (cypher, rows) for cypher, rows in captured_runs
+        if "MERGE (a)-[rel:CALLS]->(b)" in cypher
+    ]
+    assert len(calls_runs) == 1
+    rows = calls_runs[0][1]
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == "EXTRACTED"
+    assert rows[0]["confidence_score"] == 1.0
+    assert rows[0]["resolution"] == "typed"
+
+
+def test_imports_edges_carry_confidence(captured_runs):
+    """IMPORTS bucket rows must contain confidence and confidence_score."""
+    edges = [
+        Edge(
+            kind="IMPORTS",
+            src_id="file:a.py",
+            dst_id="file:b.py",
+            props={"specifier": ".b", "type_only": False},
+            confidence="INFERRED",
+            confidence_score=0.8,
+        ),
+    ]
+    loader._write_edges(session=None, edges=edges, stats=_Stats())
+
+    import_runs = [
+        (cypher, rows) for cypher, rows in captured_runs
+        if "MERGE (a)-[rel:IMPORTS]->(b)" in cypher
+    ]
+    assert len(import_runs) == 1
+    rows = import_runs[0][1]
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == "INFERRED"
+    assert rows[0]["confidence_score"] == 0.8

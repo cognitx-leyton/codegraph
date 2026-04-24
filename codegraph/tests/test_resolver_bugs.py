@@ -66,7 +66,7 @@ class TestJsToTsRemap:
         _write(pkg, "tsconfig.json", '{}')
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("src/app.ts", "./foo.js")
-        assert hit == "src/foo.ts"
+        assert hit.path == "src/foo.ts"
 
     def test_relative_jsx_to_tsx(self, tmp_path: Path):
         """``import './Bar.jsx'`` resolves to ``Bar.tsx``."""
@@ -76,7 +76,7 @@ class TestJsToTsRemap:
         _write(pkg, "tsconfig.json", '{}')
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("src/index.ts", "./Bar.jsx")
-        assert hit == "src/Bar.tsx"
+        assert hit.path == "src/Bar.tsx"
 
     def test_relative_mjs_to_mts(self, tmp_path: Path):
         """``import './util.mjs'`` resolves to ``util.mts``."""
@@ -86,7 +86,7 @@ class TestJsToTsRemap:
         _write(pkg, "tsconfig.json", '{}')
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("src/app.ts", "./util.mjs")
-        assert hit == "src/util.mts"
+        assert hit.path == "src/util.mts"
 
     def test_real_js_file_wins(self, tmp_path: Path):
         """If ``foo.js`` actually exists (no .ts counterpart), resolve to it."""
@@ -96,7 +96,7 @@ class TestJsToTsRemap:
         _write(pkg, "tsconfig.json", '{}')
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("src/app.ts", "./legacy.js")
-        assert hit == "src/legacy.js"
+        assert hit.path == "src/legacy.js"
 
     def test_missing_both_returns_none(self, tmp_path: Path):
         """If neither ``.js`` nor ``.ts`` exists, return ``None``."""
@@ -119,7 +119,7 @@ class TestJsToTsRemap:
         }''')
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("myapp/src/index.ts", "@/utils/foo.js")
-        assert hit == "myapp/src/utils/foo.ts"
+        assert hit.path == "myapp/src/utils/foo.ts"
 
     def test_subdirectory_relative_js(self, tmp_path: Path):
         """``import '../routes/health.js'`` from a nested dir resolves correctly."""
@@ -129,7 +129,7 @@ class TestJsToTsRemap:
         _write(pkg, "tsconfig.json", '{}')
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("src/controllers/user.ts", "../routes/health.js")
-        assert hit == "src/routes/health.ts"
+        assert hit.path == "src/routes/health.ts"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -161,14 +161,14 @@ class TestCrossPackageAlias:
         front, back = self._setup_multi_pkg(tmp_path)
         r = _make_resolver(tmp_path, [front, back])
         hit = r.resolve("front/src/index.ts", "@/utils/helper")
-        assert hit == "front/src/utils/helper.ts"
+        assert hit.path == "front/src/utils/helper.ts"
 
     def test_back_resolves_to_own_package(self, tmp_path: Path):
         """Back-end ``@/utils/helper`` should resolve within ``back/src/``."""
         front, back = self._setup_multi_pkg(tmp_path)
         r = _make_resolver(tmp_path, [front, back])
         hit = r.resolve("back/src/index.ts", "@/utils/helper")
-        assert hit == "back/src/utils/helper.ts"
+        assert hit.path == "back/src/utils/helper.ts"
 
     def test_cross_package_fallthrough(self, tmp_path: Path):
         """If file only exists in the *other* package, fallthrough still works."""
@@ -186,7 +186,7 @@ class TestCrossPackageAlias:
         r = _make_resolver(tmp_path, [front, back])
         # front imports something only in back → still resolves via fallthrough
         hit = r.resolve("front/src/index.ts", "@/utils/special")
-        assert hit == "back/src/utils/special.ts"
+        assert hit.path == "back/src/utils/special.ts"
 
     def test_no_match_returns_none(self, tmp_path: Path):
         """Alias with no matching file in any package returns ``None``."""
@@ -205,7 +205,7 @@ class TestCrossPackageAlias:
         }''')
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@/utils/helper")
-        assert hit == "app/src/utils/helper.ts"
+        assert hit.path == "app/src/utils/helper.ts"
 
     def test_same_basename_different_roots(self, tmp_path: Path):
         """Two packages both named ``src`` under different parents don't collide."""
@@ -224,10 +224,10 @@ class TestCrossPackageAlias:
         r = _make_resolver(tmp_path, [fe_src, be_src])
         # Frontend file should resolve to frontend's helper
         fe_hit = r.resolve("apps/frontend/src/index.ts", "@/helper")
-        assert fe_hit == "apps/frontend/src/utils/helper.ts"
+        assert fe_hit.path == "apps/frontend/src/utils/helper.ts"
         # Backend file should resolve to backend's helper
         be_hit = r.resolve("apps/backend/src/index.ts", "@/helper")
-        assert be_hit == "apps/backend/src/utils/helper.ts"
+        assert be_hit.path == "apps/backend/src/utils/helper.ts"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -250,7 +250,7 @@ class TestWorkspaceResolution:
         _write(ui, "package.json", '{"name": "twenty-ui"}')
         r = _make_resolver(tmp_path, [front, ui])
         hit = r.resolve("front/src/App.tsx", "twenty-ui/display")
-        assert hit == "twenty-ui/src/display/index.ts"
+        assert hit.path == "twenty-ui/src/display/index.ts"
 
     def test_workspace_bare_import_resolves(self, tmp_path: Path):
         """``import X from 'twenty-ui'`` resolves to the package's src/index.ts."""
@@ -264,7 +264,7 @@ class TestWorkspaceResolution:
         _write(ui, "package.json", '{"name": "twenty-ui"}')
         r = _make_resolver(tmp_path, [front, ui])
         hit = r.resolve("front/src/App.tsx", "twenty-ui")
-        assert hit == "twenty-ui/src/index.ts"
+        assert hit.path == "twenty-ui/src/index.ts"
 
     def test_workspace_nested_subpath(self, tmp_path: Path):
         """``import { Y } from 'twenty-shared/utils'`` resolves deeper sub-paths."""
@@ -278,7 +278,7 @@ class TestWorkspaceResolution:
         _write(shared, "package.json", '{"name": "twenty-shared"}')
         r = _make_resolver(tmp_path, [front, shared])
         hit = r.resolve("front/src/App.tsx", "twenty-shared/utils")
-        assert hit == "twenty-shared/src/utils/index.ts"
+        assert hit.path == "twenty-shared/src/utils/index.ts"
 
     def test_workspace_no_src_dir_fallback(self, tmp_path: Path):
         """When no ``src/`` directory exists, resolve under the package root."""
@@ -293,7 +293,7 @@ class TestWorkspaceResolution:
         _write(lib, "package.json", '{"name": "mylib"}')
         r = _make_resolver(tmp_path, [front, lib])
         hit = r.resolve("front/src/App.tsx", "mylib/utils")
-        assert hit == "mylib/utils/index.ts"
+        assert hit.path == "mylib/utils/index.ts"
 
     def test_workspace_unknown_package_returns_none(self, tmp_path: Path):
         """Unknown package names fall through to None (external)."""
@@ -321,10 +321,10 @@ class TestWorkspaceResolution:
         r = _make_resolver(tmp_path, [front, ui])
         # @/display resolves via alias, NOT workspace
         alias_hit = r.resolve("front/src/App.tsx", "@/display")
-        assert alias_hit == "front/src/modules/display/index.ts"
+        assert alias_hit.path == "front/src/modules/display/index.ts"
         # twenty-ui/display resolves via workspace
         ws_hit = r.resolve("front/src/App.tsx", "twenty-ui/display")
-        assert ws_hit == "twenty-ui/src/display/index.ts"
+        assert ws_hit.path == "twenty-ui/src/display/index.ts"
 
     def test_workspace_with_js_remap(self, tmp_path: Path):
         """JS→TS remap works inside workspace sub-paths."""
@@ -338,7 +338,7 @@ class TestWorkspaceResolution:
         _write(ui, "package.json", '{"name": "twenty-ui"}')
         r = _make_resolver(tmp_path, [front, ui])
         hit = r.resolve("front/src/App.tsx", "twenty-ui/display/Icon.js")
-        assert hit == "twenty-ui/src/display/Icon.ts"
+        assert hit.path == "twenty-ui/src/display/Icon.ts"
 
     def test_workspace_scoped_package(self, tmp_path: Path):
         """``@scope/name/sub`` resolves correctly for scoped npm names."""
@@ -352,7 +352,7 @@ class TestWorkspaceResolution:
         _write(shared, "package.json", '{"name": "@twenty/shared"}')
         r = _make_resolver(tmp_path, [front, shared])
         hit = r.resolve("front/src/App.tsx", "@twenty/shared/utils")
-        assert hit == "shared/src/utils/index.ts"
+        assert hit.path == "shared/src/utils/index.ts"
 
     def test_workspace_scoped_bare_import(self, tmp_path: Path):
         """``@scope/name`` without sub-path resolves to the package root."""
@@ -366,7 +366,7 @@ class TestWorkspaceResolution:
         _write(shared, "package.json", '{"name": "@twenty/shared"}')
         r = _make_resolver(tmp_path, [front, shared])
         hit = r.resolve("front/src/App.tsx", "@twenty/shared")
-        assert hit == "shared/src/index.ts"
+        assert hit.path == "shared/src/index.ts"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -388,7 +388,7 @@ class TestTsconfigExtends:
         _write(pkg, "shared/utils.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@shared/utils")
-        assert hit == "app/shared/utils.ts"
+        assert hit.path == "app/shared/utils.ts"
 
     def test_extends_child_overrides_parent(self, tmp_path: Path):
         """Both parent and child define ``@/*``; child wins."""
@@ -405,7 +405,7 @@ class TestTsconfigExtends:
         _write(pkg, "parent-src/utils.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@/utils")
-        assert hit == "app/child-src/utils.ts"
+        assert hit.path == "app/child-src/utils.ts"
 
     def test_extends_chain_three_levels(self, tmp_path: Path):
         """Grandparent → parent → child; paths merge correctly."""
@@ -426,9 +426,9 @@ class TestTsconfigExtends:
         _write(pkg, "parent/b.ts")
         _write(pkg, "child/c.ts")
         r = _make_resolver(tmp_path, [pkg])
-        assert r.resolve("app/src/index.ts", "@gp/a") == "app/gp/a.ts"
-        assert r.resolve("app/src/index.ts", "@parent/b") == "app/parent/b.ts"
-        assert r.resolve("app/src/index.ts", "@child/c") == "app/child/c.ts"
+        assert r.resolve("app/src/index.ts", "@gp/a").path == "app/gp/a.ts"
+        assert r.resolve("app/src/index.ts", "@parent/b").path == "app/parent/b.ts"
+        assert r.resolve("app/src/index.ts", "@child/c").path == "app/child/c.ts"
 
     def test_extends_missing_parent_graceful(self, tmp_path: Path):
         """Child extends nonexistent file → no crash, child paths still work."""
@@ -441,7 +441,7 @@ class TestTsconfigExtends:
         _write(pkg, "src/utils.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@/utils")
-        assert hit == "app/src/utils.ts"
+        assert hit.path == "app/src/utils.ts"
 
     def test_extends_circular_reference_safe(self, tmp_path: Path):
         """A extends B extends A → no infinite loop."""
@@ -459,8 +459,8 @@ class TestTsconfigExtends:
         _write(pkg, "b/y.ts")
         r = _make_resolver(tmp_path, [pkg])
         # Both aliases should work despite the circular extends
-        assert r.resolve("app/src/index.ts", "@a/x") == "app/a/x.ts"
-        assert r.resolve("app/src/index.ts", "@b/y") == "app/b/y.ts"
+        assert r.resolve("app/src/index.ts", "@a/x").path == "app/a/x.ts"
+        assert r.resolve("app/src/index.ts", "@b/y").path == "app/b/y.ts"
 
     def test_extends_array(self, tmp_path: Path):
         """TypeScript 5.0+ supports ``"extends": [...]`` — all parents merge."""
@@ -480,9 +480,9 @@ class TestTsconfigExtends:
         _write(pkg, "extra/b.ts")
         _write(pkg, "child/c.ts")
         r = _make_resolver(tmp_path, [pkg])
-        assert r.resolve("app/src/index.ts", "@base/a") == "app/base/a.ts"
-        assert r.resolve("app/src/index.ts", "@extra/b") == "app/extra/b.ts"
-        assert r.resolve("app/src/index.ts", "@child/c") == "app/child/c.ts"
+        assert r.resolve("app/src/index.ts", "@base/a").path == "app/base/a.ts"
+        assert r.resolve("app/src/index.ts", "@extra/b").path == "app/extra/b.ts"
+        assert r.resolve("app/src/index.ts", "@child/c").path == "app/child/c.ts"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -506,7 +506,7 @@ class TestNpmTsconfigPresets:
         _write(pkg, "lib/utils.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@lib/utils")
-        assert hit == "app/lib/utils.ts"
+        assert hit.path == "app/lib/utils.ts"
 
     def test_unscoped_npm_preset(self, tmp_path: Path):
         """``"extends": "tsconfig-preset"`` resolves from node_modules."""
@@ -521,7 +521,7 @@ class TestNpmTsconfigPresets:
         _write(pkg, "preset/foo.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@preset/foo")
-        assert hit == "app/preset/foo.ts"
+        assert hit.path == "app/preset/foo.ts"
 
     def test_missing_preset_graceful(self, tmp_path: Path):
         """Missing npm preset → no crash, child paths still work."""
@@ -534,7 +534,7 @@ class TestNpmTsconfigPresets:
         _write(pkg, "src/utils.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@/utils")
-        assert hit == "app/src/utils.ts"
+        assert hit.path == "app/src/utils.ts"
 
     def test_npm_preset_child_overrides(self, tmp_path: Path):
         """Child paths override npm preset paths for the same alias key."""
@@ -553,7 +553,7 @@ class TestNpmTsconfigPresets:
         _write(pkg, "from-preset/utils.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@/utils")
-        assert hit == "app/from-child/utils.ts"
+        assert hit.path == "app/from-child/utils.ts"
 
     def test_npm_preset_nested_node_modules(self, tmp_path: Path):
         """node_modules in a parent directory is found by walking up."""
@@ -569,7 +569,7 @@ class TestNpmTsconfigPresets:
         _write(pkg, "upper/a.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@upper/a")
-        assert hit == "app/upper/a.ts"
+        assert hit.path == "app/upper/a.ts"
 
     def test_npm_preset_chained_extends(self, tmp_path: Path):
         """npm preset itself uses relative extends → both levels merge."""
@@ -588,8 +588,8 @@ class TestNpmTsconfigPresets:
         _write(pkg, "strict/a.ts")
         _write(pkg, "base/b.ts")
         r = _make_resolver(tmp_path, [pkg])
-        assert r.resolve("app/src/index.ts", "@strict/a") == "app/strict/a.ts"
-        assert r.resolve("app/src/index.ts", "@base/b") == "app/base/b.ts"
+        assert r.resolve("app/src/index.ts", "@strict/a").path == "app/strict/a.ts"
+        assert r.resolve("app/src/index.ts", "@base/b").path == "app/base/b.ts"
 
     def test_relative_extends_unchanged(self, tmp_path: Path):
         """Regression guard: relative extends still works after the npm branch."""
@@ -602,4 +602,4 @@ class TestNpmTsconfigPresets:
         _write(pkg, "shared/utils.ts")
         r = _make_resolver(tmp_path, [pkg])
         hit = r.resolve("app/src/index.ts", "@shared/utils")
-        assert hit == "app/shared/utils.ts"
+        assert hit.path == "app/shared/utils.ts"

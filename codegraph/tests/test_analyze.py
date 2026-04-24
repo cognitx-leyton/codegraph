@@ -270,7 +270,7 @@ def test_persist_communities_calls_neo4j():
     assert "UNWIND" in all_cypher
     assert "SET n.community_id" in all_cypher
     assert "MERGE (eg:EdgeGroup" in all_cypher
-    assert "MERGE (n)-[:MEMBER_OF]" in all_cypher
+    assert "MERGE (n)-[rel:MEMBER_OF]" in all_cypher
 
 
 # ── _label_community tests ──────────────────────────────────────────

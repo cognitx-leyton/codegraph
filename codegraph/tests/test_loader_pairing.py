@@ -43,7 +43,7 @@ def captured_runs(monkeypatch):
 def _tests_rows(captured_runs):
     """Extract the rows passed to the TESTS (file→file) MERGE."""
     for cypher, rows in captured_runs:
-        if "MERGE (t)-[:TESTS]->(p)" in cypher:
+        if "MERGE (t)-[rel:TESTS]->(p)" in cypher:
             return rows
     return []
 
