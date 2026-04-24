@@ -114,14 +114,14 @@ In `~/.claude.json` (or your Claude Desktop config):
 }
 ```
 
-Restart Claude Code. Five tools become available:
+Restart Claude Code. 16 tools become available:
 
 | Tool | Purpose |
 | --- | --- |
 | `query_graph(cypher, limit)` | Read-only Cypher escape hatch. Writes are rejected at the session level, so an LLM-generated `DROP`/`DELETE` can't mutate the graph. |
 | `describe_schema()` | Labels, relationship types, and per-label node counts — cheap way for an agent to learn what's in the graph at session start. |
 | `list_packages()` | Every indexed monorepo package with its detected framework, version, TypeScript flag, package manager, and detection confidence. |
-| `callers_of_class(class_name, max_depth)` | Blast-radius traversal over `INJECTS` / `EXTENDS` / `IMPLEMENTS`. The canonical "what breaks if I rename X" query. |
+| `callers_of_class(class_name, file, max_depth, limit)` | Blast-radius traversal over `INJECTS` / `EXTENDS` / `IMPLEMENTS`. The canonical "what breaks if I rename X" query. |
 | `endpoints_for_controller(controller_name)` | HTTP routes exposed by a NestJS controller class (method + path + handler). |
 | `files_in_package(name, limit)` | List files belonging to a `:Package` by name. |
 | `hook_usage(hook_name, limit)` | Which components / functions use a given React hook. |
@@ -129,6 +129,11 @@ Restart Claude Code. Five tools become available:
 | `most_injected_services(limit)` | Rank `@Injectable` classes by number of unique callers — the classic "DI hub detection" query. |
 | `find_class(name_pattern, limit)` | Case-sensitive substring search over class names, backed by the `class_name` index. |
 | `find_function(name_pattern, limit)` | Case-sensitive substring search over function and method names, backed by the `func_name` and `method_name` indexes. |
+| `describe_function(name, file, limit)` | Signature details (docstring, params, return type, decorators) for a function or method — answer "what does X do" in one call. |
+| `calls_from(name, file, max_depth, limit)` | What a function/method calls, optionally transitive up to 5 hops via `:CALLS` edges. |
+| `callers_of(name, file, max_depth, limit)` | Who calls a function/method, optionally transitive up to 5 hops (reverse `:CALLS`). |
+| `reindex_file(path, package)` | Re-index a single file (delete old subgraph, parse, reload). Requires `--allow-write`. |
+| `wipe_graph(confirm)` | Delete every node and relationship from the graph. Requires `--allow-write`. |
 
 All 16 tools share a single long-lived Neo4j driver and open sessions in `READ_ACCESS` mode. Configuration is env-var only (the same `CODEGRAPH_NEO4J_*` vars the CLI uses). The server is stdio-only — no network exposure.
 
