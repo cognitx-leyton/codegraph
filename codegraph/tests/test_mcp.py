@@ -234,7 +234,7 @@ def test_callers_of_class_default_depth(monkeypatch):
     mcp_mod.callers_of_class("AuthService")
     cypher, params = driver.session_obj.calls[0]
     assert "*1..1" in cypher
-    assert params == {"class_name": "AuthService"}
+    assert params == {"class_name": "AuthService", "file": None}
 
 
 def test_callers_of_class_custom_depth(monkeypatch):
@@ -249,6 +249,19 @@ def test_callers_of_class_rejects_bad_depth(monkeypatch, bad):
     _patch(monkeypatch, [[]])
     out = mcp_mod.callers_of_class("AuthService", max_depth=bad)
     assert out == [{"error": "max_depth must be an integer in 1..5"}]
+
+
+def test_callers_of_class_with_file_filter(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.callers_of_class("AuthService", file="src/auth.service.ts")
+    _, params = driver.session_obj.calls[0]
+    assert params["file"] == "src/auth.service.ts"
+
+
+def test_callers_of_class_rejects_bad_limit(monkeypatch):
+    _patch(monkeypatch, [[]])
+    out = mcp_mod.callers_of_class("AuthService", limit=0)
+    assert out == [{"error": "limit must be an integer in 1..1000"}]
 
 
 # ── calls_from ─────────────────────────────────────────────────────

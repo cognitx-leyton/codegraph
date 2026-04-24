@@ -324,7 +324,12 @@ def list_packages() -> list[dict]:
 
 
 @mcp.tool()
-def callers_of_class(class_name: str, max_depth: int = 1) -> list[dict]:
+def callers_of_class(
+    class_name: str,
+    file: Optional[str] = None,
+    max_depth: int = 1,
+    limit: int = 50,
+) -> list[dict]:
     """Blast-radius traversal: who reaches the given class transitively?
 
     Walks ``INJECTS`` / ``EXTENDS`` / ``IMPLEMENTS`` edges in reverse from the
@@ -333,20 +338,26 @@ def callers_of_class(class_name: str, max_depth: int = 1) -> list[dict]:
 
     Args:
         class_name: Exact ``:Class.name`` to query (e.g. ``"AuthService"``).
+        file: Optional exact file path to narrow the target class.
         max_depth: Max hops to traverse (1..5, default 1).
+        limit: Max rows to return. Integer in 1..1000, default 50.
     """
     err = _validate_max_depth(max_depth)
     if err:
         return [{"error": err}]
+    err = _validate_limit(limit)
+    if err:
+        return [{"error": err}]
     cypher = (
-        f"MATCH (caller:Class)-[:INJECTS|EXTENDS|IMPLEMENTS*1..{max_depth}]->"
-        "(target:Class {name: $class_name}) "
+        "MATCH (target:Class {name: $class_name}) "
+        "WHERE $file IS NULL OR target.file = $file "
+        f"MATCH (caller:Class)-[:INJECTS|EXTENDS|IMPLEMENTS*1..{max_depth}]->(target) "
         "RETURN DISTINCT caller.name AS name, caller.file AS file, "
         "       caller.is_injectable AS is_injectable, "
         "       caller.is_controller AS is_controller "
-        "ORDER BY caller.name"
+        f"ORDER BY caller.name LIMIT {limit}"
     )
-    return _run_read(cypher, class_name=class_name)
+    return _run_read(cypher, class_name=class_name, file=file)
 
 
 @mcp.tool()
