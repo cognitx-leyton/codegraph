@@ -245,6 +245,8 @@ class Edge:
     src_id: str
     dst_id: str
     props: dict = field(default_factory=dict)
+    confidence: str = "EXTRACTED"
+    confidence_score: float = 1.0
 
 
 # Edge kind constants

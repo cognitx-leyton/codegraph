@@ -71,7 +71,7 @@ def _coverage_metrics(driver: Driver) -> dict:
         "imports_external": "MATCH ()-[r:IMPORTS_EXTERNAL]->() RETURN count(r) AS v",
         "imports_symbol": "MATCH ()-[r:IMPORTS_SYMBOL]->() RETURN count(r) AS v",
         "calls": "MATCH ()-[r:CALLS]->() RETURN count(r) AS v",
-        "calls_typed": "MATCH ()-[r:CALLS]->() WHERE r.confidence='typed' RETURN count(r) AS v",
+        "calls_typed": "MATCH ()-[r:CALLS]->() WHERE r.resolution='typed' RETURN count(r) AS v",
         "calls_endpoint": "MATCH ()-[r:CALLS_ENDPOINT]->() RETURN count(r) AS v",
         "uses_operation": "MATCH ()-[r:USES_OPERATION]->() RETURN count(r) AS v",
         "injects": "MATCH ()-[r:INJECTS]->() RETURN count(r) AS v",
@@ -194,7 +194,7 @@ def _ground_truth_assertions(driver: Driver, repo_root: Path) -> list:
     assert_at_least("CALLS edges exist", "MATCH ()-[r:CALLS]->() RETURN count(r) AS v", 1000)
     assert_true("typed CALLS make up ≥ 50%", """
         MATCH ()-[r:CALLS]->() WITH count(r) AS total
-        MATCH ()-[r:CALLS]->() WHERE r.confidence='typed' WITH total, count(r) AS typed
+        MATCH ()-[r:CALLS]->() WHERE r.resolution='typed' WITH total, count(r) AS typed
         RETURN total = 0 OR 1.0 * typed / total >= 0.5 AS v
     """)
 
@@ -342,7 +342,7 @@ def _smoke_queries(driver: Driver) -> list:
             ORDER BY relations DESC LIMIT 10
         """),
         ("Top methods by CALLS fan-in (typed only)", """
-            MATCH (m:Method)<-[:CALLS {confidence:'typed'}]-()
+            MATCH (m:Method)<-[:CALLS {resolution:'typed'}]-()
             RETURN m.class AS class, m.name AS name, count(*) AS callers
             ORDER BY callers DESC LIMIT 10
         """),

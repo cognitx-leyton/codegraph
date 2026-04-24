@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `09f9d8a` → `a6bcbe6` (feat(schema): add hyperedge EdgeGroup for protocol-implementer sets — closes #39; 726 tests passing, v0.1.92).
+> **Last updated:** 2026-04-24 after commits `09f9d8a` → `248af58` (feat(schema): add edge confidence labels to CALLS, IMPORTS, and resolver edges — closes #38; 738 tests passing, v0.1.92).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-39`. Hyperedge `:EdgeGroup` support ships as `EdgeGroupNode` + `MEMBER_OF` edges + `describe_group()` MCP tool — closes issue #39. v0.1.92.
-- **Tests:** 726 passing (12 new in `test_edgegroup.py`), 10 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-38`. Edge confidence labels ship as `confidence` + `confidence_score` properties on every cross-file edge (`CALLS`, `IMPORTS`, and all resolver-emitted edges). `ResolveResult` namedtuple adds `.strategy` to resolution. `codegraph/docs/confidence.md` documents the taxonomy — closes issue #38. v0.1.92.
+- **Tests:** 738 passing (12 new: `test_confidence.py` + 2 in `test_loader_partitioning.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,15 +24,54 @@
 ## Shipped since the last roadmap update (commit `09f9d8a`)
 
 ```
-a6bcbe6  feat(schema): add hyperedge EdgeGroup for protocol-implementer sets (issue #39)
-c8d4ad2  feat(analyze): add Leiden community detection and graph analysis (#42)
-09f9d8a  feat(benchmark): add token-reduction benchmark command (issue #43)
+248af58  feat(schema): add edge confidence labels to CALLS, IMPORTS, and resolver edges (issue #38)
+906983c  feat(schema): add hyperedge EdgeGroup for protocol-implementer sets (issue #39)
+e0a172d  feat(analyze): add Leiden community detection and graph analysis (#42)
+9f42190  feat(benchmark): add token-reduction benchmark command (issue #43)
 85b18f2  feat(export): add interactive HTML and GraphML graph export command (#251)
 343878b  feat(cache): prune stale cache entries after manifest save (#250)
 33ddbe7  feat(init): append .codegraph-cache/ to .gitignore on codegraph init (#249)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### schema — edge confidence labels on CALLS, IMPORTS, and resolver edges (issue #38)
+
+- `248af58 feat(schema)` — Fifteen files changed (2 new, 13 updated):
+
+  **New files:**
+
+  1. **`codegraph/tests/test_confidence.py`** (10 tests) — Covers `Edge` dataclass defaults (`confidence="EXTRACTED"`, `confidence_score=1.0`), cache-round-trip preservation, and per-strategy confidence assignments (`self`/`super`/bare-function → `EXTRACTED/1.0`, `direct`/`relative` → `EXTRACTED/1.0`, `barrel` → `INFERRED/0.8`, `alias` → `INFERRED/0.9`, `workspace` → `INFERRED/0.85`, `CALLS_ENDPOINT` URL-pattern matching → `INFERRED/0.7`, `RENDERS` JSX component resolution → `INFERRED/0.8`).
+
+  2. **`codegraph/docs/confidence.md`** — New feature documentation: motivation, two-tier taxonomy (`EXTRACTED` / `INFERRED`), per-edge-type classification table, Cypher examples, MCP `calls_from` confidence field.
+
+  **Updated files:**
+
+  3. **`codegraph/codegraph/schema.py`** — Added `confidence: str = "EXTRACTED"` and `confidence_score: float = 1.0` fields to `Edge` dataclass. Both preserved through `parse_result_to_dict` / `parse_result_from_dict` cache serialisation.
+
+  4. **`codegraph/codegraph/resolver.py`** — Added `ResolveResult(path, strategy)` namedtuple; `resolve()` now returns `Optional[ResolveResult]` (was `Optional[str]`). Added `_strategy_confidence(strategy)` helper mapping resolution strategy → `(confidence, confidence_score)`. All cross-file edge-emission sites updated to call `_strategy_confidence` and set confidence fields: IMPORTS (6 strategies), CALLS (direct AST hit vs. class-resolution fallback), CALLS_ENDPOINT (`INFERRED/0.7`), RENDERS (`INFERRED/0.8`), USES_HOOK (`EXTRACTED/0.9`). All other edges (EXTENDS, IMPLEMENTS, INJECTS, MEMBER_OF, etc.) default to `EXTRACTED/1.0` via dataclass defaults. Renamed `props["confidence"]` → `props["resolution"]` on CALLS edges (resolving a naming collision introduced by the new `confidence` field).
+
+  5. **`codegraph/codegraph/loader.py`** — Every `MERGE` in `_write_edges()`, `_write_belongs_to()`, `_write_test_edges()`, `_write_per_file_extras()`, `_write_structural_edges()`, `_write_edge_groups()`, and the ownership edges now uses a named rel variable (`[rel:TYPE]`) and appends `SET rel.confidence = $confidence, rel.confidence_score = $confidence_score` after the MERGE. Structural edges (DEFINES_CLASS, DEFINES_FUNC, HAS_METHOD, etc.) default to `EXTRACTED/1.0`.
+
+  6. **`codegraph/codegraph/validate.py`** — Renamed stale `{confidence:'typed'}` Cypher filter → `{resolution:'typed'}` (3 occurrences).
+
+  7. **`codegraph/codegraph/mcp.py`** — `calls_from` and `callers_of` depth-1 queries now use `[r:CALLS]` named rel variable and return `r.confidence AS confidence, r.confidence_score AS confidence_score`. `reindex_file` edge MERGEs updated to set confidence.
+
+  8. **`codegraph/codegraph/analyze.py`** — MEMBER_OF MERGE updated to `[rel:MEMBER_OF]` + confidence SET (was the only structural MERGE that had escaped the loader update).
+
+  9. **`codegraph/queries.md`** — Stale `{confidence:'typed'}` example in section 8 corrected to `{resolution:'typed'}`.
+
+  10–15. **`codegraph/tests/test_loader_partitioning.py`**, **`test_py_resolver.py`**, **`test_resolver_bugs.py`**, **`test_loader_pairing.py`**, **`test_edgegroup.py`**, **`test_analyze.py`**, **`test_mcp.py`** — Updated to unwrap `ResolveResult.path`, assert named rel variables in captured Cypher, and assert `confidence`/`confidence_score` appear in edge payloads.
+
+  **Code review (8 issues found, 3 real bugs fixed):**
+  - `[HIGH]` `validate.py:345` — stale `{confidence:'typed'}` Cypher would return 0 rows → renamed to `{resolution:'typed'}`.
+  - `[HIGH]` `analyze.py:458` — MEMBER_OF MERGE missing `[rel:]` variable + confidence SET → added.
+  - `[MEDIUM]` `queries.md:121` — stale `{confidence:'typed'}` example query → renamed.
+  - `[ACCEPTED]` DISTINCT with `r.confidence` in `calls_from`/`callers_of` — no real dedup issue for depth-1 queries.
+  - `[ACCEPTED]` Confidence levels for `_find_class` edges and `USES_OPERATION` — explicit plan decisions.
+  - `[ACCEPTED]` `USES_HOOK` score 0.9 — plan decision.
+
+  - **Validation:** 738 tests pass (12 new), 11 skipped, 0 failures. Arch-check: 4/4 policies pass (1 skipped).
 
 ### schema — hyperedge :EdgeGroup for protocol-implementer sets (issue #39)
 
@@ -1604,6 +1643,7 @@ Repo-local plans under `.claude/plans/`:
 - `export-interactive-html.plan.md` — shipped as `6c45b48` (closes #44).
 - `leiden-community-detection.plan.md` — shipped as `c8d4ad2` (closes #42).
 - `hyperedge-groups.plan.md` — shipped as `a6bcbe6` (closes #39).
+- `edge-confidence-labels.plan.md` — shipped as `248af58` (closes #38).
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 

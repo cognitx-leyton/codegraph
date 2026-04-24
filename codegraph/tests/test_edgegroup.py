@@ -143,7 +143,7 @@ def test_write_edge_groups_cypher_patterns():
     assert "DETACH DELETE" in all_cypher
     assert "protocol_implementers" in all_cypher
     assert "MERGE (eg:EdgeGroup" in all_cypher
-    assert "MERGE (n)-[:MEMBER_OF]" in all_cypher
+    assert "MERGE (n)-[rel:MEMBER_OF]" in all_cypher
     assert stats.edge_groups == 1
     assert stats.member_of_edges == 2
 

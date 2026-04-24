@@ -631,15 +631,27 @@ def calls_from(
     err = _validate_limit(limit)
     if err:
         return [{"error": err}]
-    cypher = (
-        "MATCH (src) WHERE (src:Function OR src:Method) AND src.name = $name "
-        "  AND ($file IS NULL OR src.file = $file) "
-        f"MATCH (src)-[:CALLS*1..{max_depth}]->(dst) "
-        "RETURN DISTINCT labels(dst)[0] AS kind, dst.name AS name, "
-        "       coalesce(dst.file, '') AS file, "
-        "       coalesce(dst.docstring, '') AS docstring "
-        f"ORDER BY file, name LIMIT {limit}"
-    )
+    if max_depth == 1:
+        cypher = (
+            "MATCH (src) WHERE (src:Function OR src:Method) AND src.name = $name "
+            "  AND ($file IS NULL OR src.file = $file) "
+            "MATCH (src)-[r:CALLS]->(dst) "
+            "RETURN DISTINCT labels(dst)[0] AS kind, dst.name AS name, "
+            "       coalesce(dst.file, '') AS file, "
+            "       coalesce(dst.docstring, '') AS docstring, "
+            "       r.confidence AS confidence, r.confidence_score AS confidence_score "
+            f"ORDER BY file, name LIMIT {limit}"
+        )
+    else:
+        cypher = (
+            "MATCH (src) WHERE (src:Function OR src:Method) AND src.name = $name "
+            "  AND ($file IS NULL OR src.file = $file) "
+            f"MATCH (src)-[:CALLS*1..{max_depth}]->(dst) "
+            "RETURN DISTINCT labels(dst)[0] AS kind, dst.name AS name, "
+            "       coalesce(dst.file, '') AS file, "
+            "       coalesce(dst.docstring, '') AS docstring "
+            f"ORDER BY file, name LIMIT {limit}"
+        )
     return _run_read(cypher, name=name, file=file)
 
 
@@ -668,14 +680,25 @@ def callers_of(
     err = _validate_limit(limit)
     if err:
         return [{"error": err}]
-    cypher = (
-        "MATCH (dst) WHERE (dst:Function OR dst:Method) AND dst.name = $name "
-        "  AND ($file IS NULL OR dst.file = $file) "
-        f"MATCH (src)-[:CALLS*1..{max_depth}]->(dst) "
-        "WHERE src:Function OR src:Method "
-        "RETURN DISTINCT labels(src)[0] AS kind, src.name AS name, src.file AS file "
-        f"ORDER BY src.file, src.name LIMIT {limit}"
-    )
+    if max_depth == 1:
+        cypher = (
+            "MATCH (dst) WHERE (dst:Function OR dst:Method) AND dst.name = $name "
+            "  AND ($file IS NULL OR dst.file = $file) "
+            "MATCH (src)-[r:CALLS]->(dst) "
+            "WHERE src:Function OR src:Method "
+            "RETURN DISTINCT labels(src)[0] AS kind, src.name AS name, src.file AS file, "
+            "       r.confidence AS confidence, r.confidence_score AS confidence_score "
+            f"ORDER BY src.file, src.name LIMIT {limit}"
+        )
+    else:
+        cypher = (
+            "MATCH (dst) WHERE (dst:Function OR dst:Method) AND dst.name = $name "
+            "  AND ($file IS NULL OR dst.file = $file) "
+            f"MATCH (src)-[:CALLS*1..{max_depth}]->(dst) "
+            "WHERE src:Function OR src:Method "
+            "RETURN DISTINCT labels(src)[0] AS kind, src.name AS name, src.file AS file "
+            f"ORDER BY src.file, src.name LIMIT {limit}"
+        )
     return _run_read(cypher, name=name, file=file)
 
 
@@ -869,7 +892,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "    n.base_path = $base_path, n.table_name = $table_name "
                     "WITH n "
                     "MATCH (f:File {path: $file}) "
-                    "MERGE (f)-[:DEFINES_CLASS]->(n)",
+                    "MERGE (f)-[rel:DEFINES_CLASS]->(n) "
+                    "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                     id=c.id, name=c.name, file=c.file,
                     is_controller=c.is_controller,
                     is_injectable=c.is_injectable,
@@ -890,7 +914,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "    n.params_json = $params_json "
                     "WITH n "
                     "MATCH (f:File {path: $file}) "
-                    "MERGE (f)-[:DEFINES_FUNC]->(n)",
+                    "MERGE (f)-[rel:DEFINES_FUNC]->(n) "
+                    "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                     id=fn.id, name=fn.name, file=fn.file,
                     is_component=fn.is_component, exported=fn.exported,
                     docstring=fn.docstring, return_type=fn.return_type,
@@ -910,7 +935,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "    n.docstring = $docstring "
                     "WITH n "
                     "MATCH (c:Class {id: $class_id}) "
-                    "MERGE (c)-[:HAS_METHOD]->(n)",
+                    "MERGE (c)-[rel:HAS_METHOD]->(n) "
+                    "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                     id=m.id, name=m.name, file=m.file,
                     class_id=m.class_id, is_static=m.is_static,
                     is_async=m.is_async,
@@ -928,7 +954,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "SET n.name = $name, n.file = $file "
                     "WITH n "
                     "MATCH (f:File {path: $file}) "
-                    "MERGE (f)-[:DEFINES_IFACE]->(n)",
+                    "MERGE (f)-[rel:DEFINES_IFACE]->(n) "
+                    "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                     id=i.id, name=i.name, file=i.file,
                 )
                 node_count += 1
@@ -945,7 +972,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     s.run(
                         "MATCH (f:File {path: $fpath}) "
                         "MATCH (e:Endpoint {id: $eid}) "
-                        "MERGE (f)-[:EXPOSES]->(e)",
+                        "MERGE (f)-[rel:EXPOSES]->(e) "
+                        "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                         fpath=ep.controller_class[len("file:"):],
                         eid=ep.id,
                     )
@@ -953,7 +981,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     s.run(
                         "MATCH (c:Class {id: $cls}) "
                         "MATCH (e:Endpoint {id: $eid}) "
-                        "MERGE (c)-[:EXPOSES]->(e)",
+                        "MERGE (c)-[rel:EXPOSES]->(e) "
+                        "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                         cls=ep.controller_class, eid=ep.id,
                     )
                 node_count += 1
@@ -966,7 +995,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "    o.handler = $handler, o.file = $file "
                     "WITH o "
                     "MATCH (c:Class {id: $cls}) "
-                    "MERGE (c)-[:RESOLVES]->(o)",
+                    "MERGE (c)-[rel:RESOLVES]->(o) "
+                    "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                     id=gql.id, type=gql.op_type, name=gql.name,
                     return_type=gql.return_type, handler=gql.handler,
                     file=gql.file, cls=gql.resolver_class,
@@ -981,7 +1011,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "    c.primary = $primary, c.generated = $generated "
                     "WITH c "
                     "MATCH (e:Class {id: $entity_id}) "
-                    "MERGE (e)-[:HAS_COLUMN]->(c)",
+                    "MERGE (e)-[rel:HAS_COLUMN]->(c) "
+                    "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                     id=col.id, entity_id=col.entity_id,
                     name=col.name, type=col.type,
                     nullable=col.nullable, uniq=col.unique,
@@ -995,7 +1026,8 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "SET n.name = $name, n.file = $file, n.family = $family "
                     "WITH n "
                     "MATCH (f:File {path: $file}) "
-                    "MERGE (f)-[:DEFINES_ATOM]->(n)",
+                    "MERGE (f)-[rel:DEFINES_ATOM]->(n) "
+                    "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
                     id=a.id, name=a.name, file=a.file, family=a.family,
                 )
                 node_count += 1
@@ -1059,15 +1091,19 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     s.run(
                         f"MATCH (a:{label} {{id: $src}}) "
                         f"MATCH (d:Decorator {{name: $name}}) "
-                        f"MERGE (a)-[:DECORATED_BY]->(d)",
+                        f"MERGE (a)-[rel:DECORATED_BY]->(d) "
+                        f"SET rel.confidence = $conf, rel.confidence_score = $score",
                         src=edge.src_id, name=dname,
+                        conf=edge.confidence, score=edge.confidence_score,
                     )
                 else:
                     s.run(
                         f"MATCH (a {{id: $src}}) "
                         f"MATCH (b {{id: $dst}}) "
-                        f"MERGE (a)-[:{edge.kind}]->(b)",
+                        f"MERGE (a)-[rel:{edge.kind}]->(b) "
+                        f"SET rel.confidence = $conf, rel.confidence_score = $score",
                         src=edge.src_id, dst=edge.dst_id,
+                        conf=edge.confidence, score=edge.confidence_score,
                     )
                 edge_count += 1
 

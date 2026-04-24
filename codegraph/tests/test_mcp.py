@@ -271,7 +271,8 @@ def test_calls_from_default_depth(monkeypatch):
     driver = _patch(monkeypatch, [[]])
     mcp_mod.calls_from("parse")
     cypher, params = driver.session_obj.calls[0]
-    assert "*1..1" in cypher
+    assert "[r:CALLS]" in cypher
+    assert "r.confidence" in cypher
     assert params["name"] == "parse"
 
 
@@ -305,7 +306,7 @@ def test_calls_from_happy_path(monkeypatch):
     assert out[0]["docstring"] == "A helper"
     cypher, params = driver.session_obj.calls[0]
     assert "src:Function OR src:Method" in cypher
-    assert "CALLS*1..1" in cypher
+    assert "[r:CALLS]" in cypher
     assert params == {"name": "parse", "file": None}
 
 
@@ -329,7 +330,8 @@ def test_callers_of_default_depth(monkeypatch):
     driver = _patch(monkeypatch, [[]])
     mcp_mod.callers_of("parse")
     cypher, params = driver.session_obj.calls[0]
-    assert "*1..1" in cypher
+    assert "[r:CALLS]" in cypher
+    assert "r.confidence" in cypher
     assert params["name"] == "parse"
 
 
@@ -361,7 +363,7 @@ def test_callers_of_happy_path(monkeypatch):
     assert out[0]["file"] == "src/pipeline.py"
     cypher, params = driver.session_obj.calls[0]
     assert "src:Function OR src:Method" in cypher
-    assert "CALLS*1..1" in cypher
+    assert "[r:CALLS]" in cypher
     assert params == {"name": "parse", "file": None}
 
 

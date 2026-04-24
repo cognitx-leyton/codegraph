@@ -320,7 +320,8 @@ class Neo4jLoader:
                     n.table_name = r.table_name
                 WITH n, r
                 MATCH (f:File {path: r.file})
-                MERGE (f)-[:DEFINES_CLASS]->(n)
+                MERGE (f)-[rel:DEFINES_CLASS]->(n)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=c.id, name=c.name, file=c.file,
                      is_controller=c.is_controller, is_injectable=c.is_injectable,
@@ -350,7 +351,8 @@ class Neo4jLoader:
                     n.params_json = r.params_json
                 WITH n, r
                 MATCH (f:File {path: r.file})
-                MERGE (f)-[:DEFINES_FUNC]->(n)
+                MERGE (f)-[rel:DEFINES_FUNC]->(n)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=f.id, name=f.name, file=f.file,
                      is_component=f.is_component, exported=f.exported,
@@ -374,7 +376,8 @@ class Neo4jLoader:
                     n.docstring = r.docstring
                 WITH n, r
                 MATCH (c:Class {id: r.class_id})
-                MERGE (c)-[:HAS_METHOD]->(n)
+                MERGE (c)-[rel:HAS_METHOD]->(n)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=m.id, name=m.name, file=m.file, class_id=m.class_id,
                      is_static=m.is_static, is_async=m.is_async,
@@ -391,7 +394,8 @@ class Neo4jLoader:
                 SET n.name = r.name, n.file = r.file
                 WITH n, r
                 MATCH (f:File {path: r.file})
-                MERGE (f)-[:DEFINES_IFACE]->(n)
+                MERGE (f)-[rel:DEFINES_IFACE]->(n)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [dict(id=i.id, name=i.name, file=i.file) for i in ifaces])
 
             # ── Endpoints ─────────────────────────────────────────
@@ -403,7 +407,8 @@ class Neo4jLoader:
                     e.handler = r.handler, e.file = r.file
                 WITH e, r
                 MATCH (c:Class {id: r.cls})
-                MERGE (c)-[:EXPOSES]->(e)
+                MERGE (c)-[rel:EXPOSES]->(e)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=e.id, method=e.method, path=e.path, handler=e.handler,
                      file=e.file, cls=e.controller_class)
@@ -417,7 +422,8 @@ class Neo4jLoader:
                     e.handler = r.handler, e.file = r.file
                 WITH e, r
                 MATCH (f:File {path: r.fpath})
-                MERGE (f)-[:EXPOSES]->(e)
+                MERGE (f)-[rel:EXPOSES]->(e)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=e.id, method=e.method, path=e.path, handler=e.handler,
                      file=e.file, fpath=e.controller_class[len("file:"):])
@@ -434,7 +440,8 @@ class Neo4jLoader:
                     o.file = r.file
                 WITH o, r
                 MATCH (c:Class {id: r.cls})
-                MERGE (c)-[:RESOLVES]->(o)
+                MERGE (c)-[rel:RESOLVES]->(o)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=o.id, type=o.op_type, name=o.name, return_type=o.return_type,
                      handler=o.handler, file=o.file, cls=o.resolver_class)
@@ -449,7 +456,8 @@ class Neo4jLoader:
                     c.unique = r.unique, c.primary = r.primary, c.generated = r.generated
                 WITH c, r
                 MATCH (e:Class {id: r.entity_id})
-                MERGE (e)-[:HAS_COLUMN]->(c)
+                MERGE (e)-[rel:HAS_COLUMN]->(c)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=c.id, entity_id=c.entity_id, name=c.name, type=c.type,
                      nullable=c.nullable, unique=c.unique, primary=c.primary,
@@ -464,7 +472,8 @@ class Neo4jLoader:
                 SET a.name = r.name, a.file = r.file, a.family = r.family
                 WITH a, r
                 MATCH (f:File {path: r.file})
-                MERGE (f)-[:DEFINES_ATOM]->(a)
+                MERGE (f)-[rel:DEFINES_ATOM]->(a)
+                SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [dict(id=a.id, name=a.name, file=a.file, family=a.family) for a in atoms])
 
             # ── Externals / Hooks / Decorators / EnvVars / Events ─
@@ -567,7 +576,8 @@ def _write_belongs_to(session, files, stats: LoadStats) -> None:
         UNWIND $rows AS r
         MATCH (f:File {path: r.path})
         MATCH (p:Package {name: r.package})
-        MERGE (f)-[:BELONGS_TO]->(p)
+        MERGE (f)-[rel:BELONGS_TO]->(p)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, rows)
     stats.belongs_to_edges = len(rows)
 
@@ -585,15 +595,18 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
 
         if e.kind == DECORATED_BY:
             dname = e.dst_id[len("dec:"):]
+            _conf = dict(confidence=e.confidence, confidence_score=e.confidence_score)
             if e.src_id.startswith("class:"):
-                dec_class.append(dict(src=e.src_id, name=dname))
+                dec_class.append(dict(src=e.src_id, name=dname, **_conf))
             elif e.src_id.startswith("func:"):
-                dec_func.append(dict(src=e.src_id, name=dname))
+                dec_func.append(dict(src=e.src_id, name=dname, **_conf))
             elif e.src_id.startswith("method:"):
-                dec_method.append(dict(src=e.src_id, name=dname))
+                dec_method.append(dict(src=e.src_id, name=dname, **_conf))
             else:
                 log.debug("DECORATED_BY edge with unknown src prefix dropped: %r", e.src_id)
             continue
+
+        _conf = dict(confidence=e.confidence, confidence_score=e.confidence_score)
 
         if e.kind == IMPORTS:
             if e.props.get("external"):
@@ -602,6 +615,7 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
                     spec=e.dst_id[len("external:"):],
                     specifier=e.props.get("specifier", ""),
                     type_only=e.props.get("type_only", False),
+                    **_conf,
                 ))
             else:
                 buckets.setdefault("IMPORTS", []).append(dict(
@@ -609,6 +623,7 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
                     dst=e.dst_id[len("file:"):],
                     specifier=e.props.get("specifier", ""),
                     type_only=e.props.get("type_only", False),
+                    **_conf,
                 ))
             continue
 
@@ -618,12 +633,13 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
                 dst=e.dst_id[len("file:"):],
                 symbol=e.props.get("symbol", ""),
                 type_only=e.props.get("type_only", False),
+                **_conf,
             ))
             continue
 
         if e.kind in (EXTENDS, IMPLEMENTS, INJECTS, REPOSITORY_OF,
                        PROVIDES, EXPORTS_PROVIDER, IMPORTS_MODULE, DECLARES_CONTROLLER):
-            buckets.setdefault(e.kind, []).append(dict(src=e.src_id, dst=e.dst_id))
+            buckets.setdefault(e.kind, []).append(dict(src=e.src_id, dst=e.dst_id, **_conf))
             continue
 
         if e.kind == RELATES_TO:
@@ -631,68 +647,76 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
                 src=e.src_id, dst=e.dst_id,
                 kind=e.props.get("kind", ""),
                 field=e.props.get("field", ""),
+                **_conf,
             ))
             continue
 
         if e.kind == RENDERS:
-            buckets.setdefault(RENDERS, []).append(dict(src=e.src_id, dst=e.dst_id))
+            buckets.setdefault(RENDERS, []).append(dict(src=e.src_id, dst=e.dst_id, **_conf))
             continue
 
         if e.kind == USES_HOOK:
             buckets.setdefault(USES_HOOK, []).append(dict(
                 src=e.src_id, hook=e.props.get("hook", ""),
+                **_conf,
             ))
             continue
 
         if e.kind == RETURNS:
-            buckets.setdefault(RETURNS, []).append(dict(src=e.src_id, dst=e.dst_id))
+            buckets.setdefault(RETURNS, []).append(dict(src=e.src_id, dst=e.dst_id, **_conf))
             continue
 
         if e.kind == CALLS_ENDPOINT:
             buckets.setdefault(CALLS_ENDPOINT, []).append(dict(
                 src=e.src_id, dst=e.dst_id, url=e.props.get("url", ""),
+                **_conf,
             ))
             continue
 
         if e.kind == USES_OPERATION:
             buckets.setdefault(USES_OPERATION, []).append(dict(
                 src=e.src_id, dst=e.dst_id, op_name=e.props.get("op_name", ""),
+                **_conf,
             ))
             continue
 
         if e.kind == CALLS:
             buckets.setdefault(CALLS, []).append(dict(
                 src=e.src_id, dst=e.dst_id,
-                confidence=e.props.get("confidence", "name"),
+                resolution=e.props.get("resolution", "name"),
+                **_conf,
             ))
             continue
 
         if e.kind == HANDLES:
-            buckets.setdefault(HANDLES, []).append(dict(src=e.src_id, dst=e.dst_id))
+            buckets.setdefault(HANDLES, []).append(dict(src=e.src_id, dst=e.dst_id, **_conf))
             continue
 
+    # Confidence SET fragment shared by all Cypher below
+    _CONF_SET = ", rel.confidence = r.confidence, rel.confidence_score = r.confidence_score"
+
     # Write each bucket with its specific Cypher
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:File {path: r.src}) MATCH (b:File {path: r.dst})
+        MATCH (a:File {{path: r.src}}) MATCH (b:File {{path: r.dst}})
         MERGE (a)-[rel:IMPORTS]->(b)
-        SET rel.specifier = r.specifier, rel.type_only = r.type_only
+        SET rel.specifier = r.specifier, rel.type_only = r.type_only{_CONF_SET}
     """, buckets.get("IMPORTS", []))
     stats.edges[IMPORTS] = len(buckets.get("IMPORTS", []))
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:File {path: r.src}) MATCH (b:External {specifier: r.spec})
+        MATCH (a:File {{path: r.src}}) MATCH (b:External {{specifier: r.spec}})
         MERGE (a)-[rel:IMPORTS_EXTERNAL]->(b)
-        SET rel.specifier = r.specifier, rel.type_only = r.type_only
+        SET rel.specifier = r.specifier, rel.type_only = r.type_only{_CONF_SET}
     """, buckets.get("IMPORTS_EXT", []))
     stats.edges[IMPORTS_EXTERNAL] = len(buckets.get("IMPORTS_EXT", []))
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:File {path: r.src}) MATCH (b:File {path: r.dst})
-        MERGE (a)-[rel:IMPORTS_SYMBOL {symbol: r.symbol}]->(b)
-        SET rel.type_only = r.type_only
+        MATCH (a:File {{path: r.src}}) MATCH (b:File {{path: r.dst}})
+        MERGE (a)-[rel:IMPORTS_SYMBOL {{symbol: r.symbol}}]->(b)
+        SET rel.type_only = r.type_only{_CONF_SET}
     """, buckets.get("IMPORTS_SYMBOL", []))
     stats.edges[IMPORTS_SYMBOL] = len(buckets.get("IMPORTS_SYMBOL", []))
 
@@ -706,103 +730,113 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
             UNWIND $rows AS r
             MATCH (a:Class {{id: r.src}})
             MATCH (b:Class {{id: r.dst}})
-            MERGE (a)-[:{kind}]->(b)
+            MERGE (a)-[rel:{kind}]->(b)
+            SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
         """, rows)
         stats.edges[kind] = len(rows)
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:Class {id: r.src})
-        MATCH (b:Class {id: r.dst})
-        MERGE (a)-[rel:RELATES_TO {kind: r.kind, field: r.field}]->(b)
+        MATCH (a:Class {{id: r.src}})
+        MATCH (b:Class {{id: r.dst}})
+        MERGE (a)-[rel:RELATES_TO {{kind: r.kind, field: r.field}}]->(b)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, buckets.get(RELATES_TO, []))
     stats.edges[RELATES_TO] = len(buckets.get(RELATES_TO, []))
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:Function {id: r.src})
-        MATCH (b:Function {id: r.dst})
-        MERGE (a)-[:RENDERS]->(b)
+        MATCH (a:Function {{id: r.src}})
+        MATCH (b:Function {{id: r.dst}})
+        MERGE (a)-[rel:RENDERS]->(b)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, buckets.get(RENDERS, []))
     stats.edges[RENDERS] = len(buckets.get(RENDERS, []))
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:Function {id: r.src})
-        MATCH (h:Hook {name: r.hook})
-        MERGE (a)-[:USES_HOOK]->(h)
+        MATCH (a:Function {{id: r.src}})
+        MATCH (h:Hook {{name: r.hook}})
+        MERGE (a)-[rel:USES_HOOK]->(h)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, buckets.get(USES_HOOK, []))
     stats.edges[USES_HOOK] = len(buckets.get(USES_HOOK, []))
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (o:GraphQLOperation {id: r.src})
-        MATCH (c:Class {id: r.dst})
-        MERGE (o)-[:RETURNS]->(c)
+        MATCH (o:GraphQLOperation {{id: r.src}})
+        MATCH (c:Class {{id: r.dst}})
+        MERGE (o)-[rel:RETURNS]->(c)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, buckets.get(RETURNS, []))
     stats.edges[RETURNS] = len(buckets.get(RETURNS, []))
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
         MATCH (a) WHERE a.id = r.src
-        MATCH (e:Endpoint {id: r.dst})
+        MATCH (e:Endpoint {{id: r.dst}})
         MERGE (a)-[rel:CALLS_ENDPOINT]->(e)
-        SET rel.url = r.url
+        SET rel.url = r.url{_CONF_SET}
     """, buckets.get(CALLS_ENDPOINT, []))
     stats.edges[CALLS_ENDPOINT] = len(buckets.get(CALLS_ENDPOINT, []))
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
         MATCH (a) WHERE a.id = r.src
-        MATCH (o:GraphQLOperation {id: r.dst})
+        MATCH (o:GraphQLOperation {{id: r.dst}})
         MERGE (a)-[rel:USES_OPERATION]->(o)
-        SET rel.op_name = r.op_name
+        SET rel.op_name = r.op_name{_CONF_SET}
     """, buckets.get(USES_OPERATION, []))
     stats.edges[USES_OPERATION] = len(buckets.get(USES_OPERATION, []))
 
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:Method {id: r.src})
-        MATCH (b:Method {id: r.dst})
+        MATCH (a:Method {{id: r.src}})
+        MATCH (b:Method {{id: r.dst}})
         MERGE (a)-[rel:CALLS]->(b)
-        SET rel.confidence = r.confidence
+        SET rel.resolution = r.resolution{_CONF_SET}
     """, buckets.get(CALLS, []))
     stats.edges[CALLS] = len(buckets.get(CALLS, []))
 
     handles_endpoint = [r for r in buckets.get(HANDLES, []) if r["dst"].startswith("endpoint:")]
     handles_gqlop = [r for r in buckets.get(HANDLES, []) if r["dst"].startswith("gqlop:")]
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (m:Method {id: r.src})
-        MATCH (e:Endpoint {id: r.dst})
-        MERGE (m)-[:HANDLES]->(e)
+        MATCH (m:Method {{id: r.src}})
+        MATCH (e:Endpoint {{id: r.dst}})
+        MERGE (m)-[rel:HANDLES]->(e)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, handles_endpoint)
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (m:Method {id: r.src})
-        MATCH (o:GraphQLOperation {id: r.dst})
-        MERGE (m)-[:HANDLES]->(o)
+        MATCH (m:Method {{id: r.src}})
+        MATCH (o:GraphQLOperation {{id: r.dst}})
+        MERGE (m)-[rel:HANDLES]->(o)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, handles_gqlop)
     stats.edges[HANDLES] = len(handles_endpoint) + len(handles_gqlop)
 
     # Decorator edges
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:Class {id: r.src})
-        MATCH (d:Decorator {name: r.name})
-        MERGE (a)-[:DECORATED_BY]->(d)
+        MATCH (a:Class {{id: r.src}})
+        MATCH (d:Decorator {{name: r.name}})
+        MERGE (a)-[rel:DECORATED_BY]->(d)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, dec_class)
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:Function {id: r.src})
-        MATCH (d:Decorator {name: r.name})
-        MERGE (a)-[:DECORATED_BY]->(d)
+        MATCH (a:Function {{id: r.src}})
+        MATCH (d:Decorator {{name: r.name}})
+        MERGE (a)-[rel:DECORATED_BY]->(d)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, dec_func)
-    _run(session, """
+    _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:Method {id: r.src})
-        MATCH (d:Decorator {name: r.name})
-        MERGE (a)-[:DECORATED_BY]->(d)
+        MATCH (a:Method {{id: r.src}})
+        MATCH (d:Decorator {{name: r.name}})
+        MERGE (a)-[rel:DECORATED_BY]->(d)
+        SET rel.confidence = r.confidence, rel.confidence_score = r.confidence_score
     """, dec_method)
     stats.edges[DECORATED_BY] = len(dec_class) + len(dec_func) + len(dec_method)
 
@@ -843,7 +877,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats, touched_file
         UNWIND $rows AS r
         MATCH (fn:Function {id: r.fn_id})
         MATCH (a:Atom {name: r.atom_name})
-        MERGE (fn)-[:READS_ATOM]->(a)
+        MERGE (fn)-[rel:READS_ATOM]->(a)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, atom_reads)
     stats.edges[READS_ATOM] = len(atom_reads)
 
@@ -851,7 +886,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats, touched_file
         UNWIND $rows AS r
         MATCH (fn:Function {id: r.fn_id})
         MATCH (a:Atom {name: r.atom_name})
-        MERGE (fn)-[:WRITES_ATOM]->(a)
+        MERGE (fn)-[rel:WRITES_ATOM]->(a)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, atom_writes)
     stats.edges[WRITES_ATOM] = len(atom_writes)
 
@@ -859,7 +895,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats, touched_file
         UNWIND $rows AS r
         MATCH (f:File {path: r.file})
         MATCH (e:EnvVar {name: r.env})
-        MERGE (f)-[:READS_ENV]->(e)
+        MERGE (f)-[rel:READS_ENV]->(e)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, env_reads)
     stats.edges[READS_ENV] = len(env_reads)
 
@@ -867,7 +904,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats, touched_file
         UNWIND $rows AS r
         MATCH (m:Method {id: r.method})
         MATCH (e:Event {name: r.event})
-        MERGE (m)-[:HANDLES_EVENT]->(e)
+        MERGE (m)-[rel:HANDLES_EVENT]->(e)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, event_handlers)
     stats.edges[HANDLES_EVENT] = len(event_handlers)
 
@@ -875,7 +913,8 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats, touched_file
         UNWIND $rows AS r
         MATCH (m:Method {id: r.method})
         MATCH (e:Event {name: r.event})
-        MERGE (m)-[:EMITS_EVENT]->(e)
+        MERGE (m)-[rel:EMITS_EVENT]->(e)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, event_emitters)
     stats.edges[EMITS_EVENT] = len(event_emitters)
 
@@ -933,7 +972,8 @@ def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
         UNWIND $rows AS r
         MATCH (t:File {path: r.test})
         MATCH (p:File {path: r.peer})
-        MERGE (t)-[:TESTS]->(p)
+        MERGE (t)-[rel:TESTS]->(p)
+        SET rel.confidence = 'INFERRED', rel.confidence_score = 0.5
     """, rows)
     stats.edges[TESTS] = len(rows)
 
@@ -941,7 +981,8 @@ def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
         UNWIND $rows AS r
         MATCH (t:File {path: r.test})
         MATCH (c:Class {name: r.name})
-        MERGE (t)-[:TESTS_CLASS]->(c)
+        MERGE (t)-[rel:TESTS_CLASS]->(c)
+        SET rel.confidence = 'INFERRED', rel.confidence_score = 0.6
     """, rows_class)
     stats.edges[TESTS_CLASS] = len(rows_class)
 
@@ -967,7 +1008,7 @@ def _write_ownership(session, ownership: dict, stats: LoadStats) -> None:
         MATCH (f:File {path: r.path})
         MATCH (a:Author {email: r.email})
         MERGE (f)-[rel:LAST_MODIFIED_BY]->(a)
-        SET rel.at = r.at
+        SET rel.at = r.at, rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, last_mod)
     stats.edges[LAST_MODIFIED_BY] = len(last_mod)
 
@@ -976,7 +1017,7 @@ def _write_ownership(session, ownership: dict, stats: LoadStats) -> None:
         MATCH (f:File {path: r.path})
         MATCH (a:Author {email: r.email})
         MERGE (f)-[rel:CONTRIBUTED_BY]->(a)
-        SET rel.commits = r.commits
+        SET rel.commits = r.commits, rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, contribs)
     stats.edges[CONTRIBUTED_BY] = len(contribs)
 
@@ -984,7 +1025,8 @@ def _write_ownership(session, ownership: dict, stats: LoadStats) -> None:
         UNWIND $rows AS r
         MATCH (f:File {path: r.path})
         MATCH (t:Team {name: r.team})
-        MERGE (f)-[:OWNED_BY]->(t)
+        MERGE (f)-[rel:OWNED_BY]->(t)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, owned)
     stats.edges[OWNED_BY] = len(owned)
 
@@ -1019,7 +1061,8 @@ def _write_edge_groups(
         UNWIND $rows AS r
         MATCH (n) WHERE n.id = r.src_id
         MATCH (eg:EdgeGroup {id: r.dst_id})
-        MERGE (n)-[:MEMBER_OF]->(eg)
+        MERGE (n)-[rel:MEMBER_OF]->(eg)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, member_rows)
     stats.member_of_edges = len(member_rows)
     stats.edges[MEMBER_OF] = len(member_rows)
