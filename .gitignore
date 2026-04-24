@@ -48,6 +48,9 @@ Thumbs.db
 neo4j/data/
 neo4j/logs/
 
+# codegraph incremental indexing cache (--update)
+.codegraph-cache/
+
 # Claude Code — ship .claude/settings.json + .claude/commands/, keep the
 # rest user-local. `.local` settings are per-user overrides by convention;
 # agents/ and skills/ are copied in per-user by init-claude.

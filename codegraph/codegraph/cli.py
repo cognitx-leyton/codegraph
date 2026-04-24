@@ -185,6 +185,11 @@ def index(
         help="Git ref (commit, tag, HEAD~N). Only re-index files changed since "
              "this ref. Implies --no-wipe.",
     ),
+    update: bool = typer.Option(
+        False, "--update",
+        help="Incremental mode: skip unchanged files via SHA256 content cache. "
+             "Implies --no-wipe.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit stats as JSON on stdout."),
 ) -> None:
     """Index a TypeScript monorepo into Neo4j."""
@@ -201,6 +206,7 @@ def index(
             ignore_file=ignore_file,
             quiet=as_json,
             since=since,
+            update=update,
         )
     except ConfigError as e:
         _emit_error(as_json, "config", str(e))
@@ -231,6 +237,7 @@ def _run_index(
     ignore_file: Optional[str] = None,
     quiet: bool = False,
     since: Optional[str] = None,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Core indexing routine. Returns a flat dict of stats (files, edges, ...).
 
@@ -238,12 +245,17 @@ def _run_index(
     Pass ``quiet=True`` to suppress Rich output (used by ``--json`` mode).
     When *since* is set, only files changed since that git ref are loaded
     (incremental mode — implies ``wipe=False``).
+    When *update* is set, uses SHA256 content hashing to skip unchanged
+    files (implies ``wipe=False``).
     """
     def say(msg: str) -> None:
         if not quiet:
             console.print(msg)
 
     # ── Incremental mode setup ──────────────────────────────────
+    if since is not None and update:
+        raise ConfigError("--since and --update are mutually exclusive")
+
     changed_files: set[str] | None = None
     deleted_files: set[str] = set()
     if since is not None:
@@ -257,6 +269,17 @@ def _run_index(
                 LoadStats(), total_imports=0, unresolved_imports=0,
             )
         say(f"  changed: {len(changed_files)} files, deleted: {len(deleted_files)} files")
+
+    # ── --update (SHA256 cache) setup ──────────────────────────
+    ast_cache = None
+    cached_manifest: dict[str, str] = {}
+    if update:
+        from .cache import AstCache, file_content_hash
+        wipe = False
+        skip_ownership = True
+        ast_cache = AstCache(repo)
+        cached_manifest = ast_cache.load_manifest()
+        say("[bold]Incremental mode[/] (--update, SHA256 cache)")
 
     config = load_config(repo)
     config = merge_cli_overrides(config, packages=packages, ignore_file=ignore_file)
@@ -359,7 +382,19 @@ def _run_index(
 
     t0 = time.time()
     progress_step = max(1, len(to_parse) // 20)
+    new_manifest: dict[str, str] = {}
+    cache_hits = 0
     for i, (abs_p, rel, pkg_name, is_test) in enumerate(to_parse):
+        # Cache check
+        if ast_cache is not None:
+            content_hash = file_content_hash(abs_p, repo)
+            new_manifest[rel] = content_hash
+            cached = ast_cache.get(rel, content_hash)
+            if cached is not None:
+                index_obj.add(cached)
+                cache_hits += 1
+                continue
+        # Parse (cache miss or no cache)
         if abs_p.suffix.lower() == ".py":
             if py_parser is None:
                 from .py_parser import PyParser
@@ -370,8 +405,24 @@ def _run_index(
         if result is None:
             continue
         index_obj.add(result)
+        if ast_cache is not None:
+            ast_cache.put(rel, content_hash, result)
         if (i + 1) % progress_step == 0:
             say(f"  parsed {i+1}/{len(to_parse)}  [{time.time()-t0:.1f}s]")
+
+    # --update: compute changed/deleted sets from manifest diff + save
+    if ast_cache is not None:
+        changed_files = {
+            rel for rel in new_manifest
+            if rel not in cached_manifest or cached_manifest[rel] != new_manifest[rel]
+        }
+        # Only detect deletions when the full file list was walked (max_files
+        # truncates to_parse, so absent files aren't truly deleted).
+        if max_files is None:
+            deleted_files = {p for p in cached_manifest if p not in new_manifest}
+        ast_cache.save_manifest(new_manifest)
+        say(f"  cache: {cache_hits} hits, {len(changed_files)} misses, {len(deleted_files)} deleted")
+
     parse_time = time.time() - t0
     say(f"[bold green]✓[/] parsed {len(index_obj.files_by_path)} files in {parse_time:.1f}s")
 

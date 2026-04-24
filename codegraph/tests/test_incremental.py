@@ -479,3 +479,72 @@ def test_load_touched_files_filters_columns(captured_runs):
     assert len(col_merges) == 1
     col_ids = {r["entity_id"] for r in col_merges[0][1]}
     assert col_ids == {"class:a.py#Foo"}
+
+
+# ── Test group 6: --update cache integration ───────────────────────
+
+
+def test_update_mode_populates_changed_and_deleted(tmp_path):
+    """--update manifest diff correctly identifies changed, new, and deleted files."""
+    from codegraph.cache import AstCache
+
+    cache = AstCache(tmp_path)
+    # Simulate previous manifest
+    old_manifest = {"a.py": "hash_a", "b.py": "hash_b", "old.py": "hash_old"}
+    cache.save_manifest(old_manifest)
+    cached_manifest = cache.load_manifest()
+
+    # Simulate new manifest after walk
+    new_manifest = {
+        "a.py": "hash_a",       # unchanged
+        "b.py": "hash_b_new",   # modified
+        "c.py": "hash_c",       # new file
+    }
+
+    changed_files = {
+        rel for rel in new_manifest
+        if rel not in cached_manifest or cached_manifest[rel] != new_manifest[rel]
+    }
+    deleted_files = {p for p in cached_manifest if p not in new_manifest}
+
+    assert changed_files == {"b.py", "c.py"}
+    assert deleted_files == {"old.py"}
+
+
+def test_update_mode_cache_hit_skips_parse(tmp_path):
+    """When a file's hash matches the cache, its ParseResult is loaded without parsing."""
+    from codegraph.cache import AstCache
+
+    cache = AstCache(tmp_path)
+    fn = FileNode(path="a.py", package="p", language="py", loc=5, is_test=False)
+    pr = ParseResult(file=fn)
+    pr.classes.append(ClassNode(name="Cached", file="a.py"))
+    cache.put("a.py", "hash_a", pr)
+
+    # Simulate cache-aware lookup
+    got = cache.get("a.py", "hash_a")
+    assert got is not None
+
+    idx = Index()
+    idx.add(got)
+    assert "a.py" in idx.files_by_path
+    assert idx.files_by_path["a.py"].classes[0].name == "Cached"
+
+
+def test_update_mode_saves_parsed_results_to_cache(tmp_path):
+    """After parsing a file (cache miss), the result is stored in the cache."""
+    from codegraph.cache import AstCache
+
+    cache = AstCache(tmp_path)
+    # Verify empty
+    assert cache.get("new.py", "hash_new") is None
+
+    # Simulate parse + put
+    fn = FileNode(path="new.py", package="p", language="py", loc=3, is_test=False)
+    pr = ParseResult(file=fn)
+    cache.put("new.py", "hash_new", pr)
+
+    # Now it's cached
+    got = cache.get("new.py", "hash_new")
+    assert got is not None
+    assert got.file.path == "new.py"

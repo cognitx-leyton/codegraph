@@ -1,6 +1,7 @@
 """Graph schema: typed node + edge dataclasses shared across parser → loader."""
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -370,3 +371,70 @@ class ParseResult:
     module_exports: list[tuple[str, str]] = field(default_factory=list)        # (module, exported_name)
     module_imports: list[tuple[str, str]] = field(default_factory=list)        # (module, imported_module_name)
     module_controllers: list[tuple[str, str]] = field(default_factory=list)    # (module, controller_name)
+
+
+# ── ParseResult serialisation ──────────────────────────────
+
+def parse_result_to_dict(result: ParseResult) -> dict:
+    """Serialise a *ParseResult* to a plain dict suitable for ``json.dumps``."""
+    return dataclasses.asdict(result)
+
+
+def parse_result_from_dict(d: dict) -> ParseResult:
+    """Reconstruct a *ParseResult* from the dict produced by :func:`parse_result_to_dict`.
+
+    Uses ``.get()`` with defaults so older cache entries missing newly-added
+    fields still load without error.
+    """
+    # --- node-list fields (need dataclass reconstruction) ---
+    file = FileNode(**d["file"])
+    classes = [ClassNode(**c) for c in d.get("classes", [])]
+    functions = [FunctionNode(**f) for f in d.get("functions", [])]
+    interfaces = [InterfaceNode(**i) for i in d.get("interfaces", [])]
+    endpoints = [EndpointNode(**e) for e in d.get("endpoints", [])]
+    imports = [ImportSpec(**s) for s in d.get("imports", [])]
+    columns = [ColumnNode(**c) for c in d.get("columns", [])]
+    gql_operations = [GraphQLOperationNode(**o) for o in d.get("gql_operations", [])]
+    methods = [MethodNode(**m) for m in d.get("methods", [])]
+    atoms = [AtomNode(**a) for a in d.get("atoms", [])]
+    routes = [RouteNode(**r) for r in d.get("routes", [])]
+    edges = [Edge(**e) for e in d.get("edges", [])]
+
+    # --- tuple-list fields (JSON lists-of-lists → lists-of-tuples) ---
+    _tup = lambda key: [tuple(x) for x in d.get(key, [])]  # noqa: E731
+
+    return ParseResult(
+        file=file,
+        classes=classes,
+        functions=functions,
+        interfaces=interfaces,
+        endpoints=endpoints,
+        imports=imports,
+        columns=columns,
+        gql_operations=gql_operations,
+        methods=methods,
+        atoms=atoms,
+        routes=routes,
+        edges=edges,
+        relations=_tup("relations"),
+        repository_refs=_tup("repository_refs"),
+        rest_calls=_tup("rest_calls"),
+        gql_literals=_tup("gql_literals"),
+        method_calls=_tup("method_calls"),
+        event_handlers=_tup("event_handlers"),
+        event_emitters=_tup("event_emitters"),
+        atom_reads=_tup("atom_reads"),
+        atom_writes=_tup("atom_writes"),
+        class_extends=_tup("class_extends"),
+        class_implements=_tup("class_implements"),
+        di_refs=_tup("di_refs"),
+        jsx_renders=_tup("jsx_renders"),
+        hook_calls=_tup("hook_calls"),
+        module_providers=_tup("module_providers"),
+        module_exports=_tup("module_exports"),
+        module_imports=_tup("module_imports"),
+        module_controllers=_tup("module_controllers"),
+        # plain list[str] fields
+        described_subjects=d.get("described_subjects", []),
+        env_reads=d.get("env_reads", []),
+    )
