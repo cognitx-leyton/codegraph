@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `bfa427b` (fix(mcp): add limit parameter to describe_function — closes #67; 611 tests passing, v0.1.72).
+> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `a4b2efb` (feat(mcp): add file filter and limit params to callers_of_class — closes #64; 613 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-67`. `describe_function` now accepts a `limit` parameter (default 50) with `_validate_limit()` guard and `LIMIT {limit}` in Cypher — closes issue #67. v0.1.72.
-- **Tests:** 611 passing (152 MCP tests, was 150), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-64`. `callers_of_class` now accepts a `file` parameter for class-name disambiguation and a `limit` parameter (default 50) — closes issues #64 and #239. v0.1.72.
+- **Tests:** 613 passing (154 MCP tests, was 152), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,11 +24,25 @@
 ## Shipped since the last roadmap update (commit `fa1a439`)
 
 ```
-bfa427b  fix(mcp): add limit parameter to describe_function to avoid unbounded result sets
-ab75cdc  feat(mcp): add find_function tool for searching functions and methods by name
-3ebd593  test(mcp): loosen queries.md count assertion to tolerate additions
+a4b2efb  feat(mcp): add file filter and limit params to callers_of_class (#64)
+2dd7b08  fix(mcp): add limit parameter to describe_function to avoid unbounded result sets (#240)
+ab75cdc  feat(mcp): add find_function tool for searching functions and methods by name (#238)
+3ebd593  test(mcp): loosen queries.md count assertion to tolerate additions (#236)
 fa1a439  fix(mcp): push query_graph limit into Cypher to avoid fetching all rows (#235)
 ```
+
+### mcp — add file filter and limit params to callers_of_class (issues #64 + #239)
+
+- `a4b2efb feat(mcp)` — Two files changed:
+
+  1. **`codegraph/codegraph/mcp.py`** — Added `file: Optional[str] = None` parameter to `callers_of_class` for class-name disambiguation (closes #64). Added `limit: int = 50` parameter with `_validate_limit()` guard to cap result sets (closes #239). Rewrote Cypher to split `MATCH` + `WHERE $file IS NULL OR target.file = $file` (mirrors `callers_of` pattern). Added `LIMIT {limit}` to the `ORDER BY` clause. Threaded `file=file` into `_run_read` bind params.
+
+  2. **`codegraph/tests/test_mcp.py`** — Three tests updated/added:
+     - Updated `test_callers_of_class_default_depth` to assert `file: None` in default params.
+     - `test_callers_of_class_with_file_filter` — asserts `file` param reaches Cypher bind params.
+     - `test_callers_of_class_rejects_bad_limit` — asserts `limit=0` returns a validation error.
+
+  - **Code review**: 0 issues. Tests: 613 passed (2 new), 10 skipped. Arch-check: 4/4 policies pass (1 skipped).
 
 ### mcp — add limit parameter to describe_function (issue #67)
 
