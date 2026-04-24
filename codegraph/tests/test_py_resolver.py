@@ -47,7 +47,7 @@ def _run_pipeline(
 
     pkg_config = load_python_package_config(repo_root, package_dir)
     resolver = Resolver(repo_root, [pkg_config])
-    edges = link_cross_file(index, resolver)
+    edges, _edge_groups = link_cross_file(index, resolver)
     return index, edges
 
 

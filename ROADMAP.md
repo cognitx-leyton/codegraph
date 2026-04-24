@@ -2,16 +2,16 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `09f9d8a` → `c8d4ad2` (feat(analyze): add Leiden community detection and graph analysis — closes #42; 732 tests passing, v0.1.92).
+> **Last updated:** 2026-04-24 after commits `09f9d8a` → `a6bcbe6` (feat(schema): add hyperedge EdgeGroup for protocol-implementer sets — closes #39; 726 tests passing, v0.1.92).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-42`. Leiden community detection now ships as `codegraph analyze` and auto-runs after `codegraph index` — closes issue #42. v0.1.92.
-- **Tests:** 732 passing (18 new in `test_analyze.py`), 10 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-39`. Hyperedge `:EdgeGroup` support ships as `EdgeGroupNode` + `MEMBER_OF` edges + `describe_group()` MCP tool — closes issue #39. v0.1.92.
+- **Tests:** 726 passing (12 new in `test_edgegroup.py`), 10 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
-- **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
+- **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
@@ -24,6 +24,7 @@
 ## Shipped since the last roadmap update (commit `09f9d8a`)
 
 ```
+a6bcbe6  feat(schema): add hyperedge EdgeGroup for protocol-implementer sets (issue #39)
 c8d4ad2  feat(analyze): add Leiden community detection and graph analysis (#42)
 09f9d8a  feat(benchmark): add token-reduction benchmark command (issue #43)
 85b18f2  feat(export): add interactive HTML and GraphML graph export command (#251)
@@ -32,6 +33,32 @@ c8d4ad2  feat(analyze): add Leiden community detection and graph analysis (#42)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### schema — hyperedge :EdgeGroup for protocol-implementer sets (issue #39)
+
+- `a6bcbe6 feat(schema)` — Seven files changed (2 new, 5 updated):
+
+  **New files:**
+
+  1. **`codegraph/tests/test_edgegroup.py`** (12 tests) — Covers `EdgeGroupNode` schema dataclass, `MEMBER_OF` edge constant, resolver protocol-implementer group emission, loader `_write_edge_groups()` persistence and stale-group cleanup, incremental-mode MEMBER_OF survival after DETACH DELETE, and `describe_group()` MCP tool.
+
+  2. **`codegraph/docs/hyperedges.md`** — New feature documentation: motivation, schema, Cypher examples, and limitations.
+
+  **Updated files:**
+
+  3. **`codegraph/codegraph/schema.py`** — Added `EdgeGroupNode` dataclass (fields: `id`, `kind`, `label`, `member_ids: list[str]`) and `MEMBER_OF = "MEMBER_OF"` edge-type constant.
+
+  4. **`codegraph/codegraph/resolver.py`** — Added protocol-implementer grouping post-pass in `link_cross_file()`. After all edges are resolved, classes that implement the same protocol are collected into an `EdgeGroupNode`. Return type changed from `list[Edge]` to `tuple[list[Edge], list[EdgeGroupNode]]`.
+
+  5. **`codegraph/codegraph/cli.py`** — Unpacks the new tuple return from `link_cross_file()`; passes `edge_groups` list to `loader.load()`.
+
+  6. **`codegraph/codegraph/loader.py`** — Added `_write_edge_groups(session, edge_groups)` with `MERGE`-based upsert and stale-group cleanup (deletes `EdgeGroup` nodes whose `member_ids` no longer match). Added `edge_groups` and `member_of_edges` stats counters. Fixed incremental-mode bug: `MEMBER_OF` edges for unchanged files were being lost after `DETACH DELETE` of stale subgraphs — now re-written unconditionally after each incremental pass.
+
+  7. **`codegraph/codegraph/mcp.py`** — Added `describe_group(group_id)` MCP tool (tool #17). Returns group label, kind, member count, and the list of member node IDs from the graph.
+
+  8. **`codegraph/queries.md`** — Section 13: Hyperedges / group relationships. Three Cypher examples: list all groups, members of a specific group, find nodes belonging to multiple groups.
+
+  - **Validation:** 726 tests pass (12 new), 10 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass.
 
 ### analyze — Leiden community detection and graph analysis (issue #42)
 
@@ -1275,16 +1302,17 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-42` |
+| Current branch | `archon/task-fix-issue-39` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`c8d4ad2` feat(analyze): add Leiden community detection and graph analysis — pending PR) |
+| Unpushed commits | 1 (`a6bcbe6` feat(schema): add hyperedge EdgeGroup for protocol-implementer sets — pending PR) |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/leiden-community-detection.plan.md`) |
-| Test count | 732 passing + 10 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/hyperedge-groups.plan.md`) |
+| Test count | 726 passing + 10 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `c8d4ad2`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"` after any `pyproject.toml` edit. |
+| Last editable install | After `a6bcbe6`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"` after any `pyproject.toml` edit. |
 | Wheel built? | Not yet for v0.1.92. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
+| New docs | `codegraph/docs/hyperedges.md` — EdgeGroup feature documentation. |
 
 ---
 
@@ -1503,6 +1531,8 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 
 1. **Live Claude Code client verification** (A2 above) — still unverified against a running Claude Code UI. Only smoke-tested via raw JSON-RPC pipe.
 
+7. **EdgeGroup ID collision edge case** — `EdgeGroupNode.id` is derived from a sorted, joined list of member IDs (`group:<kind>:<sorted_members>`). If two entirely different protocols happen to be implemented by the same set of classes (e.g. both `IFoo` and `IBar` are implemented by exactly `[ClassA, ClassB]`), they will collide into a single `EdgeGroup` node. In practice this is rare, but it is a known limitation of the current content-addressed ID scheme. A future fix would incorporate the protocol name into the group ID.
+
 2. ~~**Unresolved imports percentage** (B6)~~ — **SHIPPED** (`c6460d2`). Workspace registry + tsconfig extends chains implemented. Remaining unresolved imports are genuine third-party externals.
 
 3. ~~**Python Stage 2 priority vs. arch-check policy expansion vs. incremental re-indexing**~~ — B1 (Python Stage 2) and B2 (MCP prompts) are now shipped. Next priority: B3 (incremental re-indexing) vs. more arch-check policies vs. B4 (MCP write tools).
@@ -1573,6 +1603,7 @@ Repo-local plans under `.claude/plans/`:
 - `resolve-npm-tsconfig-presets.plan.md` — shipped as `ec94bff`.
 - `export-interactive-html.plan.md` — shipped as `6c45b48` (closes #44).
 - `leiden-community-detection.plan.md` — shipped as `c8d4ad2` (closes #42).
+- `hyperedge-groups.plan.md` — shipped as `a6bcbe6` (closes #39).
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 

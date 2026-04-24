@@ -79,7 +79,7 @@ def test_decorated_by_func_smoke_from_parser():
         e for e in result.edges
         if e.kind == DECORATED_BY and e.src_id.startswith("func:")
     ]
-    assert len(func_decs) == 16
+    assert len(func_decs) == 17
     assert all(e.dst_id == "dec:mcp.tool()" for e in func_decs)
 
 

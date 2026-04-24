@@ -225,6 +225,18 @@ class ExternalNode:
         return f"external:{self.specifier}"
 
 
+@dataclass
+class EdgeGroupNode:
+    name: str
+    kind: str          # 'protocol_implementers', 'community', etc.
+    node_count: int = 0
+    confidence: float = 1.0
+
+    @property
+    def id(self) -> str:
+        return f"edgegroup:{self.kind}:{self.name}"
+
+
 # ── Edges ────────────────────────────────────────────────────
 
 @dataclass
@@ -291,6 +303,9 @@ READS_ENV         = "READS_ENV"
 
 # Phase 9 — package / framework detection
 BELONGS_TO        = "BELONGS_TO"
+
+# Phase 10 — hyperedges / group relationships
+MEMBER_OF         = "MEMBER_OF"
 
 
 # ── Test-file pairing conventions ────────────────────────────

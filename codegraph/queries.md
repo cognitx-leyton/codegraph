@@ -249,3 +249,32 @@ WITH collect(DISTINCT c.file) + collect(DISTINCT dep.file) + collect(DISTINCT fe
 UNWIND files AS f
 RETURN DISTINCT f
 ```
+
+## 13. Hyperedges / group relationships
+
+```cypher
+// All edge groups with member counts
+MATCH (eg:EdgeGroup)
+OPTIONAL MATCH (member)-[:MEMBER_OF]->(eg)
+RETURN eg.id AS group_id, eg.name AS name, eg.kind AS kind,
+       eg.node_count AS declared_size, count(member) AS actual_members
+ORDER BY kind, name
+```
+
+```cypher
+// Members of a specific protocol-implementer group
+MATCH (eg:EdgeGroup {kind: 'protocol_implementers'})
+WHERE eg.name CONTAINS 'IEventHandler'
+MATCH (member)-[:MEMBER_OF]->(eg)
+RETURN eg.name AS group_name, labels(member)[0] AS member_kind,
+       member.name AS member_name, member.file AS member_file
+ORDER BY member_name
+```
+
+```cypher
+// Co-membership: classes that share a protocol group
+MATCH (a)-[:MEMBER_OF]->(eg:EdgeGroup {kind: 'protocol_implementers'})<-[:MEMBER_OF]-(b)
+WHERE a <> b
+RETURN a.name AS class_a, b.name AS class_b, eg.name AS shared_group
+ORDER BY shared_group, class_a
+```
