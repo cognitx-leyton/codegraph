@@ -66,6 +66,11 @@ python = [
   # `all` extra to enable the Python frontend.
   "tree-sitter-python>=0.23,<0.25",
 ]
+watch = [
+  # File-system watcher for auto graph rebuild on save.
+  # Optional because the hook-based workflow (post-commit) works without it.
+  "watchdog>=4.0",
+]
 test = [
   "pytest>=8.0",
   "pytest-cov>=5.0",

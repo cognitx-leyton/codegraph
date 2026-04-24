@@ -52,6 +52,8 @@ app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
+hook_app = typer.Typer(help="Manage codegraph git hooks (post-commit, post-checkout).")
+app.add_typer(hook_app, name="hook")
 console = Console()
 
 
@@ -970,6 +972,69 @@ def _emit_error(as_json: bool, kind: str, message: str) -> None:
         print(json.dumps({"ok": False, "error": kind, "message": message}, indent=2), file=sys.stdout)
     else:
         console.print(f"[bold red]{kind} error[/]\n{message}")
+
+
+# ── hook sub-app ────────────────────────────────────────────────────
+
+
+@hook_app.command(name="install")
+def hook_install() -> None:
+    """Install post-commit + post-checkout hooks that rebuild the graph."""
+    from .hooks import install as _install
+    try:
+        console.print(_install())
+    except RuntimeError as exc:
+        console.print(f"[bold red]error:[/] {exc}")
+        raise typer.Exit(code=1)
+
+
+@hook_app.command(name="uninstall")
+def hook_uninstall() -> None:
+    """Remove codegraph hooks (other hooks preserved)."""
+    from .hooks import uninstall as _uninstall
+    try:
+        console.print(_uninstall())
+    except RuntimeError as exc:
+        console.print(f"[bold red]error:[/] {exc}")
+        raise typer.Exit(code=1)
+
+
+@hook_app.command(name="status")
+def hook_status() -> None:
+    """Show whether codegraph hooks are installed."""
+    from .hooks import status as _status
+    console.print(_status())
+
+
+# ── watch ───────────────────────────────────────────────────────────
+
+
+@app.command()
+def watch(
+    repo: Path = typer.Argument(
+        Path("."), exists=True, file_okay=False,
+        help="Root of the repo to watch (default: cwd).",
+    ),
+    debounce: float = typer.Option(
+        3.0, "--debounce",
+        help="Seconds to wait after last change before rebuilding.",
+    ),
+    packages: Optional[list[str]] = typer.Option(
+        None, "--package", "-p",
+        help="Package to watch (repeatable). Defaults to codegraph.toml config.",
+    ),
+    uri: str = DEFAULT_URI,
+    user: str = DEFAULT_USER,
+    password: str = DEFAULT_PASS,
+) -> None:
+    """Watch for file changes and rebuild the graph incrementally."""
+    from .watch import run_watch
+    raise typer.Exit(code=run_watch(
+        repo=repo.resolve(),
+        debounce=debounce,
+        packages=packages,
+        uri=uri, user=user, password=password,
+    ))
 
 
 if __name__ == "__main__":

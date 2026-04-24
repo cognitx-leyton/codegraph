@@ -135,6 +135,7 @@ class InitConfig:
     install_ci: bool
     setup_neo4j: bool
     container_name: str
+    install_hooks: bool = True
     bolt_port: int = _DEFAULT_BOLT_PORT
     http_port: int = _DEFAULT_HTTP_PORT
     pipx_version: str = "0.2.0"
@@ -164,6 +165,7 @@ def _prompt_config(
             install_ci=True,
             setup_neo4j=True,
             container_name=f"cognitx-codegraph-{repo_name}-{path_hash}",
+            install_hooks=True,
             bolt_port=bolt_port if bolt_port is not None else _DEFAULT_BOLT_PORT,
             http_port=http_port if http_port is not None else _DEFAULT_HTTP_PORT,
             default_package_prefix=default_packages[0] + "/" if default_packages[0] != "." else "",
@@ -204,6 +206,10 @@ def _prompt_config(
     setup_neo4j = Confirm.ask(
         "Set up local Neo4j via docker-compose?", default=True
     )
+    install_hooks = Confirm.ask(
+        "Install git hooks (post-commit + post-checkout) for auto graph rebuild?",
+        default=True,
+    )
 
     return InitConfig(
         packages=packages,
@@ -212,6 +218,7 @@ def _prompt_config(
         install_ci=install_ci,
         setup_neo4j=setup_neo4j,
         container_name=f"cognitx-codegraph-{repo_name}-{path_hash}",
+        install_hooks=install_hooks,
         bolt_port=bolt_port if bolt_port is not None else _DEFAULT_BOLT_PORT,
         http_port=http_port if http_port is not None else _DEFAULT_HTTP_PORT,
         default_package_prefix=packages[0] + "/" if packages and packages[0] != "." else "",
@@ -477,6 +484,14 @@ def run_init(
         _warn_orphaned_containers(root, config, console)
 
     _scaffold_files(root, config, force=force, console=console)
+
+    if config.install_hooks:
+        from .hooks import install as _install_hooks
+        try:
+            result = _install_hooks(root)
+            console.print(f"[bold]Git hooks:[/] {result}")
+        except RuntimeError as exc:
+            console.print(f"[yellow]Git hooks:[/] {exc}")
 
     if config.setup_neo4j and not skip_docker:
         if not _start_and_wait_for_neo4j(root, config, console):
