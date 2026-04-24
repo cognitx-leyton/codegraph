@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `3f394de` → `09f9d8a` (feat(benchmark): add token-reduction benchmark command — closes #43; 714 tests passing, v0.1.91).
+> **Last updated:** 2026-04-24 after commits `09f9d8a` → `c8d4ad2` (feat(analyze): add Leiden community detection and graph analysis — closes #42; 732 tests passing, v0.1.92).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-43-v2`. Token-reduction benchmark now ships as `codegraph benchmark` and auto-runs after `codegraph index` — closes issue #43. v0.1.91.
-- **Tests:** 714 passing (17 new in `test_benchmark.py`), 10 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-42`. Leiden community detection now ships as `codegraph analyze` and auto-runs after `codegraph index` — closes issue #42. v0.1.92.
+- **Tests:** 732 passing (18 new in `test_analyze.py`), 10 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,9 +21,10 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `3f394de`)
+## Shipped since the last roadmap update (commit `09f9d8a`)
 
 ```
+c8d4ad2  feat(analyze): add Leiden community detection and graph analysis (#42)
 09f9d8a  feat(benchmark): add token-reduction benchmark command (issue #43)
 85b18f2  feat(export): add interactive HTML and GraphML graph export command (#251)
 343878b  feat(cache): prune stale cache entries after manifest save (#250)
@@ -31,6 +32,45 @@
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### analyze — Leiden community detection and graph analysis (issue #42)
+
+- `c8d4ad2 feat(analyze)` — Seven files changed (3 new, 4 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/analyze.py`** (~310 LOC) — Core analysis module. `read_graph(driver, scope)` fetches all nodes + edges from Neo4j into a `networkx.MultiDiGraph`. `partition_graph(G)` runs Leiden community detection (via `graspologic`) with an edge-count guard to handle the `EmptyNetworkError` on single-node or no-edge graphs. `compute_metrics(G, partition)` computes betweenness centrality (approximate, with `EmptyNetworkError` guard), degree centrality, and identifies bridge nodes (nodes whose removal increases connected components). `surprising_connections(G, partition)` returns cross-community edges ranked by a scoring function that rewards cross-package (+2) and unexpected structural coupling (high shared betweenness); deduplicates per unordered pair, keeping highest-scoring edge. `suggest_questions(G, partition, metrics)` generates high-value Cypher questions for the detected communities and bridges; `node_to_cid` map is hoisted outside the loop (O(n) not O(n²)). `persist_communities(driver, partition, metrics)` writes `community_id`, `betweenness_centrality`, and `degree_centrality` back to nodes using UNWIND batching (2 queries total regardless of graph size). `AnalysisResult` dataclass holds all outputs. `run_analysis(driver, scope)` is the CLI entry point.
+
+  2. **`codegraph/codegraph/report.py`** (~100 LOC) — Rich console printer. `print_analysis_summary(result)` renders community table (id, size, top 3 nodes by betweenness), bridge nodes, surprising connections, and suggested Cypher questions. `print_analysis_verbose(result)` adds full community membership and per-node centrality scores. `write_analysis_json(result, path)` serialises `AnalysisResult` to JSON. Imports wrapped in `try/except ImportError` for user-friendly error when `[analyze]` extra not installed.
+
+  3. **`codegraph/tests/test_analyze.py`** (18 tests) — Fixture-based, no Neo4j or real graph required. Covers `read_graph` (scoped + unscoped), `partition_graph` (multi-node, single-node edge-case, empty graph), `compute_metrics` (bridge detection, centrality), `surprising_connections` (cross-package boost, dedup keeps highest score), `suggest_questions`, `persist_communities` (UNWIND query shape), `run_analysis` happy path. All tests guarded via `pytest.importorskip("networkx")` / `pytest.importorskip("graspologic")`.
+
+  **Updated files:**
+
+  4. **`codegraph/pyproject.toml`** — Added `analyze` optional extra: `graspologic>=3.4; python_version < '3.13'`, `networkx>=3.0`. Install via `pip install "codegraph[analyze]"`.
+
+  5. **`codegraph/codegraph/config.py`** — Added `analyze: bool = True` field to `CodegraphConfig`. Parsed from `[analyze]` key in `codegraph.toml` / `pyproject.toml`. `merge_cli_overrides` honours `--no-analyze` flag.
+
+  6. **`codegraph/codegraph/loader.py`** — Added `EdgeGroup` constraint + index on `(source_id, target_id, edge_type)` — ensures no duplicate structural edges survive a reload. Added `community_id`, `betweenness_centrality`, `degree_centrality` property constraints to `File`/`Class`/`Function`/`Method` nodes.
+
+  7. **`codegraph/codegraph/cli.py`** — Added `--no-analyze` flag to `codegraph index`; auto-runs `run_analysis` after successful index (failures are warnings, never blocking). Scope auto-resolved from config (mirrors benchmark/export pattern: `load_config` → `merge_cli_overrides`). Added `codegraph report` standalone subcommand with `--json`, `--verbose`, `--scope`, `--out` flags (mirrors `codegraph benchmark` pattern). Eager `from analyze import ...` guarded with try/except + user-friendly error when `[analyze]` extra not installed.
+
+  **Code review (13 issues found, 11 fixed):**
+  - `[HIGH]` `networkx` missing from test extra → `pytest.importorskip("networkx")` guards in every test.
+  - `[MEDIUM]` Unbatched `persist_communities` (N+2 queries per community) → UNWIND batching (2 queries total).
+  - `[MEDIUM]` `node_to_cid` rebuilt per `suggest_questions` loop iteration → hoisted outside loop.
+  - `[MEDIUM]` `surprising_connections` dedup dropped higher-scoring edges → `best_per_pair` dict keeps highest.
+  - `[MEDIUM]` Auto-analyze scope not resolved from config → mirrors `load_config`/`merge_cli_overrides` pattern.
+  - `[MEDIUM]` No test for `read_graph` → added 2 tests (scoped + unscoped).
+  - `[LOW]` Unused `import os` → removed.
+  - `[LOW]` CALLS mislabeled as "rare edge type" → removed CALLS bonus, renamed to "structural coupling".
+  - `[LOW]` Small-graph threshold too aggressive → min threshold raised to 6.
+  - `[LOW]` Eager import in `report` subcommand without error handling → try/except with friendly message.
+  - `[ACCEPTED]` Thread-unsafe stdout redirect in `report` — CLI-only tool, acceptable.
+  - `[ACCEPTED]` `config.analyze` field not gating auto-step — consistent with export/benchmark (no config field gates auto-steps); available for programmatic use.
+  - `[ACCEPTED]` Bare `except Exception: pass` on betweenness — degenerate graph guard; betweenness is non-critical.
+
+  - **Validation:** 732 tests pass (18 new), 10 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass. `codegraph analyze --help` and `codegraph report --help` verified. Edge-count guard confirmed by single-node test.
 
 ### benchmark — token-reduction benchmark command (issue #43)
 
@@ -1235,16 +1275,16 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-43-v2` |
+| Current branch | `archon/task-fix-issue-42` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`09f9d8a` feat(benchmark): add token-reduction benchmark command — pending PR) |
+| Unpushed commits | 1 (`c8d4ad2` feat(analyze): add Leiden community detection and graph analysis — pending PR) |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/benchmark-token-reduction.plan.md`) |
-| Test count | 714 passing + 10 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/leiden-community-detection.plan.md`) |
+| Test count | 732 passing + 10 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `09f9d8a`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
-| Wheel built? | Not yet for v0.1.91. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
+| Last editable install | After `c8d4ad2`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"` after any `pyproject.toml` edit. |
+| Wheel built? | Not yet for v0.1.92. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
 
 ---
 
@@ -1255,13 +1295,14 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 ```bash
 cd codegraph
 python3 -m venv .venv
-.venv/bin/pip install -e ".[python,mcp,test,watch]"
+.venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"
 ```
 
 - `[python]` enables tree-sitter-python (Stage 1 Python frontend).
 - `[mcp]` installs the FastMCP stdio server.
 - `[test]` installs pytest + pytest-cov.
 - `[watch]` installs watchdog ≥4.0 for `codegraph watch`.
+- `[analyze]` installs graspologic + networkx for `codegraph analyze` / `codegraph report`.
 - All CLI-level invocations of `codegraph` / `codegraph-mcp` must go through `.venv/bin/` OR be installed via `pipx install cognitx-codegraph` (which ships with Python 3.10+ and the tool lives on PATH).
 
 ### Neo4j
@@ -1531,6 +1572,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-mcp-file-level-exposes.plan.md` — shipped as `75af831`.
 - `resolve-npm-tsconfig-presets.plan.md` — shipped as `ec94bff`.
 - `export-interactive-html.plan.md` — shipped as `6c45b48` (closes #44).
+- `leiden-community-detection.plan.md` — shipped as `c8d4ad2` (closes #42).
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
