@@ -60,9 +60,8 @@ def _run_protocol_grouping(edges: list[Edge]):
     for iface_id, implementers in iface_to_implementers.items():
         if len(implementers) < 2:
             continue
-        iface_name = iface_id.rsplit("#", 1)[-1] if "#" in iface_id else iface_id
         eg = EdgeGroupNode(
-            name=f"{iface_name} implementers",
+            name=f"{iface_id} implementers",
             kind="protocol_implementers",
             node_count=len(implementers),
         )
@@ -87,7 +86,7 @@ def test_protocol_group_three_implementers():
     assert len(groups) == 1
     eg = groups[0]
     assert eg.kind == "protocol_implementers"
-    assert eg.name == "IHandler implementers"
+    assert eg.name == "class:pkg/base.py#IHandler implementers"
     assert eg.node_count == 3
 
     member_of = [e for e in edges if e.kind == MEMBER_OF_CONST]
@@ -117,8 +116,8 @@ def test_multiple_interfaces_multiple_groups():
     edges, groups = _run_protocol_grouping(edges)
     assert len(groups) == 2
     names = {g.name for g in groups}
-    assert "IA implementers" in names
-    assert "IB implementers" in names
+    assert "class:pkg/base.py#IA implementers" in names
+    assert "class:pkg/base.py#IB implementers" in names
 
 
 # ── Loader tests ─────────────────────────────────────────────────────

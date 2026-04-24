@@ -739,9 +739,10 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
     for iface_id, implementers in iface_to_implementers.items():
         if len(implementers) < 2:
             continue
-        iface_name = iface_id.rsplit("#", 1)[-1] if "#" in iface_id else iface_id
+        # Use full iface_id in name to avoid collisions between
+        # same-named interfaces in different files.
         eg = EdgeGroupNode(
-            name=f"{iface_name} implementers",
+            name=f"{iface_id} implementers",
             kind="protocol_implementers",
             node_count=len(implementers),
         )
