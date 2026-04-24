@@ -2,16 +2,16 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `5573811` (test(mcp): loosen queries.md count assertion to tolerate additions — closes #69; 604 tests passing, v0.1.72).
+> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `ab23363` (feat(mcp): add find_function tool — closes #68; 609 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-69-v2`. Test assertion for `queries.md` catalog count loosened: `== 29` → `>= 29` with a `"schema-overview"` smoke-check so additions don't break CI but mass deletions and real parser regressions are still caught. Closes issue #69. v0.1.72.
-- **Tests:** 604 passing (145 MCP tests, was 143), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-68`. New `find_function` MCP tool added — searches `Function` and `Method` nodes by name pattern, mirrors `find_class` with `kind` discriminator. Closes issue #68. v0.1.72.
+- **Tests:** 609 passing (150 MCP tests, was 145), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
-- **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
+- **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
@@ -24,9 +24,24 @@
 ## Shipped since the last roadmap update (commit `fa1a439`)
 
 ```
-5573811  test(mcp): loosen queries.md count assertion to tolerate additions
+ab23363  feat(mcp): add find_function tool for searching functions and methods by name
+3ebd593  test(mcp): loosen queries.md count assertion to tolerate additions
 fa1a439  fix(mcp): push query_graph limit into Cypher to avoid fetching all rows (#235)
 ```
+
+### mcp — add find_function tool (issue #68)
+
+- `ab23363 feat(mcp)` — Four files changed:
+
+  1. **`codegraph/codegraph/mcp.py`** — New `find_function(name_pattern, limit)` tool inserted after `find_class` (line 524). Cypher: `MATCH (n) WHERE (n:Function OR n:Method) AND n.name CONTAINS $name_pattern RETURN DISTINCT labels(n)[0] AS kind, n.name, n.file, n.docstring, n.return_type ORDER BY n.file, n.name LIMIT {limit}`. Returns `kind` (discriminates `Function` vs `Method`), `name`, `file`, `docstring`, `return_type`. Backed by existing `func_name` and `method_name` indexes (loader.py:121-122). Uses same `_validate_limit()` guard and `$name_pattern` bind parameter as sibling tools — no injection surface.
+
+  2. **`codegraph/tests/test_mcp.py`** — 3 dedicated tests: `test_find_function_happy_path` (Cypher content + param assertions), `test_find_function_rejects_empty_pattern`, `test_find_function_rejects_bad_limit`. `find_function` lambda added to both `test_new_tools_surface_client_error` and `test_new_tools_surface_service_unavailable` parametrized lists.
+
+  3. **`codegraph/tests/test_py_parser.py`** — Tool decorator count bumped 15 → 16.
+
+  4. **`codegraph/tests/test_loader_partitioning.py`** — Function decorator count bumped 15 → 16.
+
+  - **Code review**: 0 issues. Tests: 609 passed (5 new), 10 skipped, 1 deselected. Arch-check: 4/4 policies pass (1 skipped).
 
 ### mcp — loosen queries.md count assertion to tolerate additions (issue #69)
 
