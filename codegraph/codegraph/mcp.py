@@ -628,7 +628,7 @@ def callers_of(
 
 
 @mcp.tool()
-def describe_function(name: str, file: Optional[str] = None) -> list[dict]:
+def describe_function(name: str, file: Optional[str] = None, limit: int = 50) -> list[dict]:
     """Return rich signature info for functions and methods matching ``name``.
 
     Projects ``docstring``, ``params_json``, ``return_type`` and the list of
@@ -641,7 +641,11 @@ def describe_function(name: str, file: Optional[str] = None) -> list[dict]:
         name: Exact ``:Function.name`` or ``:Method.name``.
         file: Optional exact file path (``:File.path``) to disambiguate
             collisions across modules.
+        limit: Max rows to return.  Integer in 1..1000, default 50.
     """
+    err = _validate_limit(limit)
+    if err:
+        return [{"error": err}]
     cypher = (
         "MATCH (n) WHERE (n:Function OR n:Method) AND n.name = $name "
         "  AND ($file IS NULL OR n.file = $file) "
@@ -650,7 +654,7 @@ def describe_function(name: str, file: Optional[str] = None) -> list[dict]:
         "RETURN labels(n)[0] AS kind, n.name AS name, n.file AS file, "
         "       n.docstring AS docstring, n.params_json AS params_json, "
         "       n.return_type AS return_type, decorators "
-        "ORDER BY n.file, n.name"
+        f"ORDER BY n.file, n.name LIMIT {limit}"
     )
     return _run_read(cypher, name=name, file=file)
 

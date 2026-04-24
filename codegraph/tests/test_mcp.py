@@ -414,6 +414,19 @@ def test_describe_function_no_decorators(monkeypatch):
     assert out[0]["return_type"] is None
 
 
+def test_describe_function_rejects_bad_limit(monkeypatch):
+    _patch(monkeypatch, [[]])
+    out = mcp_mod.describe_function("parse", limit=0)
+    assert out == [{"error": "limit must be an integer in 1..1000"}]
+
+
+def test_describe_function_interpolates_custom_limit(monkeypatch):
+    driver = _patch(monkeypatch, [[]])
+    mcp_mod.describe_function("parse", limit=10)
+    cypher, _ = driver.session_obj.calls[0]
+    assert "LIMIT 10" in cypher
+
+
 # ── endpoints_for_controller ────────────────────────────────────────
 
 

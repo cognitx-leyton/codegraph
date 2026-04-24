@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `ab23363` (feat(mcp): add find_function tool — closes #68; 609 tests passing, v0.1.72).
+> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `bfa427b` (fix(mcp): add limit parameter to describe_function — closes #67; 611 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-68`. New `find_function` MCP tool added — searches `Function` and `Method` nodes by name pattern, mirrors `find_class` with `kind` discriminator. Closes issue #68. v0.1.72.
-- **Tests:** 609 passing (150 MCP tests, was 145), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-67`. `describe_function` now accepts a `limit` parameter (default 50) with `_validate_limit()` guard and `LIMIT {limit}` in Cypher — closes issue #67. v0.1.72.
+- **Tests:** 611 passing (152 MCP tests, was 150), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,10 +24,23 @@
 ## Shipped since the last roadmap update (commit `fa1a439`)
 
 ```
-ab23363  feat(mcp): add find_function tool for searching functions and methods by name
+bfa427b  fix(mcp): add limit parameter to describe_function to avoid unbounded result sets
+ab75cdc  feat(mcp): add find_function tool for searching functions and methods by name
 3ebd593  test(mcp): loosen queries.md count assertion to tolerate additions
 fa1a439  fix(mcp): push query_graph limit into Cypher to avoid fetching all rows (#235)
 ```
+
+### mcp — add limit parameter to describe_function (issue #67)
+
+- `bfa427b fix(mcp)` — Two files changed:
+
+  1. **`codegraph/codegraph/mcp.py`** — Added `limit: int = 50` parameter to `describe_function`. Guarded with existing `_validate_limit()`. Added `LIMIT {limit}` to the Cypher query. Matches the bounded-result-set pattern already in `find_function`, `calls_from`, `find_class`, and every other multi-row tool.
+
+  2. **`codegraph/tests/test_mcp.py`** — Two new tests:
+     - `test_describe_function_rejects_bad_limit` — verifies `limit=0` returns an error dict.
+     - `test_describe_function_interpolates_custom_limit` — verifies `limit=10` appears in the generated Cypher.
+
+  - **Code review**: 0 issues. Tests: 611 passed (2 new), 0 failures. Arch-check: 4/4 policies pass (1 skipped).
 
 ### mcp — add find_function tool (issue #68)
 
