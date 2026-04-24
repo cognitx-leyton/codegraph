@@ -13,6 +13,7 @@ from .schema import (
     ClassNode,
     DECLARES_CONTROLLER,
     Edge,
+    EdgeGroupNode,
     EXPORTS_PROVIDER,
     EXTENDS,
     FunctionNode,
@@ -21,6 +22,7 @@ from .schema import (
     IMPORTS_MODULE,
     IMPORTS_SYMBOL,
     INJECTS,
+    MEMBER_OF,
     MethodNode,
     PackageNode,
     ParseResult,
@@ -498,7 +500,7 @@ def _url_pattern_to_regex(path_template: str) -> re.Pattern:
 
 # ── Cross-file linker ────────────────────────────────────────
 
-def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
+def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[EdgeGroupNode]]:
     """Emit all cross-file edges in one pass."""
     edges: list[Edge] = []
 
@@ -727,13 +729,37 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
                 props={"hook": hook},
             ))
 
+    # -- Protocol-implementer groups --
+    iface_to_implementers: dict[str, list[str]] = {}
+    for e in edges:
+        if e.kind == IMPLEMENTS:
+            iface_to_implementers.setdefault(e.dst_id, []).append(e.src_id)
+
+    edge_groups: list[EdgeGroupNode] = []
+    for iface_id, implementers in iface_to_implementers.items():
+        if len(implementers) < 2:
+            continue
+        iface_name = iface_id.rsplit("#", 1)[-1] if "#" in iface_id else iface_id
+        eg = EdgeGroupNode(
+            name=f"{iface_name} implementers",
+            kind="protocol_implementers",
+            node_count=len(implementers),
+        )
+        edge_groups.append(eg)
+        for impl_id in implementers:
+            edges.append(Edge(
+                kind=MEMBER_OF,
+                src_id=impl_id,
+                dst_id=eg.id,
+            ))
+
     edges.append(Edge(
         kind="__STATS__",
         src_id="",
         dst_id="",
         props={"total_imports": total_imports, "unresolved_imports": unresolved_count},
     ))
-    return edges
+    return edges, edge_groups
 
 
 def _caller_id_for_fn(rel: str, caller_name: str, index: Index) -> str:

@@ -20,6 +20,7 @@ from .schema import (
     DEFINES_ATOM,
     DEFINES_IFACE,
     Edge,
+    EdgeGroupNode,
     EMITS_EVENT,
     EXPOSES,
     EXPORTS_PROVIDER,
@@ -35,6 +36,7 @@ from .schema import (
     IMPORTS_SYMBOL,
     INJECTS,
     LAST_MODIFIED_BY,
+    MEMBER_OF,
     OWNED_BY,
     PackageNode,
     PROVIDES,
@@ -143,6 +145,8 @@ class LoadStats:
     atoms: int = 0
     packages: int = 0
     belongs_to_edges: int = 0
+    edge_groups: int = 0
+    member_of_edges: int = 0
     edges: dict = field(default_factory=dict)
 
 
@@ -209,6 +213,7 @@ class Neo4jLoader:
         edges: list[Edge],
         ownership: dict | None = None,
         touched_files: set[str] | None = None,
+        edge_groups: list[EdgeGroupNode] | None = None,
     ) -> LoadStats:
         stats = LoadStats()
         files = [r.file for r in index.files_by_path.values()]
@@ -475,6 +480,7 @@ class Neo4jLoader:
                  [dict(name=e) for e in events])
 
             # ── Edges ─────────────────────────────────────────────
+            all_edges = edges
             if touched_files is not None:
                 edges = [
                     e for e in edges
@@ -492,6 +498,11 @@ class Neo4jLoader:
             # ── Ownership (Phase 7) ───────────────────────────────
             if ownership is not None:
                 _write_ownership(s, ownership, stats)
+
+            # ── Edge groups (Phase 10) ───────────────────────────
+            # Use unfiltered edges so MEMBER_OF edges survive incremental mode.
+            if edge_groups:
+                _write_edge_groups(s, edge_groups, all_edges, stats)
 
         return stats
 
@@ -976,3 +987,39 @@ def _write_ownership(session, ownership: dict, stats: LoadStats) -> None:
         MERGE (f)-[:OWNED_BY]->(t)
     """, owned)
     stats.edges[OWNED_BY] = len(owned)
+
+
+def _write_edge_groups(
+    session, edge_groups: list[EdgeGroupNode], edges: list[Edge], stats: LoadStats,
+) -> None:
+    """Phase 10: persist EdgeGroup nodes + MEMBER_OF edges from resolver."""
+    # Clean stale protocol-implementer groups (community groups are managed by analyze.py)
+    session.run("MATCH (eg:EdgeGroup {kind: 'protocol_implementers'}) DETACH DELETE eg")
+
+    # Batch MERGE EdgeGroup nodes
+    eg_rows = [
+        dict(id=eg.id, name=eg.name, kind=eg.kind,
+             node_count=eg.node_count, confidence=eg.confidence)
+        for eg in edge_groups
+    ]
+    _run(session, """
+        UNWIND $rows AS r
+        MERGE (eg:EdgeGroup {id: r.id})
+        SET eg.name = r.name, eg.kind = r.kind,
+            eg.node_count = r.node_count, eg.confidence = r.confidence
+    """, eg_rows)
+    stats.edge_groups = len(edge_groups)
+
+    # Batch MERGE MEMBER_OF edges
+    member_rows = [
+        dict(src_id=e.src_id, dst_id=e.dst_id)
+        for e in edges if e.kind == MEMBER_OF
+    ]
+    _run(session, """
+        UNWIND $rows AS r
+        MATCH (n) WHERE n.id = r.src_id
+        MATCH (eg:EdgeGroup {id: r.dst_id})
+        MERGE (n)-[:MEMBER_OF]->(eg)
+    """, member_rows)
+    stats.member_of_edges = len(member_rows)
+    stats.edges[MEMBER_OF] = len(member_rows)

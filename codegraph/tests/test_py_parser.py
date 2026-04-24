@@ -51,7 +51,7 @@ def test_parses_entire_codegraph_package():
 
 def test_schema_py_class_count():
     result = _parse(CODEGRAPH_PKG / "schema.py")
-    assert len(result.classes) == 17
+    assert len(result.classes) == 18
     names = {c.name for c in result.classes}
     assert "PackageNode" in names
     assert "FileNode" in names
@@ -68,7 +68,7 @@ def test_schema_py_dataclass_decorators():
         e for e in result.edges
         if e.kind == DECORATED_BY and e.dst_id == "dec:dataclass"
     ]
-    assert len(dataclass_edges) == 17
+    assert len(dataclass_edges) == 18
 
 
 def test_schema_py_imports():
@@ -85,7 +85,7 @@ def test_schema_py_defines_class_edges():
     """Every class should have a DEFINES_CLASS edge from the file."""
     result = _parse(CODEGRAPH_PKG / "schema.py")
     defines = [e for e in result.edges if e.kind == DEFINES_CLASS]
-    assert len(defines) == 17
+    assert len(defines) == 18
 
 
 # ── mcp.py ground-truth ─────────────────────────────────────────────
@@ -98,7 +98,7 @@ def test_mcp_py_tool_decorators():
         e for e in result.edges
         if e.kind == DECORATED_BY and "mcp.tool" in e.dst_id
     ]
-    assert len(tool_edges) == 16
+    assert len(tool_edges) == 17
 
 
 def test_mcp_py_module_functions():

@@ -507,6 +507,45 @@ def most_injected_services(limit: int = 20) -> list[dict]:
 
 
 @mcp.tool()
+def describe_group(
+    name_or_id: str, kind: Optional[str] = None, limit: int = 50,
+) -> list[dict]:
+    """Describe an :EdgeGroup and list its members.
+
+    Matches by exact ``id`` or by substring on ``name``. Optionally filter
+    by ``kind`` (e.g. ``'protocol_implementers'``, ``'community'``).
+
+    Args:
+        name_or_id: Non-empty string to match. Checked against ``id`` (exact)
+            and ``name`` (CONTAINS).
+        kind: If given, restrict to EdgeGroups with this ``kind`` value.
+        limit: Max member rows to return. Integer in 1..1000, default 50.
+    """
+    if not name_or_id or not name_or_id.strip():
+        return [{"error": "name_or_id must be non-empty"}]
+    err = _validate_limit(limit)
+    if err:
+        return [{"error": err}]
+    kind_clause = "AND eg.kind = $kind " if kind else ""
+    cypher = (
+        "MATCH (eg:EdgeGroup) "
+        f"WHERE (eg.id = $q OR eg.name CONTAINS $q) {kind_clause}"
+        "OPTIONAL MATCH (member)-[:MEMBER_OF]->(eg) "
+        "RETURN eg.id AS group_id, eg.name AS group_name, eg.kind AS group_kind, "
+        "       eg.node_count AS group_size, eg.confidence AS confidence, "
+        "       eg.cohesion AS cohesion, "
+        "       labels(member)[0] AS member_kind, "
+        "       coalesce(member.name, member.id) AS member_name, "
+        "       member.file AS member_file "
+        f"ORDER BY group_name, member_name LIMIT {limit}"
+    )
+    params: dict[str, Any] = {"q": name_or_id.strip()}
+    if kind:
+        params["kind"] = kind
+    return _run_read(cypher, **params)
+
+
+@mcp.tool()
 def find_class(name_pattern: str, limit: int = 50) -> list[dict]:
     """Case-sensitive substring search over class names.
 

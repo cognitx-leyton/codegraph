@@ -515,7 +515,7 @@ def _run_index(
     say("[bold]Resolving imports + references…")
     resolver = Resolver(repo, pkg_configs)
     t0 = time.time()
-    all_edges = link_cross_file(index_obj, resolver)
+    all_edges, edge_groups = link_cross_file(index_obj, resolver)
     stats_edge = next((e for e in all_edges if e.kind == "__STATS__"), None)
     total_imports = unresolved_imports = 0
     if stats_edge:
@@ -563,6 +563,7 @@ def _run_index(
             [e for e in all_edges if e.kind != "__STATS__"],
             ownership=ownership,
             touched_files=changed_files,
+            edge_groups=edge_groups,
         )
         say(f"[bold green]✓[/] loaded in {time.time()-t0:.1f}s")
     finally:
