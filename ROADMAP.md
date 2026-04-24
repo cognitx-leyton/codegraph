@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `a4b2efb` (feat(mcp): add file filter and limit params to callers_of_class — closes #64; 613 tests passing, v0.1.72).
+> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `32a5d44` (feat(mcp): add class_name to find_function results — closes #241; 613 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-64`. `callers_of_class` now accepts a `file` parameter for class-name disambiguation and a `limit` parameter (default 50) — closes issues #64 and #239. v0.1.72.
-- **Tests:** 613 passing (154 MCP tests, was 152), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-241`. `find_function` now returns `class_name` for methods (null for standalone functions) — closes issue #241. v0.1.72.
+- **Tests:** 613 passing (154 MCP tests), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,12 +24,23 @@
 ## Shipped since the last roadmap update (commit `fa1a439`)
 
 ```
+32a5d44  feat(mcp): add class_name to find_function results (#241)
 a4b2efb  feat(mcp): add file filter and limit params to callers_of_class (#64)
 2dd7b08  fix(mcp): add limit parameter to describe_function to avoid unbounded result sets (#240)
 ab75cdc  feat(mcp): add find_function tool for searching functions and methods by name (#238)
 3ebd593  test(mcp): loosen queries.md count assertion to tolerate additions (#236)
 fa1a439  fix(mcp): push query_graph limit into Cypher to avoid fetching all rows (#235)
 ```
+
+### mcp — add class_name to find_function results (issue #241)
+
+- `32a5d44 feat(mcp)` — Two files changed:
+
+  1. **`codegraph/codegraph/mcp.py`** — Added `OPTIONAL MATCH (c:Class)-[:HAS_METHOD]->(n)` between the main `MATCH`/`WHERE` clause and the `RETURN` in `find_function`. Projected `c.name AS class_name` in the `RETURN` clause. Standalone functions return `class_name: null`; methods return the owning class name. Uses `OPTIONAL MATCH` (not `MATCH`) so functions with no owning class still appear in results.
+
+  2. **`codegraph/tests/test_mcp.py`** — Updated `test_find_function_happy_path`: mock data for the Function row now includes `class_name: None`, mock data for the Method row includes `class_name: "RequestParser"`. Added assertions `assert out[0]["class_name"] is None` and `assert out[1]["class_name"] == "RequestParser"`.
+
+  - **Code review**: 0 issues. Tests: 613 passed, 10 skipped, 1 deselected. Arch-check: 4/4 policies pass (1 skipped).
 
 ### mcp — add file filter and limit params to callers_of_class (issues #64 + #239)
 
@@ -1054,12 +1065,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-80` |
+| Current branch | `archon/task-fix-issue-241` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`5d62ff8` — feat(init): add --bolt-port and --http-port options to codegraph init, pending PR) |
-| Open PR | None. PR #231 (issue #87 — orphan_detection exclude_prefixes/names) merged to main. |
-| Working tree | Clean (untracked: `.claude/plans/fix-init-docker-test.plan.md`) |
-| Test count | 590 passing + 10 skipped + 1 deselected |
+| Unpushed commits | 1 (`32a5d44` — feat(mcp): add class_name to find_function results, pending PR) |
+| Open PR | None. PR #242 (issue #64 — callers_of_class file/limit params) merged to main. |
+| Working tree | Clean (untracked: `.claude/plans/find-function-class-name.plan.md`) |
+| Test count | 613 passing + 10 skipped + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
