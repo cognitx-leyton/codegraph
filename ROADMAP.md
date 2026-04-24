@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `730122e` (docs(mcp): fix README MCP tool table — all 16 tools documented — closes #237; 613 tests passing, v0.1.72).
+> **Last updated:** 2026-04-24 after commits `489d404` → `be939bc` (feat(watch,hooks): add codegraph watch and hook install/uninstall commands — closes #47; 652 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-237`. README MCP tool table updated to document all 16 tools accurately (was missing 5 tools, had stale `callers_of_class` signature, said "Five tools") — closes issue #237. v0.1.72.
-- **Tests:** 613 passing (154 MCP tests), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-47`. `codegraph watch` (watchdog-based incremental re-index on file change) and `codegraph hook install/uninstall/status` (git hook management) shipped — closes issue #47. v0.1.72.
+- **Tests:** 652 passing (19 new test_hooks + 19 new test_watch + 1 new param-forwarding test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,10 +21,11 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `4a0d1f7`)
+## Shipped since the last roadmap update (commit `489d404`)
 
 ```
-730122e  docs(mcp): update MCP tool table to reflect all 16 tools (#237)
+be939bc  feat(watch,hooks): add codegraph watch and hook install/uninstall commands (#47)
+489d404  docs(mcp): update README MCP tool table to list all 16 tools (#244)
 b133484  feat(mcp): add class_name to find_function results (#243)
 435f007  feat(mcp): add file filter and limit params to callers_of_class (#242)
 2dd7b08  fix(mcp): add limit parameter to describe_function to avoid unbounded result sets (#240)
@@ -32,6 +33,35 @@ ab75cdc  feat(mcp): add find_function tool for searching functions and methods b
 3ebd593  test(mcp): loosen queries.md count assertion to tolerate additions (#236)
 fa1a439  fix(mcp): push query_graph limit into Cypher to avoid fetching all rows (#235)
 ```
+
+### watch + hooks — `codegraph watch` and `codegraph hook` commands (issue #47)
+
+- `be939bc feat(watch,hooks)` — Six files changed (4 new, 2 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/hooks.py`** (~190 LOC) — Git hook install/uninstall/status. `git_root()` walks up from CWD; `hooks_dir()` returns `.git/hooks/`. `install(repo, hooks)` writes marker-delimited `### codegraph:begin/end ###` sections into each hook script — idempotent (replaces existing section on re-run), preserves foreign content, inserts shebang + `set -e` when creating fresh. `uninstall(repo, hooks)` strips only the managed section. `status(repo)` reports installed/not-installed per hook. All three raise `RuntimeError` outside a git repo. Interpreter is detected from `sys.executable`. Rebase/merge guard (`ORIG_HEAD`/`MERGE_HEAD`) skips re-indexing when git is mid-operation.
+
+  2. **`codegraph/codegraph/watch.py`** (~130 LOC) — Watchdog-based file watcher with debounce. `WATCH_EXTENSIONS = {".py", ".ts", ".tsx"}`. `_RebuildHandler` (subclasses `FileSystemEventHandler`) filters events by extension and dotpath; accumulates pending paths; after `debounce_s` seconds of quiet calls `_rebuild()`. `_rebuild()` spawns `codegraph index <repo> --since HEAD --json [--uri ...] [--user ...] [--password ...] [-p ...]` as a subprocess — all connection params and package filters forwarded. `watch()` starts the Observer; `run_watch()` is the CLI entry point. Import guard: `watchdog` import is deferred inside functions so the module can be imported without `watchdog` installed (enables testing without the extra).
+
+  3. **`codegraph/tests/test_hooks.py`** (~160 LOC, 19 tests) — `git_root`, `hooks_dir`, install (fresh/idempotent/append to existing), uninstall (clean section / preserve foreign content), status (installed/not-installed), error cases (non-git dir, missing `.git/hooks`).
+
+  4. **`codegraph/tests/test_watch.py`** (~140 LOC, 19 tests + 1 new param-forwarding test) — constants, `_RebuildHandler` filtering (accept/reject by extension / dotpath / directory events), debounce logic, rebuild subprocess invocation, connection param forwarding (`--uri`/`--user`/`--password`/`-p` reach the subprocess), import guard.
+
+  **Updated files:**
+
+  5. **`codegraph/codegraph/cli.py`** — Added `hook` Typer sub-app with three commands (`hook install`, `hook uninstall`, `hook status`). Each wraps the corresponding `hooks.*` function and catches `RuntimeError` cleanly (exit code 1 + error message) rather than tracebacks. Added `watch` command with `--debounce / --package / --uri / --user / --password` options; all connection params forwarded through to `_rebuild()`.
+
+  6. **`codegraph/codegraph/init.py`** — Added `install_hooks: bool = True` to `InitConfig`. Interactive prompt added after Neo4j setup step. `run_init()` calls `hooks.install()` after `_scaffold_files()` when `config.install_hooks` is `True`. Wrapped in try/except to gracefully handle non-git repos.
+
+  **Code review (3 issues found and fixed):**
+  - `[HIGH]` `--uri/--user/--password/--package` silently ignored by `codegraph watch` — `_rebuild()` now accepts and forwards all connection params + package filters to the subprocess command.
+  - `[MEDIUM]` `codegraph hook install/uninstall` produced Python tracebacks outside a git repo — wrapped in `try/except RuntimeError` with clean error message + exit code 1.
+  - `[LOW]` Unused `MagicMock` import in `test_hooks.py` — removed.
+
+  **`pyproject.toml`** — Added `watch = ["watchdog>=4.0"]` optional extra. Install via `pip install "codegraph[watch]"`.
+
+  - **Validation**: 652 tests pass, 0 failures, byte-compile clean. `codegraph hook --help` shows install/uninstall/status. `codegraph watch --help` shows all expected options.
 
 ### mcp — fix README MCP tool table to document all 16 tools (issue #237)
 
@@ -1080,12 +1110,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-237` |
+| Current branch | `archon/task-fix-issue-47` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`730122e` — docs(mcp): update MCP tool table to reflect all 16 tools, pending PR) |
-| Open PR | None. PR #243 (issue #241 — class_name in find_function) merged to main. |
-| Working tree | Clean (untracked: `.claude/plans/readme-mcp-tool-table.plan.md`) |
-| Test count | 613 passing + 10 skipped + 1 deselected |
+| Unpushed commits | 1 (`be939bc` — feat(watch,hooks): add codegraph watch and hook install/uninstall commands, pending PR) |
+| Open PR | None. PR #244 (docs(mcp): update README MCP tool table) merged to main. |
+| Working tree | Clean (untracked: `.claude/plans/watch-and-hooks.plan.md`) |
+| Test count | 652 passing + 10 skipped + 1 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -1100,12 +1130,13 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 ```bash
 cd codegraph
 python3 -m venv .venv
-.venv/bin/pip install -e ".[python,mcp,test]"
+.venv/bin/pip install -e ".[python,mcp,test,watch]"
 ```
 
 - `[python]` enables tree-sitter-python (Stage 1 Python frontend).
 - `[mcp]` installs the FastMCP stdio server.
 - `[test]` installs pytest + pytest-cov.
+- `[watch]` installs watchdog ≥4.0 for `codegraph watch`.
 - All CLI-level invocations of `codegraph` / `codegraph-mcp` must go through `.venv/bin/` OR be installed via `pipx install cognitx-codegraph` (which ships with Python 3.10+ and the tool lives on PATH).
 
 ### Neo4j
@@ -1298,7 +1329,7 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 - **Go parser frontend** — big tree-sitter work, not the bottleneck.
 - **`knowledge_enricher` LLM-powered semantic pass** — biggest bet from the agent-onboarding analysis. Revisit once real-world MCP usage surfaces questions worth enriching.
 - **Web UI / dashboard** — Neo4j Browser at `:7475` is the interactive surface.
-- **Real-time file watching** — incremental re-index on demand is enough; no watchers.
+- ~~**Real-time file watching**~~ — **SHIPPED** (`be939bc`). `codegraph watch` + `codegraph hook install` cover the automated re-index use case.
 
 ---
 
