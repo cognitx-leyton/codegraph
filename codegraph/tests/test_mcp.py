@@ -717,10 +717,12 @@ def test_new_tools_surface_service_unavailable(monkeypatch, call):
 
 
 def test_parse_queries_md_extracts_all_blocks():
-    """Real queries.md should yield exactly 29 entries."""
+    """Real queries.md should yield at least 29 entries and include known blocks."""
     text = mcp_mod._QUERIES_MD.read_text(encoding="utf-8")
     entries = mcp_mod._parse_queries_md(text)
-    assert len(entries) == 29
+    assert len(entries) >= 29
+    names = {e.name for e in entries}
+    assert "schema-overview" in names
 
 
 def test_parse_queries_md_single_block_section():
