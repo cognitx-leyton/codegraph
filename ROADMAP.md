@@ -2,13 +2,13 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-23 after commits `4a0d1f7` → `9483e33` (fix(mcp): move query_graph limit slice into _run_read to avoid wasted serialisation — closes #71; 604 tests passing, v0.1.72).
+> **Last updated:** 2026-04-24 after commits `4a0d1f7` → `5573811` (test(mcp): loosen queries.md count assertion to tolerate additions — closes #69; 604 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-71`. `_run_read()` in `mcp.py` now accepts a `limit: int | None = None` keyword-only parameter and slices records *before* calling `clean_row()`, so discarded rows are never serialised. `query_graph()` updated from `_run_read(cypher)[:limit]` to `_run_read(cypher, limit=limit)`. Closes issues #71 and #65. v0.1.72.
+- **Branch:** `archon/task-fix-issue-69-v2`. Test assertion for `queries.md` catalog count loosened: `== 29` → `>= 29` with a `"schema-overview"` smoke-check so additions don't break CI but mass deletions and real parser regressions are still caught. Closes issue #69. v0.1.72.
 - **Tests:** 604 passing (145 MCP tests, was 143), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 13 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
@@ -21,16 +21,27 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `b4d8a25`)
+## Shipped since the last roadmap update (commit `fa1a439`)
 
 ```
-9483e33  fix(mcp): move query_graph limit slice into _run_read to avoid wasted serialisation
-b4d8a25  fix(init): sanitize directory names with special chars in container names (#234)
+5573811  test(mcp): loosen queries.md count assertion to tolerate additions
+fa1a439  fix(mcp): push query_graph limit into Cypher to avoid fetching all rows (#235)
 ```
 
-### mcp — move limit slice into _run_read to avoid wasted serialisation (issues #71 + #65)
+### mcp — loosen queries.md count assertion to tolerate additions (issue #69)
 
-- `9483e33 fix(mcp)` — Two files changed:
+- `5573811 test(mcp)` — One file changed:
+
+  1. **`codegraph/tests/test_mcp.py`** (lines 719–724) — Three-line change:
+     - Updated docstring: "exactly 29 entries" → "at least 29 entries and include known blocks".
+     - Changed count assertion from `== 29` to `>= 29` — tolerates future additions to `queries.md` without breaking CI, still catches accidental mass deletions.
+     - Added smoke-check: `assert "schema-overview" in names` — verifies `_register_query_prompts()` actually parsed `queries.md` (anchored to `## Schema overview` at line 10, which `_slugify` converts to `"schema-overview"` — independently tested at line 761).
+
+  - **Code review**: 0 issues. Tests: 604 passed, 10 skipped. Arch-check: 4/4 policies pass (1 skipped).
+
+### mcp — push query_graph limit into Cypher to avoid fetching all rows (issues #71 + #65)
+
+- `fa1a439 fix(mcp)` — Two files changed:
 
   1. **`codegraph/codegraph/mcp.py`** — Added `limit: int | None = None` keyword-only parameter (after `*`) to `_run_read()`. Records are now sliced (`records = records[:limit]` guarded by `if limit is not None`) *before* `clean_row()` is called in the comprehension, so discarded rows are never deserialised or serialised. Updated `query_graph()` from `_run_read(cypher)[:limit]` to `_run_read(cypher, limit=limit)`. All 14 existing `_run_read()` call sites use `**params` as keyword args — the `*` separator is fully backwards-compatible.
 
