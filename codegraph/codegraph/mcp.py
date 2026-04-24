@@ -525,6 +525,35 @@ def find_class(name_pattern: str, limit: int = 50) -> list[dict]:
 
 
 @mcp.tool()
+def find_function(name_pattern: str, limit: int = 50) -> list[dict]:
+    """Case-sensitive substring search over function and method names.
+
+    Backed by the ``func_name`` and ``method_name`` indexes so ``CONTAINS``
+    stays cheap.  Bypassing the index via ``toLower()`` for case-insensitive
+    matching would turn this into a full scan; agents can retry with the
+    correct case instead.
+
+    Args:
+        name_pattern: Non-empty substring to match against ``:Function.name``
+            and ``:Method.name``.  Empty strings are rejected — they'd match
+            every function/method in the graph.
+        limit: Max rows to return.  Integer in 1..1000, default 50.
+    """
+    if not name_pattern:
+        return [{"error": "name_pattern must be non-empty"}]
+    err = _validate_limit(limit)
+    if err:
+        return [{"error": err}]
+    cypher = (
+        "MATCH (n) WHERE (n:Function OR n:Method) AND n.name CONTAINS $name_pattern "
+        "RETURN DISTINCT labels(n)[0] AS kind, n.name AS name, n.file AS file, "
+        "       n.docstring AS docstring, n.return_type AS return_type "
+        f"ORDER BY n.file, n.name LIMIT {limit}"
+    )
+    return _run_read(cypher, name_pattern=name_pattern)
+
+
+@mcp.tool()
 def calls_from(
     name: str,
     file: Optional[str] = None,

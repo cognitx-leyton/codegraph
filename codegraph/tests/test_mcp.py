@@ -667,6 +667,38 @@ def test_find_class_rejects_bad_limit(monkeypatch):
     assert out == [{"error": "limit must be an integer in 1..1000"}]
 
 
+# ── find_function ──────────────────────────────────────────────────────
+
+
+def test_find_function_happy_path(monkeypatch):
+    driver = _patch(
+        monkeypatch,
+        [[
+            {"kind": "Function", "name": "parse_args", "file": "src/cli.py",
+             "docstring": "Parse CLI args.", "return_type": "Namespace"},
+            {"kind": "Method", "name": "parse_body", "file": "src/parser.py",
+             "docstring": "Parse request body.", "return_type": "dict"},
+        ]],
+    )
+    out = mcp_mod.find_function("parse")
+    assert [r["name"] for r in out] == ["parse_args", "parse_body"]
+    cypher, params = driver.session_obj.calls[0]
+    assert "n.name CONTAINS $name_pattern" in cypher
+    assert params == {"name_pattern": "parse"}
+
+
+def test_find_function_rejects_empty_pattern(monkeypatch):
+    _patch(monkeypatch, [[]])
+    out = mcp_mod.find_function("")
+    assert out == [{"error": "name_pattern must be non-empty"}]
+
+
+def test_find_function_rejects_bad_limit(monkeypatch):
+    _patch(monkeypatch, [[]])
+    out = mcp_mod.find_function("parse", limit=99999)
+    assert out == [{"error": "limit must be an integer in 1..1000"}]
+
+
 # ── Parametrized error paths across all new tools ───────────────────
 
 
@@ -678,6 +710,7 @@ def test_find_class_rejects_bad_limit(monkeypatch):
         lambda: mcp_mod.gql_operation_callers("findManyUsers"),
         lambda: mcp_mod.most_injected_services(),
         lambda: mcp_mod.find_class("Auth"),
+        lambda: mcp_mod.find_function("parse"),
         lambda: mcp_mod.calls_from("parse"),
         lambda: mcp_mod.callers_of("parse"),
         lambda: mcp_mod.describe_function("parse"),
@@ -698,6 +731,7 @@ def test_new_tools_surface_client_error(monkeypatch, call):
         lambda: mcp_mod.gql_operation_callers("findManyUsers"),
         lambda: mcp_mod.most_injected_services(),
         lambda: mcp_mod.find_class("Auth"),
+        lambda: mcp_mod.find_function("parse"),
         lambda: mcp_mod.calls_from("parse"),
         lambda: mcp_mod.callers_of("parse"),
         lambda: mcp_mod.describe_function("parse"),
