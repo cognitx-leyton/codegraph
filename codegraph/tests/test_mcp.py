@@ -701,13 +701,17 @@ def test_find_function_happy_path(monkeypatch):
         monkeypatch,
         [[
             {"kind": "Function", "name": "parse_args", "file": "src/cli.py",
-             "docstring": "Parse CLI args.", "return_type": "Namespace"},
+             "docstring": "Parse CLI args.", "return_type": "Namespace",
+             "class_name": None},
             {"kind": "Method", "name": "parse_body", "file": "src/parser.py",
-             "docstring": "Parse request body.", "return_type": "dict"},
+             "docstring": "Parse request body.", "return_type": "dict",
+             "class_name": "RequestParser"},
         ]],
     )
     out = mcp_mod.find_function("parse")
     assert [r["name"] for r in out] == ["parse_args", "parse_body"]
+    assert out[0]["class_name"] is None
+    assert out[1]["class_name"] == "RequestParser"
     cypher, params = driver.session_obj.calls[0]
     assert "n.name CONTAINS $name_pattern" in cypher
     assert params == {"name_pattern": "parse"}

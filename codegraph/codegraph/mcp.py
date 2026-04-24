@@ -557,8 +557,10 @@ def find_function(name_pattern: str, limit: int = 50) -> list[dict]:
         return [{"error": err}]
     cypher = (
         "MATCH (n) WHERE (n:Function OR n:Method) AND n.name CONTAINS $name_pattern "
+        "OPTIONAL MATCH (c:Class)-[:HAS_METHOD]->(n) "
         "RETURN DISTINCT labels(n)[0] AS kind, n.name AS name, n.file AS file, "
-        "       n.docstring AS docstring, n.return_type AS return_type "
+        "       n.docstring AS docstring, n.return_type AS return_type, "
+        "       c.name AS class_name "
         f"ORDER BY n.file, n.name LIMIT {limit}"
     )
     return _run_read(cypher, name_pattern=name_pattern)
