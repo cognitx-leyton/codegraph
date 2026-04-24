@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `489d404` → `be939bc` (feat(watch,hooks): add codegraph watch and hook install/uninstall commands — closes #47; 652 tests passing, v0.1.72).
+> **Last updated:** 2026-04-24 after commits `3f394de` → `2b0d78a` (feat(cache): add SHA-256 content-addressed cache for incremental indexing — closes #46; 667 tests passing, v0.1.72).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-47`. `codegraph watch` (watchdog-based incremental re-index on file change) and `codegraph hook install/uninstall/status` (git hook management) shipped — closes issue #47. v0.1.72.
-- **Tests:** 652 passing (19 new test_hooks + 19 new test_watch + 1 new param-forwarding test), 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-46-v3`. SHA-256 content-addressed AST cache for `codegraph index --update` shipped — closes issue #46. v0.1.72.
+- **Tests:** 667 passing (14 new: 11 in `test_cache.py` + 3 in `test_incremental.py`), 10 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -21,18 +21,50 @@
 
 ---
 
-## Shipped since the last roadmap update (commit `489d404`)
+## Shipped since the last roadmap update (commit `3f394de`)
 
 ```
-be939bc  feat(watch,hooks): add codegraph watch and hook install/uninstall commands (#47)
-489d404  docs(mcp): update README MCP tool table to list all 16 tools (#244)
-b133484  feat(mcp): add class_name to find_function results (#243)
-435f007  feat(mcp): add file filter and limit params to callers_of_class (#242)
-2dd7b08  fix(mcp): add limit parameter to describe_function to avoid unbounded result sets (#240)
-ab75cdc  feat(mcp): add find_function tool for searching functions and methods by name (#238)
-3ebd593  test(mcp): loosen queries.md count assertion to tolerate additions (#236)
-fa1a439  fix(mcp): push query_graph limit into Cypher to avoid fetching all rows (#235)
+2b0d78a  feat(cache): add SHA-256 content-addressed cache for incremental indexing (#46)
+3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### cache — SHA-256 content-addressed AST cache for `--update` flag (issue #46)
+
+- `2b0d78a feat(cache)` — Six files changed (2 new, 4 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/cache.py`** (~130 LOC) — `AstCache` class backed by a `.codegraph-cache/` directory. `file_content_hash(path)` computes SHA-256 of file bytes. `get(path, content_hash)` deserialises a cached `ParseResult` if the stored hash matches; returns `None` on miss or corrupt entry. `put(path, content_hash, result)` atomically writes via `.tmp` file (renamed on success; cleaned up on failure). `invalidate(path)` removes a single entry. `clear()` removes all cached entries and the manifest, including any orphan `.tmp` files. Cache directory defaults to `<repo>/.codegraph-cache/`; added to `.gitignore`.
+
+  2. **`codegraph/tests/test_cache.py`** (11 tests) — `file_content_hash` basic hash, same-content idempotency, changed-content diff. `AstCache.get` miss (no file), hit (valid cache), stale (hash mismatch), corrupt (malformed JSON). `AstCache.put` round-trip, atomic-write failure cleanup. `AstCache.invalidate`. `AstCache.clear` (removes entries + manifest).
+
+  **Updated files:**
+
+  3. **`codegraph/codegraph/schema.py`** — Added `parse_result_to_dict(result)` and `parse_result_from_dict(d)` serialisation helpers. All node/edge dataclasses serialise to plain `dict` (JSON-safe). Round-trip tested via `test_cache.py`.
+
+  4. **`codegraph/codegraph/cli.py`** — Added `--update` flag to `codegraph index`. Mutually exclusive with `--since` (raises `ConfigError`). When `--update` is set: instantiates `AstCache`, checks SHA-256 before parsing each file (cache hit skips tree-sitter entirely), writes result to cache after a parse, skips `deleted_files` stale-subgraph cleanup when `--max-files` is active to avoid false deletions. `--update` implies `--no-wipe`.
+
+  5. **`codegraph/tests/test_incremental.py`** — 3 new integration tests: `--update` skips unchanged files on second run, `--update` re-parses files whose content changed, `--update` + `--since` raises an error.
+
+  6. **`.gitignore`** — Added `.codegraph-cache/` entry.
+
+  **Code review (8 issues found and fixed):**
+  - `[HIGH]` `--since` + `--update` not mutually exclusive → added `ConfigError` guard.
+  - `[MEDIUM]` `.codegraph-cache/` not in `.gitignore` → added.
+  - `[MEDIUM]` `put()` left orphan `.tmp` on serialisation failure → added try/except cleanup.
+  - `[MEDIUM]` `max_files` truncation caused false "deleted" entries → skip deletion when `--max-files` set.
+  - `[LOW]` `clear()` didn't remove `.tmp` files → added `*.tmp` glob.
+  - `[LOW]` Unnecessary `# type: ignore` and `# noqa: F811` → removed.
+  - `[MEDIUM]` No test for corrupt cache entry → added `test_cache_get_corrupt_file_returns_none`.
+  - `[LOW]` `clear()` test didn't verify manifest removal → added assertion.
+
+  - **Validation:** 667 tests pass, 10 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass (1 skipped). `codegraph index --help` shows `--update` flag.
+
+### test — add watchdog to test extra so test_watch.py tests pass
+
+- `3f394de fix(test)` — One file changed:
+
+  **`codegraph/pyproject.toml`** — Added `watchdog>=4.0` to the `[test]` optional extra so that `pip install "codegraph[test]"` pulls in watchdog and `test_watch.py` doesn't skip. Previously watchdog was only in `[watch]`, causing CI environments that install `[test]` to skip all 19 watch tests silently.
 
 ### watch + hooks — `codegraph watch` and `codegraph hook` commands (issue #47)
 
@@ -1110,12 +1142,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-47` |
+| Current branch | `archon/task-fix-issue-46-v3` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`be939bc` — feat(watch,hooks): add codegraph watch and hook install/uninstall commands, pending PR) |
-| Open PR | None. PR #244 (docs(mcp): update README MCP tool table) merged to main. |
-| Working tree | Clean (untracked: `.claude/plans/watch-and-hooks.plan.md`) |
-| Test count | 652 passing + 10 skipped + 1 deselected |
+| Unpushed commits | 2 (`3f394de` fix(test): watchdog to test extra; `2b0d78a` feat(cache): SHA-256 cache for incremental indexing — pending PR) |
+| Open PR | None. |
+| Working tree | Clean (untracked: `.claude/plans/sha256-cache-incremental-indexing.plan.md`) |
+| Test count | 667 passing + 10 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `357ad03`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
@@ -1289,7 +1321,7 @@ The ranking assumes the same `plan → implement → e2e validate → commit` cy
 
 ~~#### B2. MCP resources / prompts — `queries.md` as named prompt templates~~ **SHIPPED** (`357ad03`)
 
-~~#### B3. Incremental re-indexing (`codegraph index --since HEAD~N`)~~ **SHIPPED** (`06e9873`)
+~~#### B3. Incremental re-indexing (`codegraph index --since HEAD~N`)~~ **SHIPPED** (`06e9873`); **SHA-256 `--update` cache SHIPPED** (`2b0d78a`, closes #46)
 
 ~~#### B4. MCP write tools behind `--allow-write`~~ **SHIPPED** (`daae936`)
 
@@ -1389,6 +1421,7 @@ Repo-local plans under `.claude/plans/`:
 - `arch-check-scope.plan.md` — shipped as `9ebc0e4`.
 - `arch-check-suppression.plan.md` — shipped as `9d05a44`.
 - `incremental-reindex.plan.md` — shipped as `06e9873`.
+- `sha256-cache-incremental-indexing.plan.md` — shipped as `2b0d78a` (closes #46).
 - `mcp-write-tools.plan.md` — shipped as `daae936`.
 - `fix-unresolved-imports.plan.md` — shipped as `c6460d2`.
 - `fix-issue-105-auto-scope.plan.md` — shipped as `ae21e20`.
