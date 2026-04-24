@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cognitx-codegraph"
-version = "0.1.91"
+version = "0.1.92"
 description = "Code knowledge graph for Claude Code & AI coding agents — index TypeScript, Python, NestJS, FastAPI, React into Neo4j and query architecture in Cypher. Note: v0.2.0 is deprecated, use 0.1.x."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -70,6 +70,11 @@ watch = [
   # File-system watcher for auto graph rebuild on save.
   # Optional because the hook-based workflow (post-commit) works without it.
   "watchdog>=4.0",
+]
+benchmark = [
+  # Precise BPE token counting. Without this, benchmark uses chars/4
+  # approximation which is sufficient for relative comparisons.
+  "tiktoken>=0.7",
 ]
 test = [
   "pytest>=8.0",

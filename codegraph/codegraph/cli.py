@@ -193,6 +193,8 @@ def index(
     as_json: bool = typer.Option(False, "--json", help="Emit stats as JSON on stdout."),
     no_export: bool = typer.Option(False, "--no-export",
                                    help="Skip HTML/JSON export after indexing."),
+    no_benchmark: bool = typer.Option(False, "--no-benchmark",
+                                      help="Skip token-reduction benchmark after indexing."),
 ) -> None:
     """Index a TypeScript monorepo into Neo4j."""
     try:
@@ -246,6 +248,25 @@ def index(
         except Exception as exc:  # noqa: BLE001
             if not as_json:
                 console.print(f"[yellow]warning:[/] export failed: {exc}")
+
+    # Auto-benchmark unless suppressed
+    if not no_benchmark:
+        try:
+            from .benchmark import run_benchmark as _run_bench, print_benchmark_summary, write_benchmark_json
+            bench_cfg = load_config(repo.resolve())
+            bench_cfg = merge_cli_overrides(bench_cfg, packages=packages)
+            bench_result = _run_bench(
+                uri=uri, user=user, password=password,
+                repo=repo.resolve(),
+                packages=list(bench_cfg.packages),
+            )
+            bench_out = repo.resolve() / "codegraph-out"
+            write_benchmark_json(bench_result, bench_out)
+            if not as_json:
+                print_benchmark_summary(bench_result, console)
+        except Exception as exc:  # noqa: BLE001
+            if not as_json:
+                console.print(f"[yellow]warning:[/] benchmark failed: {exc}")
 
 
 def _run_index(
@@ -1150,6 +1171,76 @@ def export(
             f"[bold]exported {len(nodes)} nodes, {len(edges)} edges "
             f"→ {len(written)} file(s)[/]"
         )
+
+
+# ── benchmark ──────────────────────────────────────────────────────
+
+@app.command()
+def benchmark(
+    repo: Path = typer.Argument(Path("."), exists=True, file_okay=False),
+    uri: str = DEFAULT_URI,
+    user: str = DEFAULT_USER,
+    password: str = DEFAULT_PASS,
+    as_json: bool = typer.Option(False, "--json", help="Emit report as JSON on stdout."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show per-query breakdown."),
+    min_reduction: Optional[float] = typer.Option(
+        None, "--min-reduction",
+        help="Exit 1 if the reduction ratio is below this threshold.",
+    ),
+    out: Path = typer.Option(Path("codegraph-out"), "--out", "-o",
+                             help="Directory for benchmark.json output."),
+    scope: Optional[list[str]] = typer.Option(
+        None, "--scope", "-s",
+        help="Restrict corpus counting to these package paths (repeatable).",
+    ),
+    no_scope: bool = typer.Option(
+        False, "--no-scope",
+        help="Disable auto-scope even when packages are configured.",
+    ),
+) -> None:
+    """Run the token-reduction benchmark against the live graph."""
+    from .benchmark import (
+        print_benchmark_summary,
+        print_benchmark_verbose,
+        run_benchmark,
+        write_benchmark_json,
+    )
+
+    # Auto-scope from config when no explicit flag given.
+    effective_scope = scope
+    if scope is None and not no_scope:
+        cfg = load_config(repo.resolve())
+        if cfg.packages:
+            effective_scope = list(cfg.packages)
+            if not as_json:
+                console.print(
+                    f"[dim]auto-scope from {cfg.source}:[/] "
+                    + ", ".join(effective_scope)
+                )
+
+    packages = effective_scope or []
+    try:
+        result = run_benchmark(
+            uri=uri, user=user, password=password,
+            repo=repo.resolve(),
+            packages=packages,
+        )
+    except (ServiceUnavailable, AuthError) as e:
+        _emit_error(as_json, "connection", str(e))
+        raise typer.Exit(code=2)
+
+    out_dir = repo.resolve() / out
+    write_benchmark_json(result, out_dir)
+
+    if as_json:
+        print(result.to_json())
+    elif verbose:
+        print_benchmark_verbose(result, console)
+    else:
+        print_benchmark_summary(result, console)
+
+    if min_reduction is not None and result.reduction_ratio < min_reduction:
+        raise typer.Exit(code=1)
 
 
 # ── error emission helper ────────────────────────────────────────────

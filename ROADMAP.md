@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-24 after commits `3f394de` → `6c45b48` (feat(export): add interactive HTML and GraphML graph export command — closes #44; 695 tests passing, v0.1.90).
+> **Last updated:** 2026-04-24 after commits `3f394de` → `09f9d8a` (feat(benchmark): add token-reduction benchmark command — closes #43; 714 tests passing, v0.1.91).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-44`. Interactive HTML + GraphML export now ship as `codegraph export` and auto-run after `codegraph index` — closes issue #44. v0.1.90.
-- **Tests:** 695 passing (19 new in `test_export.py`), 10 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-43-v2`. Token-reduction benchmark now ships as `codegraph benchmark` and auto-runs after `codegraph index` — closes issue #43. v0.1.91.
+- **Tests:** 714 passing (17 new in `test_benchmark.py`), 10 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 14 read-only tools + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,12 +24,37 @@
 ## Shipped since the last roadmap update (commit `3f394de`)
 
 ```
-6c45b48  feat(export): add interactive HTML and GraphML graph export command (#44)
+09f9d8a  feat(benchmark): add token-reduction benchmark command (issue #43)
+85b18f2  feat(export): add interactive HTML and GraphML graph export command (#251)
 343878b  feat(cache): prune stale cache entries after manifest save (#250)
 33ddbe7  feat(init): append .codegraph-cache/ to .gitignore on codegraph init (#249)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### benchmark — token-reduction benchmark command (issue #43)
+
+- `09f9d8a feat(benchmark)` — Four files changed (2 new, 2 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/benchmark.py`** (~300 LOC) — Core benchmark module. `_estimate_tokens(text)` uses tiktoken (BPE) if available, otherwise chars/4 fallback. `count_corpus_tokens(paths)` tallies total tokens across source files. `_BENCHMARK_QUERIES` — 8 canonical Cypher queries (class overview, method signature, callers-of, package overview, endpoint mapping, class hierarchy, file structure, interface contracts). `_format_context_block(records)` renders query results as a compact text block. `BenchmarkResult` dataclass: stores `corpus_tokens`, `context_tokens`, `reduction_pct`, `query_results`, and an `ok` property (True when `reduction_pct >= min_reduction`). `to_json()` explicitly includes `ok` in the dict (not just dataclass fields via `asdict`). `run_benchmark(driver, scope, min_reduction)` runs all 8 queries in a single Neo4j session (not one per query). `print_benchmark_summary()` / `print_benchmark_verbose()` Rich console printers. `write_benchmark_json()` file writer.
+
+  2. **`codegraph/tests/test_benchmark.py`** (17 tests) — Token estimation (chars/4 and tiktoken branches, guarded by `skipif(_USING_TIKTOKEN)`), context formatting, corpus counting, `run_benchmark` with fake drivers (happy path, empty graph, partial queries), `BenchmarkResult` serialisation (`ok` present in JSON), CLI subcommand (`--json`, `--min-reduction` pass/fail, service unavailable), benchmark.json file writing.
+
+  **Updated files:**
+
+  3. **`codegraph/codegraph/cli.py`** — Added `benchmark` subcommand (mirrors arch-check pattern): `--json`, `--verbose`, `--min-reduction` (default 80%), `--scope`/`--no-scope`, `--out`. Integrated benchmark into `codegraph index` as a non-fatal post-index step (prints summary by default); suppressed with new `--no-benchmark` flag. Failures emit a warning, never block the index.
+
+  4. **`codegraph/pyproject.toml`** — Added `benchmark` optional extra with `tiktoken>=0.7`. Install via `pip install "codegraph[benchmark]"`.
+
+  **Code review (4 issues found and fixed):**
+  - `[BUG]` `BenchmarkResult.to_json()` used `asdict()` which excludes `@property ok` — JSON output missing `ok` key → construct dict explicitly with `d["ok"] = self.ok`.
+  - `[CLEANUP]` Unused `from typing import Any` import in `benchmark.py` → removed.
+  - `[CODE QUALITY]` `run_benchmark()` opened 8 separate Neo4j sessions (one per query) → moved session creation outside the loop (matches `arch_check.py` pattern).
+  - `[TEST BUG]` Token estimator tests hard-coded chars/4 expectations — would fail if tiktoken installed → added `skipif(_USING_TIKTOKEN)` guards + tokenizer-agnostic test variants.
+
+  - **Validation:** 714 tests pass (17 new), 10 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass (scoped to codegraph+tests). `codegraph benchmark --help` and `codegraph index --help` verified.
 
 ### export — interactive HTML + GraphML graph export command (issue #44)
 
@@ -1210,16 +1235,16 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-44` |
+| Current branch | `archon/task-fix-issue-43-v2` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`6c45b48` feat(export): add interactive HTML and GraphML graph export command — pending PR) |
+| Unpushed commits | 1 (`09f9d8a` feat(benchmark): add token-reduction benchmark command — pending PR) |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/export-interactive-html.plan.md`) |
-| Test count | 695 passing + 10 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/benchmark-token-reduction.plan.md`) |
+| Test count | 714 passing + 10 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `6c45b48`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
-| Wheel built? | Not yet for v0.1.90. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
+| Last editable install | After `09f9d8a`. Re-run `cd codegraph && .venv/bin/pip install -e .` after any `pyproject.toml` edit. |
+| Wheel built? | Not yet for v0.1.91. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
 
 ---
 
