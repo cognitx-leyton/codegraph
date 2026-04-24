@@ -281,7 +281,10 @@ def index(
             an_driver = GraphDatabase.driver(uri, auth=(user, password))
             try:
                 an_driver.verify_connectivity()
-                analysis = run_analysis(an_driver, scope=an_scope)
+                analysis = run_analysis(
+                    an_driver, scope=an_scope,
+                    console=None if as_json else console,
+                )
             finally:
                 an_driver.close()
             report_text = generate_report(analysis)
