@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-25 after commits `ea07455` → `f321b8f` (fix(install): preserve shared AGENTS.md sections during partial uninstall — closes #257; 802 tests passing, v0.1.95).
+> **Last updated:** 2026-04-25 after commits `ea07455` → `f887f70` (refactor(install): deduplicate template-var logic into init.py — closes #259; 807 tests passing, v0.1.95).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-257`. Manifest-based tracking for multi-platform installs: `uninstall_platform()` now reads `.codegraph/platforms.json` before removing a shared rules section (e.g. `AGENTS.md`). If another installed platform still needs the section, it is preserved with a yellow warning. Manifest updated on every install/uninstall, cleaned up when empty. Closes issue #257. v0.1.95.
-- **Tests:** 802 passing (5 new: manifest creation, manifest cleanup, section preservation, last-platform removal, backwards-compat with missing manifest), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-259`. Deduplication of template-var and container-name logic: `derive_container_name(root)` and `build_template_vars(...)` extracted into `init.py` as public helpers. `_build_install_vars` in `cli.py` now delegates to them. Port consistency fix: `NEO4J_BOLT_PORT` and `NEO4J_HTTP_PORT` now read from env (with `init.py` defaults) instead of hardcoded literals. Closes issue #259. v0.1.95.
+- **Tests:** 807 passing (5 new: `derive_container_name` determinism + path-differentiation, `build_template_vars` all-keys + cross-pairs + custom ports), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,8 +24,9 @@
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
-f321b8f  fix(install): preserve shared AGENTS.md sections during partial uninstall (issue #257)
-ea07455  fix(install): resolve template variables in claude platform install (issue #256)
+f887f70  refactor(install): deduplicate template-var logic into init.py (issue #259)
+6a359f0  fix(install): preserve shared AGENTS.md sections during partial uninstall (#261, closes #257)
+9fae95b  fix(install): resolve template variables in platform install content (#260, closes #256)
 d27301c  feat(install): add multi-platform codegraph install command (#258, closes #48)
 d2f08e4  feat(schema): add edge-level confidence labels to CALLS, IMPORTS, and resolver edges (#255)
 906983c  feat(schema): add hyperedge EdgeGroup for protocol-implementer sets (#254)
@@ -37,6 +38,37 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### install — deduplicate template-var logic into init.py (issue #259)
+
+- `f887f70 refactor(install)` — Three files changed:
+
+  **`codegraph/codegraph/init.py`**:
+  - Added `from collections.abc import Sequence` import (alphabetically ordered with other stdlib `from` imports).
+  - Added `derive_container_name(root: Path) -> str` public helper (line 59). Encapsulates `_sanitize_container_segment(root.name) + "-" + sha1(str(root.resolve()).encode())[:8]`. Single authoritative definition; previously this formula was duplicated inline in `_prompt_config` and independently in `_build_install_vars` in `cli.py`.
+  - Added `build_template_vars(*, root, bolt_port, http_port, package_paths_flags, default_package_prefix, cross_pairs_toml, pipx_version) -> dict[str, str]` public helper (line 255). Returns the full 7-key dict expected by all platform install templates: `NEO4J_BOLT_PORT`, `NEO4J_HTTP_PORT`, `PACKAGE_PATHS_FLAGS`, `DEFAULT_PACKAGE_PREFIX`, `CONTAINER_NAME`, `CROSS_PAIRS_TOML`, `PIPX_VERSION`. Ports default to `DEFAULT_BOLT_PORT` / `DEFAULT_HTTP_PORT` constants when not overridden.
+  - `_template_vars(root, config)` refactored to a thin 5-line wrapper over `build_template_vars`.
+  - `_prompt_config` updated to call `derive_container_name(root)` instead of inline SHA1 logic.
+
+  **`codegraph/codegraph/cli.py`**:
+  - `_build_install_vars(root)` rewritten to delegate to `build_template_vars()` + `derive_container_name()`. Port env-var overrides (`CODEGRAPH_NEO4J_BOLT_PORT`, `CODEGRAPH_NEO4J_HTTP_PORT`) now `int()`-converted (fail-fast on invalid input; default path is safe).
+  - Removed `import hashlib` (no longer needed — SHA1 logic lives in `derive_container_name`).
+
+  **`codegraph/tests/test_init.py`**:
+  - Added `derive_container_name` and `build_template_vars` to imports.
+  - 5 new tests:
+    - `test_derive_container_name_is_deterministic` — same root produces same name across two calls.
+    - `test_derive_container_name_differs_by_path` — two different roots produce different names.
+    - `test_build_template_vars_returns_all_keys` — all 7 expected keys present.
+    - `test_build_template_vars_cross_pairs` — `CROSS_PAIRS_TOML` propagated correctly.
+    - `test_build_template_vars_custom_ports` — custom bolt/http ports override defaults.
+
+  **Bug fix:** `codegraph install` now consistently uses `DEFAULT_BOLT_PORT` / `DEFAULT_HTTP_PORT` from `init.py` constants when env vars are absent, rather than the previously hardcoded string literals. Eliminates a latent port inconsistency when custom ports were configured.
+
+  **Code review (1 issue found and fixed):**
+  - `[STYLE]` `from collections.abc import Sequence` inserted after `from string import Template` — out of alphabetical order → moved before `from dataclasses import ...`.
+
+  - **Validation:** 807 tests pass (5 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass (1 skipped).
 
 ### install — preserve shared AGENTS.md sections during partial uninstall (issue #257)
 
@@ -1425,15 +1457,15 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-257` |
+| Current branch | `archon/task-fix-issue-259` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`f321b8f` fix(install): preserve shared AGENTS.md sections during partial uninstall — pending PR) |
+| Unpushed commits | 1 (`f887f70` refactor(install): deduplicate template-var logic into init.py — pending PR) |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/fix-shared-section-uninstall.plan.md`) |
-| Test count | 802 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/deduplicate-template-vars.plan.md`) |
+| Test count | 807 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `f321b8f`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"` after any `pyproject.toml` edit. |
+| Last editable install | After `f887f70`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"` after any `pyproject.toml` edit. |
 | Wheel built? | Not yet for v0.1.95. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
 | New files | `codegraph/codegraph/platforms.py`, `codegraph/codegraph/templates/platforms/` (8 templates), `codegraph/tests/test_platforms.py` |
 
@@ -1728,7 +1760,8 @@ Repo-local plans under `.claude/plans/`:
 - `leiden-community-detection.plan.md` — shipped as `c8d4ad2` (closes #42).
 - `hyperedge-groups.plan.md` — shipped as `a6bcbe6` (closes #39).
 - `edge-confidence-labels.plan.md` — shipped as `248af58` (closes #38).
-- `fix-shared-section-uninstall.plan.md` — shipped as `f321b8f` (closes #257).
+- `fix-shared-section-uninstall.plan.md` — shipped as `6a359f0` (closes #257).
+- `deduplicate-template-vars.plan.md` — shipped as `f887f70` (closes #259).
 
 Older plans (not in repo): `sunny-giggling-moon.md` (the MCP retriever batch), `framework-detector-port.md`. These live in `~/.claude/plans/` and get overwritten on each `/plan` session unless preserved manually.
 
