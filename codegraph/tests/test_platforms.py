@@ -578,3 +578,61 @@ def test_remove_section_codegraph_before_other_section(tmp_path: Path):
     assert "Other stuff" in content
     # Must not start with blank lines
     assert not content.startswith("\n")
+
+
+# ── Shared section protection (#257) ─────────────────────────
+
+
+def test_uninstall_one_agents_md_platform_preserves_section_for_others(tmp_path: Path):
+    """Uninstalling codex must leave AGENTS.md intact when aider is still installed."""
+    _make_git_repo(tmp_path)
+    install_platform(tmp_path, "codex", template_vars=_default_vars(), console=_silent_console())
+    install_platform(tmp_path, "aider", template_vars=_default_vars(), console=_silent_console())
+    result = uninstall_platform(tmp_path, "codex", console=_silent_console())
+    assert "AGENTS.md" not in result  # section was skipped, not removed
+    agents_md = tmp_path / "AGENTS.md"
+    assert agents_md.exists()
+    assert _SECTION_MARKER in agents_md.read_text()
+    # Manifest should only contain aider now
+    manifest = tmp_path / ".codegraph" / "platforms.json"
+    data = json.loads(manifest.read_text())
+    assert data["installed"] == ["aider"]
+
+
+def test_uninstall_all_agents_md_platforms_removes_section(tmp_path: Path):
+    """Uninstalling all platforms sharing AGENTS.md must remove the section."""
+    _make_git_repo(tmp_path)
+    install_platform(tmp_path, "codex", template_vars=_default_vars(), console=_silent_console())
+    install_platform(tmp_path, "aider", template_vars=_default_vars(), console=_silent_console())
+    uninstall_platform(tmp_path, "codex", console=_silent_console())
+    uninstall_platform(tmp_path, "aider", console=_silent_console())
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert not (tmp_path / ".codegraph" / "platforms.json").exists()
+
+
+def test_manifest_created_on_install(tmp_path: Path):
+    """Installing a platform creates the manifest with the platform name."""
+    _make_git_repo(tmp_path)
+    install_platform(tmp_path, "codex", template_vars=_default_vars(), console=_silent_console())
+    manifest = tmp_path / ".codegraph" / "platforms.json"
+    assert manifest.exists()
+    data = json.loads(manifest.read_text())
+    assert data == {"installed": ["codex"]}
+
+
+def test_manifest_cleaned_on_last_uninstall(tmp_path: Path):
+    """Uninstalling the last platform removes the manifest file."""
+    _make_git_repo(tmp_path)
+    install_platform(tmp_path, "codex", template_vars=_default_vars(), console=_silent_console())
+    uninstall_platform(tmp_path, "codex", console=_silent_console())
+    assert not (tmp_path / ".codegraph" / "platforms.json").exists()
+
+
+def test_uninstall_without_manifest_removes_section(tmp_path: Path):
+    """Missing manifest falls back to removing the section (backwards compat)."""
+    _make_git_repo(tmp_path)
+    install_platform(tmp_path, "codex", template_vars=_default_vars(), console=_silent_console())
+    # Delete manifest to simulate pre-manifest installs
+    (tmp_path / ".codegraph" / "platforms.json").unlink()
+    uninstall_platform(tmp_path, "codex", console=_silent_console())
+    assert not (tmp_path / "AGENTS.md").exists()

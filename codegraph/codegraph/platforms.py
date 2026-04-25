@@ -29,6 +29,54 @@ _TEMPLATES_ROOT = _pkg_files("codegraph") / "templates"
 # Marker used to detect/remove codegraph sections in shared files.
 _SECTION_MARKER = "## codegraph"
 
+# Manifest file that tracks which platforms are currently installed.
+_MANIFEST_FILE = ".codegraph/platforms.json"
+
+
+def _read_manifest(root: Path) -> set[str]:
+    """Load the set of installed platform names from the manifest."""
+    path = root / _MANIFEST_FILE
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    return set(data.get("installed", []))
+
+
+def _write_manifest(root: Path, installed: set[str]) -> None:
+    """Persist the set of installed platform names to the manifest."""
+    path = root / _MANIFEST_FILE
+    if not installed:
+        if path.exists():
+            path.unlink()
+        # Remove empty .codegraph/ dir
+        codegraph_dir = root / ".codegraph"
+        if codegraph_dir.is_dir() and not any(codegraph_dir.iterdir()):
+            codegraph_dir.rmdir()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"installed": sorted(installed)}, indent=2) + "\n",
+        encoding="utf-8",
+        newline="",
+    )
+
+
+def _other_installed_share_section(name: str, installed: set[str]) -> bool:
+    """Return True if another installed platform shares the same rules section."""
+    cfg = PLATFORMS.get(name)
+    if cfg is None or cfg.rules_file is None:
+        return False
+    for other in installed - {name}:
+        other_cfg = PLATFORMS.get(other)
+        if other_cfg is None:
+            continue
+        if other_cfg.rules_file == cfg.rules_file and other_cfg.rules_marker == cfg.rules_marker:
+            return True
+    return False
+
 
 # ── Platform config registry ──────────────────────────────────
 
@@ -501,6 +549,11 @@ def install_platform(
         _install_hooks_for_platform(root, cfg, console)
         actions.append(f"hook → {cfg.hook_type}")
 
+    # Record this platform in the manifest (even when idempotent)
+    installed = _read_manifest(root)
+    installed.add(name)
+    _write_manifest(root, installed)
+
     if not actions:
         return f"{cfg.display_name}: already installed"
     return f"{cfg.display_name}: " + "; ".join(actions)
@@ -523,9 +576,12 @@ def uninstall_platform(
         return f"{cfg.display_name}: nothing to remove (no files installed)"
 
     # Rules file (remove section from shared file)
+    installed = _read_manifest(root)
     if cfg.rules_file:
         target = root / cfg.rules_file
-        if _remove_section(target, cfg.rules_marker, console):
+        if _other_installed_share_section(name, installed):
+            console.print(f"  [yellow]skip[/] {target} (shared with other platforms)")
+        elif _remove_section(target, cfg.rules_marker, console):
             actions.append(f"rules ← {cfg.rules_file}")
 
     # Standalone rules files
@@ -541,6 +597,10 @@ def uninstall_platform(
     elif cfg.hook_type:
         _uninstall_hooks_for_platform(root, cfg, console)
         actions.append(f"hook ← {cfg.hook_type}")
+
+    # Remove this platform from the manifest
+    installed.discard(name)
+    _write_manifest(root, installed)
 
     if not actions:
         return f"{cfg.display_name}: nothing to remove"
