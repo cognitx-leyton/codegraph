@@ -4,13 +4,15 @@
 
 ## What it does, in order
 
-1. **Preflight** — finds the git root (errors out with a clear message if you're not in a git repo).
-2. **Repo shape detection** — scans the top level and one layer of standard monorepo folders (`apps/`, `packages/`, `services/`) for `pyproject.toml` / `package.json` / `tsconfig.json`. Uses whatever it finds as default suggestions for the prompts.
-3. **Interactive Q&A** — 4-5 questions; every answer has a sensible default. `--yes` skips this step entirely.
-4. **Scaffolds files** — writes the Claude Code slash commands, the GitHub Actions workflow, the `.arch-policies.toml` policy config, and the `docker-compose.yml`. Existing files are skipped unless you pass `--force`. `CLAUDE.md` is always *appended to* — never clobbered.
-5. **Starts Neo4j** — runs `docker compose up -d` and polls for HTTP readiness (up to 90s). Skipped with `--skip-docker`.
-6. **First index** — runs `codegraph index` against the packages you confirmed in step 3, so the graph is queryable immediately. Skipped with `--skip-index`.
-7. **Next-steps banner** — prints 3-4 commands to get you querying.
+1. **Docker preflight** — checks that the `docker` binary is on PATH and the daemon is answering. Reports the version and warns if it's older than the recommended `20.10` baseline. Prints OS-aware install / start instructions and exits 1 if Docker is missing or the daemon's down (unless you pass `--skip-docker`). See [Docker presence checks](#docker-presence-checks) below.
+2. **Find or create the shared `codegraph-neo4j` container** — every repo on the machine indexes into one shared Neo4j. Init reuses it if running, starts it if stopped, or creates it on first run. See [Shared `codegraph-neo4j` container](#shared-codegraph-neo4j-container) below.
+3. **Git root preflight** — errors out with a clear message if you're not in a git repo.
+4. **Repo shape detection** — scans the top level and one layer of standard monorepo folders (`apps/`, `packages/`, `services/`) for `pyproject.toml` / `package.json` / `tsconfig.json`. Uses whatever it finds as default suggestions for the prompts.
+5. **Interactive Q&A** — 4-5 questions; every answer has a sensible default. `--yes` skips this step entirely.
+6. **Scaffolds files** — writes the Claude Code slash commands, the GitHub Actions workflow, the `.arch-policies.toml` policy config, and the `docker-compose.yml`. Existing files are skipped unless you pass `--force`. `CLAUDE.md` is always *appended to* — never clobbered.
+7. **Starts Neo4j** — handles the four cases via the auto-detect logic above: reuse running, start stopped, create new, or fail loud on a port collision.
+8. **First index** — runs `codegraph index` against the packages you confirmed in step 5, so the graph is queryable immediately. Skipped with `--skip-index`.
+9. **Next-steps banner** — prints 3-4 commands to get you querying.
 
 ## Flags
 
@@ -23,13 +25,44 @@
 | `--bolt-port <int>` | Override the default Neo4j Bolt port (default 7687). Stored in `docker-compose.yml` and propagated to all rendered templates (`CLAUDE.md`, `AGENTS.md`, etc.). Useful when running multiple codegraph-indexed repos side by side. |
 | `--http-port <int>` | Override the default Neo4j HTTP port (default 7474). Same propagation as `--bolt-port`. |
 
-## Custom Neo4j ports — running multiple repos side by side
+## Shared `codegraph-neo4j` container
 
-Each repo gets its own Neo4j container. The container name is derived from the repo directory name plus a SHA1 of the absolute path (`derive_container_name(root)`), so repos at different paths never collide — even if they share a directory name. Special characters in the directory name are sanitised.
+Every repo on the machine indexes into a single Neo4j container called `codegraph-neo4j`. This is the right model in practice — you can query across repos in Cypher, the indexing pipeline scopes wipe / reload to the configured packages, and you don't pay the disk + RAM cost of N Neo4j instances.
 
-Pass `--bolt-port` / `--http-port` (or set `CODEGRAPH_NEO4J_BOLT_PORT` / `CODEGRAPH_NEO4J_HTTP_PORT`) to bind to ports other than the defaults. The chosen ports are baked into `docker-compose.yml`, `CLAUDE.md`, and any subsequently installed platform rules files (`AGENTS.md`, `GEMINI.md`, etc.).
+**Init's auto-detect flow** (driven by `find_existing_neo4j_container` in `init.py`):
 
-If init detects orphaned containers from an older naming scheme (pre-sanitisation), it prints a warning with the container names so you can clean them up manually.
+1. **Container running** → reuse it. Init reads its host-side port mapping (via `docker inspect`) and threads those ports through `config.bolt_port` / `config.http_port` so the rest of init (compose template, readiness probe, first index) talks to the right URL. No `docker compose up` runs; no second container is created.
+2. **Container exists but stopped** → `docker start codegraph-neo4j`, then wait for HTTP readiness. If the start fails, init bails with the stderr from Docker.
+3. **No `codegraph-neo4j` container** → `docker compose up -d` against the scaffolded `docker-compose.yml`. The compose file uses `container_name: codegraph-neo4j` so subsequent inits in any repo land in the same container.
+4. **Port collision (no `codegraph-neo4j` but the bolt port is busy)** → init prints the port number and tells you to re-run with `--bolt-port` / `--http-port` to pick free ones. It does not silently overwrite whatever's on those ports.
+
+Because the container is shared, **`codegraph index --wipe` no longer wipes the entire graph** — it scopes to the configured packages so re-indexing repo A leaves repo B's data untouched. The standalone `codegraph wipe` command keeps its global semantics for an explicit clean slate.
+
+### Docker presence checks
+
+Before any docker subprocess call, init runs a three-way preflight:
+
+- **`docker` not on PATH** → prints an OS-aware install command (`curl -fsSL https://get.docker.com | sh` on Debian/Ubuntu, `brew install --cask docker` on macOS, `winget install Docker.DockerDesktop` on Windows, etc.) and exits 1. Override with `--skip-docker` if you intend to point codegraph at a hosted Neo4j via env vars.
+- **Daemon down** (`docker info` fails) → prints the platform-specific start command (`sudo systemctl start docker`, `open -a Docker`, or "launch Docker Desktop"). Exits 1 unless `--skip-docker`.
+- **Old version** (< `20.10`) → soft warning with an OS-aware upgrade command. Init continues; the recommended baseline is the cutoff for full `docker compose` v2 support.
+
+The detection logic lives in [`codegraph/codegraph/docker_setup.py`](../codegraph/docker_setup.py) and is pure — it never executes install or upgrade commands automatically (sudo is too risky to automate).
+
+### Custom Neo4j ports
+
+Pass `--bolt-port` / `--http-port` (or set `CODEGRAPH_NEO4J_BOLT_PORT` / `CODEGRAPH_NEO4J_HTTP_PORT`) to bind to ports other than the defaults (7687 / 7474). The chosen ports are baked into `docker-compose.yml`, `CLAUDE.md`, and any subsequently installed platform rules files (`AGENTS.md`, `GEMINI.md`, etc.). When init reuses an existing container, it ignores these flags and uses the container's actual port mapping instead — so your env vars stay accurate.
+
+### Migrating from per-repo containers
+
+Earlier codegraph versions (≤ 0.1.99) created one container per repo (`cognitx-codegraph-<repo>-<8hex>`). After the shared-container refactor, those become orphans. List them and remove by hand:
+
+```bash
+docker ps -a --filter "name=cognitx-codegraph-" --format "table {{.Names}}\t{{.Status}}"
+docker rm -f $(docker ps -a -q --filter "name=cognitx-codegraph-")
+docker volume prune  # reclaim the data volumes
+```
+
+Init does *not* migrate data automatically — fresh indexes are cheap (~30s for a 1k-file repo).
 
 ## The prompts
 
@@ -63,8 +96,8 @@ Templates live in `codegraph/codegraph/templates/` and use `string.Template` syn
 
 The full set of template variables (defined in `init.build_template_vars()`):
 
-- `NEO4J_BOLT_PORT`, `NEO4J_HTTP_PORT` — chosen ports.
-- `CONTAINER_NAME` — derived via `derive_container_name(root)` (sanitised dir name + 8-char SHA1).
+- `NEO4J_BOLT_PORT`, `NEO4J_HTTP_PORT` — chosen ports (or the existing container's ports when reusing).
+- `CONTAINER_NAME` — `codegraph-neo4j` (shared across every repo on the machine; see [Shared codegraph-neo4j container](#shared-codegraph-neo4j-container)). The legacy `derive_container_name(root)` helper is still exported for callers that want per-repo isolation, but is not used by default.
 - `PACKAGE_PATHS_FLAGS` — joined `-p packages/foo -p packages/bar` flags from `codegraph.toml`.
 - `DEFAULT_PACKAGE_PREFIX` — first package, used by the `/dead-code` slash command.
 - `CROSS_PAIRS_TOML` — cross-package policy block for `.arch-policies.toml`.
@@ -90,13 +123,21 @@ Installs are tracked in `.codegraph/platforms.json`. When you `codegraph uninsta
 
 **"Not a git repository"** — run `git init` first. Codegraph needs a git root to locate itself and to scope ownership edges correctly.
 
-**"docker not found on PATH"** — install Docker Desktop (Mac/Windows) or the Docker engine (Linux), then re-run. Or pass `--skip-docker` and point codegraph at a hosted Neo4j via the `CODEGRAPH_NEO4J_URI` env var.
+**"Docker is not installed"** — the preflight banner prints an OS-aware install command. Follow it, then re-run `codegraph init`. To skip the Docker step entirely (e.g. you have Neo4j running elsewhere), pass `--skip-docker` and point codegraph at the remote URI via `CODEGRAPH_NEO4J_URI`.
 
-**"Neo4j did not become ready in 90s"** — the container is taking longer than usual to pull the image (cold start). Run `docker compose logs neo4j` to check, then re-run `codegraph init` — it'll skip steps that already completed.
+**"Docker is installed but the daemon isn't running"** — start it with the printed command (`sudo systemctl start docker` on Linux, `open -a Docker` on macOS, launch Docker Desktop on Windows). Re-run init when the daemon's up.
 
-**"Port 7687 busy"** — another Neo4j instance (or another service) is already on that port. Re-run `codegraph init --bolt-port 7690 --http-port 7475 --force` to bind to free ports. The new ports are propagated to `docker-compose.yml`, `CLAUDE.md`, and any platform rules files installed afterwards.
+**"Docker X.Y.Z is installed, but 20.10+ is recommended"** — soft warning. Init continues. Upgrade with the printed command when convenient.
 
-**"Orphaned containers from old naming scheme"** — earlier codegraph versions used a less robust container-name derivation. If init detects containers that look like leftovers, it prints them so you can `docker rm -f <name>` and reclaim the names.
+**"Reusing existing codegraph-neo4j container"** — expected on every init after the first one. Init reads the container's host ports via `docker inspect` and uses those for the readiness probe + first index, so you don't have to re-pass `--bolt-port`.
+
+**"Found stopped codegraph-neo4j — starting it…"** — also expected. Init runs `docker start codegraph-neo4j` and waits for HTTP readiness (up to 90s).
+
+**"Neo4j did not become ready in 90s"** — usually a cold image pull on first run. `docker logs codegraph-neo4j` to see what's happening; re-run `codegraph init` once the container's healthy — it skips steps that already completed.
+
+**"Port 7687 (bolt) is already in use — and no codegraph-neo4j container owns it"** — something other than codegraph is holding the port. Find it with `lsof -i :7687` (or `ss -ltnp 'sport = :7687'`), then either stop it or re-run `codegraph init --bolt-port <free-port> --http-port <free-port>`.
+
+**"Old per-repo containers left over"** — earlier codegraph versions created one container per repo (`cognitx-codegraph-<repo>-<8hex>`). They're orphans now. See [Migrating from per-repo containers](#migrating-from-per-repo-containers) for the cleanup commands.
 
 **CLAUDE.md already has a codegraph section** — init detects this (looks for the `## Using the codegraph knowledge graph` heading) and skips the append. Safe to re-run any number of times.
 

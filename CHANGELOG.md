@@ -10,7 +10,30 @@ For the session-by-session engineering handoff (open questions, what's next, env
 
 ## [Unreleased]
 
-Planned next:
+### Added
+
+- **Shared `codegraph-neo4j` container** — every repo on the machine now indexes into one Neo4j instead of one container per repo. `codegraph init` auto-detects the existing `codegraph-neo4j`, reuses it if running, starts it if stopped, or creates it on first run. Reuse path reads the running container's host-side port mapping via `docker inspect` and threads those ports through, so existing `CODEGRAPH_NEO4J_URI` env vars stay accurate. Documented in [`codegraph/docs/init.md`](./codegraph/docs/init.md#shared-codegraph-neo4j-container).
+- **Docker presence + version preflight** in `codegraph init`. Detects whether `docker` is on PATH, whether the daemon is answering, and whether the installed version is older than the recommended `20.10` baseline. On miss, prints an OS-aware install / start / upgrade command (Debian/Ubuntu / Fedora/RHEL / Arch / openSUSE / macOS / Windows) sourced from a new `codegraph.docker_setup` module. Never executes install commands automatically — sudo is too risky to automate.
+- **`Neo4jLoader.wipe_scoped(packages)`** — package-scoped graph wipe. Reuses the existing 3-step delete cascade in `delete_file_subgraph`, plus drops orphaned `:Package` nodes for the wiped packages.
+
+### Changed
+
+- **`codegraph index --wipe` is now scoped to configured packages**. Previous behaviour (`MATCH (n) DETACH DELETE n`) would have nuked every other repo's data on a shared `codegraph-neo4j`. The standalone `codegraph wipe` command keeps its global semantics for an explicit clean slate.
+- **Default container name** in scaffolded `docker-compose.yml` switched from per-repo `cognitx-codegraph-<repo>-<8hex>` to the shared `codegraph-neo4j`. The per-repo derivation function (`derive_container_name`) is still exported for callers that want isolated containers; it's just not the default.
+
+### Migration
+
+If you upgrade and have legacy per-repo containers from earlier versions:
+
+```bash
+docker ps -a --filter "name=cognitx-codegraph-" --format "table {{.Names}}\t{{.Status}}"
+docker rm -f $(docker ps -a -q --filter "name=cognitx-codegraph-")
+docker volume prune
+```
+
+Init does not migrate data automatically — re-running `codegraph index .` against the new `codegraph-neo4j` is the supported path. Fresh indexes are cheap (~30s for a 1k-file repo).
+
+### Planned next
 
 - Go and Rust language frontends.
 - Pre-built RAG retrievers for common architecture questions (callers-of, blast-radius, layer reachability).

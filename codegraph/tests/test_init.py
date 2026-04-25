@@ -200,10 +200,17 @@ def test_build_template_vars_custom_ports():
 
 
 # ── _prompt_config container name ──────────────────────────
+#
+# As of the shared-Neo4j refactor, _prompt_config returns the constant
+# SHARED_CONTAINER_NAME ("codegraph-neo4j") regardless of repo path. The
+# old per-repo derive_container_name() is kept exported for opt-in
+# isolation but is no longer the default — its own unit tests are above.
 
 
-def test_container_name_includes_path_hash(tmp_path: Path):
-    """Two repos with the same basename but different paths get different names."""
+def test_container_name_is_shared_across_repos(tmp_path: Path):
+    """Different repo paths share the same codegraph-neo4j container."""
+    from codegraph.init import SHARED_CONTAINER_NAME
+
     path_a = tmp_path / "a" / "app"
     path_b = tmp_path / "b" / "app"
     path_a.mkdir(parents=True)
@@ -216,13 +223,8 @@ def test_container_name_includes_path_hash(tmp_path: Path):
         RepoShape(root=path_b), non_interactive=True, console=_silent_console(),
     )
 
-    assert cfg_a.container_name.startswith("cognitx-codegraph-app-")
-    assert cfg_b.container_name.startswith("cognitx-codegraph-app-")
-    assert cfg_a.container_name != cfg_b.container_name
-
-    # Suffix is exactly 8 hex characters.
-    suffix_a = cfg_a.container_name.rsplit("-", 1)[-1]
-    assert re.fullmatch(r"[0-9a-f]{8}", suffix_a)
+    assert cfg_a.container_name == SHARED_CONTAINER_NAME
+    assert cfg_b.container_name == SHARED_CONTAINER_NAME
 
 
 def test_container_name_is_deterministic(tmp_path: Path):
@@ -233,25 +235,17 @@ def test_container_name_is_deterministic(tmp_path: Path):
     assert cfg1.container_name == cfg2.container_name
 
 
-def test_container_name_sanitizes_special_chars(tmp_path: Path):
-    """Directory with spaces/special chars produces a valid Docker name."""
+def test_container_name_unaffected_by_directory_chars(tmp_path: Path):
+    """Shared container name doesn't depend on the directory name at all."""
+    from codegraph.init import SHARED_CONTAINER_NAME
+
     spaced = tmp_path / "my project"
     spaced.mkdir()
     cfg = _prompt_config(
         RepoShape(root=spaced), non_interactive=True, console=_silent_console(),
     )
-    assert " " not in cfg.container_name
+    assert cfg.container_name == SHARED_CONTAINER_NAME
     assert re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", cfg.container_name)
-
-
-def test_container_name_sanitizes_segment_value(tmp_path: Path):
-    """Sanitized segment is 'my-project', not 'my project'."""
-    spaced = tmp_path / "my project"
-    spaced.mkdir()
-    cfg = _prompt_config(
-        RepoShape(root=spaced), non_interactive=True, console=_silent_console(),
-    )
-    assert "my-project" in cfg.container_name
 
 
 # ── _warn_orphaned_containers ─────────────────────────────

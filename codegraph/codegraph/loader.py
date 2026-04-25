@@ -167,6 +167,42 @@ class Neo4jLoader:
         with self.driver.session(database=self.database) as s:
             s.run("MATCH (n) DETACH DELETE n")
 
+    def wipe_scoped(self, packages: list[str]) -> int:
+        """Delete every :File whose ``package`` is in *packages* and all owned children.
+
+        The shared-Neo4j model — every repo on the machine indexes into one
+        ``codegraph-neo4j`` instance — makes a global ``MATCH (n) DETACH
+        DELETE n`` dangerous: re-indexing repo A would nuke repo B's data.
+        ``wipe_scoped`` is what ``codegraph index --wipe`` calls instead.
+        Standalone ``codegraph wipe`` keeps the global wipe (explicit user
+        intent for a clean slate).
+
+        Implementation: collect ``:File.path`` values where
+        ``f.package IN $packages``, then delegate to
+        :meth:`delete_file_subgraph` so the proven 3-step cascade does the
+        actual delete. Also drops the matching ``:Package`` nodes (re-index
+        will MERGE them back) to keep ``stats`` accurate.
+
+        Returns the number of file subgraphs deleted.
+        """
+        if not packages:
+            return 0
+        with self.driver.session(database=self.database) as s:
+            paths_result = s.run(
+                "MATCH (f:File) WHERE f.package IN $packages RETURN f.path AS path",
+                packages=packages,
+            )
+            paths = [row["path"] for row in paths_result]
+        deleted = self.delete_file_subgraph(paths) if paths else 0
+        # Drop orphaned :Package nodes for the wiped packages — load() will
+        # re-MERGE them with fresh framework metadata on the next index.
+        with self.driver.session(database=self.database) as s:
+            s.run(
+                "MATCH (p:Package) WHERE p.name IN $packages DETACH DELETE p",
+                packages=packages,
+            )
+        return deleted
+
     def delete_file_subgraph(self, paths: list[str]) -> int:
         """Delete :File nodes for *paths* and all owned children.
 

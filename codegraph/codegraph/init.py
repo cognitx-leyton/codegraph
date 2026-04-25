@@ -17,12 +17,20 @@ Flags:
 - ``--skip-docker``   write compose file but don't start it
 - ``--skip-index``    don't run the first index
 
+Shared Neo4j model: codegraph uses a single ``codegraph-neo4j`` container
+across every repo on the machine.  Init detects an existing container and
+reuses it (starting it first if it's stopped) before falling back to
+``docker compose up -d`` for a fresh install.  See
+:func:`find_existing_neo4j_container` and :func:`_resolve_neo4j_setup`.
+
 Templates live in :mod:`codegraph.templates` and use ``string.Template``
 (``$VAR`` / ``${VAR}``) substitution — stdlib, no new dependencies.
 """
 from __future__ import annotations
 
+import enum
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -40,12 +48,27 @@ import typer
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
+from .docker_setup import (
+    DockerStatus,
+    OsInfo,
+    check_docker_installed,
+    detect_os,
+    suggest_daemon_start,
+    suggest_docker_install,
+    suggest_docker_update,
+)
+
 
 _TEMPLATES_ROOT = _pkg_files("codegraph") / "templates"
+
+# Single shared container name for every repo on the machine.  Init detects
+# and reuses this container instead of creating per-repo isolates.
+SHARED_CONTAINER_NAME = "codegraph-neo4j"
 
 _DEFAULT_BOLT_PORT = 7687
 _DEFAULT_HTTP_PORT = 7474
 _NEO4J_READY_TIMEOUT_SEC = 90
+_DOCKER_PROBE_TIMEOUT_SEC = 5
 
 
 def _sanitize_container_segment(name: str) -> str:
@@ -57,13 +80,192 @@ def _sanitize_container_segment(name: str) -> str:
 
 
 def derive_container_name(root: Path) -> str:
-    """Deterministic Docker container name from a repo root path.
+    """Deterministic per-repo Docker container name (legacy / opt-in isolation).
 
     Format: ``cognitx-codegraph-<sanitized-dir>-<8-hex-chars>``.
+
+    Not used by default — init now uses :data:`SHARED_CONTAINER_NAME` so
+    every repo on the machine shares one Neo4j.  Kept here for any caller
+    that wants per-repo isolation by passing a custom container name into
+    :class:`InitConfig`.
     """
     repo_name = _sanitize_container_segment(root.name)
     path_hash = hashlib.sha1(str(root.resolve()).encode()).hexdigest()[:8]
     return f"cognitx-codegraph-{repo_name}-{path_hash}"
+
+
+# ── Container detection / reuse ─────────────────────────────
+
+
+class Neo4jSetup(enum.Enum):
+    """Outcome of resolving how init should set up Neo4j."""
+
+    REUSE_RUNNING = "reuse_running"           # existing container, already running
+    REUSE_STOPPED = "reuse_stopped"           # existing container, was stopped, started
+    CREATE_NEW = "create_new"                 # no existing container, fresh compose up
+    DOCKER_MISSING = "docker_missing"         # docker binary not on PATH
+    DAEMON_DOWN = "daemon_down"               # docker installed but daemon not answering
+    PORT_TAKEN = "port_taken"                 # bolt or http port held by something else
+    START_FAILED = "start_failed"             # docker start <name> failed for the existing container
+
+
+def find_existing_neo4j_container(name: str = SHARED_CONTAINER_NAME) -> Optional[dict]:
+    """Inspect a Docker container by name. Return its key facts or ``None``.
+
+    Returns a dict like::
+
+        {
+            "name": "codegraph-neo4j",
+            "state": "running" | "exited" | "created" | "paused" | …,
+            "image": "neo4j:5.24-community",
+            "ports": {"bolt": 7688, "http": 7475},  # host-side ports, may be empty
+        }
+
+    Returns ``None`` when the container doesn't exist *or* docker isn't
+    available — callers should still call :func:`check_docker_installed`
+    to distinguish those cases.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .}}", name],
+            capture_output=True, text=True,
+            timeout=_DOCKER_PROBE_TIMEOUT_SEC, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None  # "No such object" → container doesn't exist
+
+    try:
+        spec = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+    state_block = spec.get("State", {}) or {}
+    config_block = spec.get("Config", {}) or {}
+    network_block = spec.get("NetworkSettings", {}) or {}
+    port_bindings = network_block.get("Ports", {}) or {}
+
+    ports = {
+        "bolt": _extract_host_port(port_bindings.get("7687/tcp")),
+        "http": _extract_host_port(port_bindings.get("7474/tcp")),
+    }
+    return {
+        "name": name,
+        "state": state_block.get("Status", "unknown"),
+        "image": config_block.get("Image", ""),
+        "ports": {k: v for k, v in ports.items() if v is not None},
+    }
+
+
+def _extract_host_port(bindings: Optional[list]) -> Optional[int]:
+    """Pull the first host-side port out of a ``docker inspect`` Ports entry."""
+    if not bindings:
+        return None
+    first = bindings[0] if isinstance(bindings, list) else None
+    if not isinstance(first, dict):
+        return None
+    raw = first.get("HostPort")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def start_existing_container(name: str, console: Console) -> bool:
+    """Run ``docker start <name>``.  Returns True on success.
+
+    Idempotent — a container that's already running becomes a no-op.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "start", name],
+            capture_output=True, text=True,
+            timeout=_DOCKER_PROBE_TIMEOUT_SEC, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        console.print("[red]docker not found on PATH[/]")
+        return False
+    if result.returncode != 0:
+        console.print(f"[red]docker start failed:[/] {result.stderr.strip()}")
+        return False
+    return True
+
+
+def _is_port_in_use(port: int) -> bool:
+    """Best-effort check: is something listening on ``localhost:port``?"""
+    import socket as _socket
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    sock.settimeout(0.5)
+    try:
+        # SO_REUSEADDR keeps this from leaving a TIME_WAIT entry.
+        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", port))
+        return False  # bind succeeded → port free
+    except OSError:
+        return True
+    finally:
+        sock.close()
+
+
+def _resolve_neo4j_setup(
+    config: "InitConfig",
+    console: Console,
+    *,
+    docker_status: Optional[DockerStatus] = None,
+) -> Neo4jSetup:
+    """Decide how init should bring up Neo4j and (when reusing) sync the
+    container's host ports back into ``config``.
+
+    Side effects:
+    - On REUSE_*: mutates ``config.bolt_port`` / ``config.http_port`` to
+      the existing container's actual host-side port mapping so the rest
+      of the init flow (compose template, readiness probe, first index)
+      uses the right values.
+    """
+    status = docker_status if docker_status is not None else check_docker_installed()
+    if not status.installed:
+        return Neo4jSetup.DOCKER_MISSING
+    if not status.daemon_running:
+        return Neo4jSetup.DAEMON_DOWN
+
+    existing = find_existing_neo4j_container(config.container_name)
+    if existing is not None:
+        # Sync ports so we probe the right URL and the first index dials home correctly.
+        existing_ports = existing.get("ports", {})
+        if existing_ports.get("bolt"):
+            config.bolt_port = existing_ports["bolt"]
+        if existing_ports.get("http"):
+            config.http_port = existing_ports["http"]
+
+        if existing["state"] == "running":
+            console.print(
+                f"[green]✓[/] Reusing existing [bold]{config.container_name}[/] container "
+                f"(bolt {config.bolt_port}, http {config.http_port})."
+            )
+            return Neo4jSetup.REUSE_RUNNING
+
+        console.print(
+            f"[bold]Found stopped[/] [bold]{config.container_name}[/] — starting it…"
+        )
+        if not start_existing_container(config.container_name, console):
+            return Neo4jSetup.START_FAILED
+        return Neo4jSetup.REUSE_STOPPED
+
+    # No existing container.  Make sure the requested ports are free before
+    # we try a fresh `docker compose up -d`.
+    for port_name, port in (("bolt", config.bolt_port), ("http", config.http_port)):
+        if _is_port_in_use(port):
+            console.print(
+                f"[red]Port {port} ({port_name}) is already in use[/] — "
+                f"and no [bold]{config.container_name}[/] container owns it. "
+                f"Re-run with [cyan]--bolt-port[/] / [cyan]--http-port[/] to pick free ports."
+            )
+            return Neo4jSetup.PORT_TAKEN
+
+    return Neo4jSetup.CREATE_NEW
 
 
 # ── Detection ────────────────────────────────────────────────
@@ -166,7 +368,8 @@ def _prompt_config(
     """
     default_packages = detected.package_candidates or ["."]
     default_pkg_str = ",".join(default_packages)
-    container_name = derive_container_name(detected.root)
+    # Shared container across every repo on the machine.  See module docstring.
+    container_name = SHARED_CONTAINER_NAME
 
     if non_interactive:
         return InitConfig(
@@ -451,26 +654,84 @@ def _warn_orphaned_containers(
         )
 
 
+def _preflight_docker(console: Console) -> Optional[DockerStatus]:
+    """Print the Docker-presence banner at the top of init.
+
+    Returns the :class:`DockerStatus` to thread into later helpers, or
+    ``None`` if init should bail out (Docker missing or daemon down).
+    The caller can soft-skip this whole stage with ``--skip-docker``.
+    """
+    status = check_docker_installed()
+    os_info = detect_os()
+
+    if not status.installed:
+        console.print(suggest_docker_install(os_info))
+        console.print("[dim]Re-run with [cyan]--skip-docker[/] to scaffold without Docker.[/]")
+        return None
+
+    if not status.daemon_running:
+        console.print(suggest_daemon_start(os_info))
+        console.print("[dim]Re-run with [cyan]--skip-docker[/] to scaffold without Docker.[/]")
+        return None
+
+    if status.needs_update:
+        # Soft warning — old Docker still works, just nudge the user.
+        console.print(
+            suggest_docker_update(os_info, status.version)
+            if status.version is not None
+            else "[yellow]Docker is older than the recommended baseline.[/]"
+        )
+
+    console.print(f"[green]✓[/] {status.version_str}")
+    return status
+
+
 def _start_and_wait_for_neo4j(
     root: Path,
     config: InitConfig,
     console: Console,
+    *,
+    docker_status: Optional[DockerStatus] = None,
 ) -> bool:
-    """Run ``docker compose up -d`` and wait for Neo4j HTTP readiness."""
-    compose_path = root / "docker-compose.yml"
-    console.print(f"[bold]Starting Neo4j ({config.container_name})…[/]")
-    try:
-        subprocess.run(
-            ["docker", "compose", "-f", str(compose_path), "up", "-d"],
-            check=True, cwd=root,
-        )
-    except FileNotFoundError:
-        console.print("[red]docker not found on PATH — skipping.[/]")
+    """Bring up the shared codegraph-neo4j container and wait until it's ready.
+
+    Strategy (handled by :func:`_resolve_neo4j_setup`):
+    1. If a container named ``codegraph-neo4j`` already exists and runs → reuse.
+    2. If it exists but is stopped → ``docker start`` it.
+    3. Otherwise → ``docker compose up -d`` (fresh install).
+
+    Returns True iff the daemon answers HTTP within
+    :data:`_NEO4J_READY_TIMEOUT_SEC`.
+    """
+    setup = _resolve_neo4j_setup(config, console, docker_status=docker_status)
+
+    if setup == Neo4jSetup.DOCKER_MISSING:
+        console.print(suggest_docker_install(detect_os()))
         return False
-    except subprocess.CalledProcessError as exc:
-        console.print(f"[red]docker compose up failed:[/] {exc}")
+    if setup == Neo4jSetup.DAEMON_DOWN:
+        console.print(suggest_daemon_start(detect_os()))
+        return False
+    if setup == Neo4jSetup.PORT_TAKEN:
+        return False
+    if setup == Neo4jSetup.START_FAILED:
         return False
 
+    if setup == Neo4jSetup.CREATE_NEW:
+        compose_path = root / "docker-compose.yml"
+        console.print(f"[bold]Creating Neo4j ({config.container_name})…[/]")
+        try:
+            subprocess.run(
+                ["docker", "compose", "-f", str(compose_path), "up", "-d"],
+                check=True, cwd=root,
+            )
+        except FileNotFoundError:
+            console.print("[red]docker not found on PATH — skipping.[/]")
+            return False
+        except subprocess.CalledProcessError as exc:
+            console.print(f"[red]docker compose up failed:[/] {exc}")
+            return False
+
+    # All reuse / create paths converge on a readiness probe.
     url = f"http://localhost:{config.http_port}"
     deadline = time.monotonic() + _NEO4J_READY_TIMEOUT_SEC
     while time.monotonic() < deadline:
@@ -547,6 +808,17 @@ def run_init(
         return 1
 
     console.rule("[bold cyan]codegraph init")
+
+    # Pre-flight Docker checks.  We probe once and pass the status down so
+    # later helpers don't redo `docker info`.
+    docker_status: Optional[DockerStatus] = None
+    if not skip_docker:
+        docker_status = _preflight_docker(console)
+        if docker_status is None:
+            # Hard stop: Docker missing or daemon down.  The caller's --skip-docker
+            # escape hatch turns this into a soft skip below.
+            return 1
+
     detected = _detect_repo_shape(root)
     config = _prompt_config(
         detected, non_interactive=non_interactive, console=console,
@@ -584,7 +856,7 @@ def run_init(
                 console.print(f"[yellow]{platform_name}:[/] {exc}")
 
     if config.setup_neo4j and not skip_docker:
-        if not _start_and_wait_for_neo4j(root, config, console):
+        if not _start_and_wait_for_neo4j(root, config, console, docker_status=docker_status):
             console.print("[yellow]Skipping first index (Neo4j not ready)[/]")
             _print_next_steps(root, config, console)
             return 0

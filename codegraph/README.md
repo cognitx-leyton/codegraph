@@ -22,7 +22,7 @@ codegraph arch-check                   # exit 1 on architecture violations
 
 | Command | Purpose |
 |---|---|
-| `codegraph init` | Scaffold codegraph into a repo (interactive). `--yes` for non-interactive, `--bolt-port` / `--http-port` for custom Neo4j ports, `--skip-docker`, `--skip-index`. |
+| `codegraph init` | Scaffold codegraph into a repo (interactive). Auto-detects + reuses the shared `codegraph-neo4j` container (starts it if stopped, creates it if missing). Pre-flights Docker presence + version with OS-aware install / upgrade suggestions. `--yes` for non-interactive, `--bolt-port` / `--http-port` for custom Neo4j ports, `--skip-docker`, `--skip-index`. |
 | `codegraph index <repo>` | Walk the source, parse with tree-sitter, write the graph. Flags: `-p/--package` (repeatable), `--update` (SHA256 incremental), `--since <git-ref>` (diff-based), `--no-wipe`, `--no-export`, `--no-benchmark`, `--no-analyze`, `--skip-ownership`, `--max-files`, `--ignore-file`, `--json`. |
 | `codegraph query <cypher>` | Run a Cypher query. `-n/--limit`, `--json`. |
 | `codegraph arch-check` | Run architecture-conformance policies. Auto-scopes to configured packages; `--scope` / `--no-scope` overrides. Exits 1 on violations, 2 on config errors. |

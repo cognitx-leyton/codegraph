@@ -551,8 +551,20 @@ def _run_index(
     try:
         loader.init_schema()
         if wipe:
-            say("[yellow]Wiping database…")
-            loader.wipe()
+            # Scope wipe to configured packages so re-indexing repo A doesn't
+            # nuke repo B in a shared codegraph-neo4j. Standalone `codegraph
+            # wipe` keeps the global wipe (explicit user intent).
+            scoped_packages = [p.name for p in pkg_configs]
+            if scoped_packages:
+                say(f"[yellow]Wiping {len(scoped_packages)} package(s) from database…[/]")
+                deleted = loader.wipe_scoped(scoped_packages)
+                say(f"  cleared {deleted} file subgraph(s)")
+            else:
+                # No packages resolved — fall back to the global wipe so the
+                # user still gets a clean DB. Should be unreachable in practice
+                # since require_packages() runs earlier.
+                say("[yellow]Wiping database…[/]")
+                loader.wipe()
             loader.init_schema()
         # Incremental: clean up stale subgraphs for changed + deleted files.
         if changed_files is not None:
