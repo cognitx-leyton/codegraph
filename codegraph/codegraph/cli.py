@@ -10,6 +10,7 @@ REPL with persistent session state (see :mod:`codegraph.repl`).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -1424,6 +1425,36 @@ def watch(
 # ── install / uninstall sub-apps ───────────────────────────────────
 
 
+def _build_install_vars(root: Path) -> dict[str, str]:
+    """Build the full template-variable dict for ``install`` commands.
+
+    Mirrors :func:`codegraph.init._template_vars` so every ``$VAR`` in
+    the shipped templates gets resolved even when ``codegraph init`` has
+    not been run.
+    """
+    from .init import _sanitize_container_segment
+
+    config = load_config(root)
+    packages = config.packages
+
+    flags = " ".join(f"-p {p}" for p in packages) if packages else ""
+    prefix = (packages[0] + "/") if packages and packages[0] != "." else ""
+
+    repo_name = _sanitize_container_segment(root.name)
+    path_hash = hashlib.sha1(str(root.resolve()).encode()).hexdigest()[:8]
+    container_name = f"cognitx-codegraph-{repo_name}-{path_hash}"
+
+    return {
+        "PACKAGE_PATHS_FLAGS": flags,
+        "DEFAULT_PACKAGE_PREFIX": prefix,
+        "CROSS_PAIRS_TOML": "",
+        "CONTAINER_NAME": container_name,
+        "NEO4J_BOLT_PORT": os.environ.get("CODEGRAPH_NEO4J_BOLT_PORT", "7687"),
+        "NEO4J_HTTP_PORT": "7474",
+        "PIPX_VERSION": "0.2.0",
+    }
+
+
 @install_app.callback(invoke_without_command=True)
 def _install_callback(
     ctx: typer.Context,
@@ -1434,7 +1465,7 @@ def _install_callback(
         from .platforms import install_all
         from .init import _find_git_root
         root = _find_git_root(Path.cwd())
-        template_vars = {"NEO4J_BOLT_PORT": os.environ.get("CODEGRAPH_NEO4J_BOLT_PORT", "7687")}
+        template_vars = _build_install_vars(root)
         results = install_all(root, template_vars=template_vars, console=console)
         for r in results:
             console.print(r)
@@ -1448,7 +1479,7 @@ def _make_install_cmd(platform_name: str, display_name: str):
         from .platforms import install_platform
         from .init import _find_git_root
         root = _find_git_root(Path.cwd())
-        template_vars = {"NEO4J_BOLT_PORT": os.environ.get("CODEGRAPH_NEO4J_BOLT_PORT", "7687")}
+        template_vars = _build_install_vars(root)
         result = install_platform(root, platform_name, template_vars=template_vars, console=console)
         console.print(result)
     _cmd.__doc__ = f"Install codegraph for {display_name}."
