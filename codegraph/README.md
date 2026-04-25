@@ -149,12 +149,18 @@ neo4j_password = "codegraph123"
 
 ## Documentation
 
-- [`docs/init.md`](docs/init.md) — `codegraph init` flow, prompts, troubleshooting.
+- [`docs/cli.md`](docs/cli.md) — full per-command reference: every flag, `--json` shape, exit codes, examples.
+- [`docs/mcp.md`](docs/mcp.md) — full per-tool reference for the MCP server (17 tools).
+- [`docs/schema.md`](docs/schema.md) — complete graph schema: 15 node types, 33 edge types, properties, indexing phases.
+- [`docs/incremental.md`](docs/incremental.md) — `--update`, `--since`, `codegraph watch`, `codegraph hook install`.
+- [`docs/platforms.md`](docs/platforms.md) — the 14 AI agent platform integrations.
+- [`docs/init.md`](docs/init.md) — `codegraph init` flow, port flags, prompts, troubleshooting.
 - [`docs/arch-policies.md`](docs/arch-policies.md) — policy reference, suppression syntax, custom-policy authoring.
 - [`docs/confidence.md`](docs/confidence.md) — edge-level confidence labels and scores.
 - [`docs/hyperedges.md`](docs/hyperedges.md) — `:EdgeGroup` model and the `describe_group` MCP tool.
 - `queries.md` — canonical Cypher query catalogue (also auto-loaded as MCP prompt templates).
-- `ROADMAP.md` (repo root) — session-to-session handoff and shipped-feature log.
+- `../CHANGELOG.md` — version-by-version shipped-feature log.
+- `../ROADMAP.md` — session-to-session engineering handoff.
 
 ## Development
 

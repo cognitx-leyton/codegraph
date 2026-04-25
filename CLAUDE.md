@@ -101,6 +101,26 @@ Key source files:
 | `codegraph/codegraph/ignore.py` | `.codegraphignore` parser |
 | `codegraph/codegraph/config.py` | `codegraph.toml` / `pyproject.toml` config loader |
 
+User-facing reference docs (read these before answering questions about CLI flags, MCP tools, or the schema):
+
+| Doc | When to consult |
+|---|---|
+| `README.md` (repo root) | Pitch, quickstart, CLI cheat sheet, schema-at-a-glance, configuration. The user-facing front door. |
+| `CHANGELOG.md` (repo root) | Version-by-version log of shipped features and fixes. Use when the user asks "when did X ship?" or "what changed in 0.1.X?". |
+| `codegraph/README.md` | Inner package overview — denser CLI / MCP / schema / extras / platforms reference. |
+| `codegraph/docs/cli.md` | Full per-command reference (every flag, every `--json` shape, exit codes, examples). |
+| `codegraph/docs/mcp.md` | Full per-tool reference for the MCP server (17 tools incl. write tools). |
+| `codegraph/docs/schema.md` | Complete graph schema — 15 node types, 33 edge types, properties, indexing phases. |
+| `codegraph/docs/incremental.md` | `--update` cache, `--since` git-diff, `codegraph watch`, `codegraph hook install`. |
+| `codegraph/docs/platforms.md` | `codegraph install <platform>` for the 14 supported AI agent platforms. |
+| `codegraph/docs/confidence.md` | Edge confidence labels (`EXTRACTED` / `INFERRED` / `AMBIGUOUS`) and scores. |
+| `codegraph/docs/hyperedges.md` | `:EdgeGroup` model — protocol implementers and Leiden communities. |
+| `codegraph/docs/arch-policies.md` | All 5 built-in `arch-check` policies, `[[suppress]]` syntax, custom policies. |
+| `codegraph/docs/init.md` | `codegraph init` flow, prompts, port flags, container naming, troubleshooting. |
+| `codegraph/queries.md` | Canonical Cypher catalogue (12 categories). Also auto-loaded as MCP prompt templates. |
+
+When the user asks a question that the docs already answer, prefer linking the doc to repeating its content here.
+
 ## Non-goals to remember
 
 - Don't refactor `TsParser` to be "language-agnostic" — two concrete parsers with the same `ParseResult` interface is the chosen design. See commit `154954c` for the rationale.
