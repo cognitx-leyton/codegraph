@@ -2,14 +2,14 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-25 after commits `09f9d8a` → `ff0b9e7` (feat(install): add multi-platform codegraph install command — closes #48; 796 tests passing, v0.1.95).
+> **Last updated:** 2026-04-25 after commits `09f9d8a` → `ea07455` (fix(install): resolve template variables in claude platform install — closes #256; 797 tests passing, v0.1.95).
 
 ---
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-48-v2`. Multi-platform `codegraph install` / `codegraph uninstall` ships 14 platform integrations (claude, codex, opencode, cursor, gemini, copilot, vscode, aider, claw, droid, trae, kiro, antigravity, hermes). `codegraph init` now prompts for platform install. `platforms.py` registry + 8 rule templates. Closes issue #48. v0.1.95.
-- **Tests:** 796 passing (58 new: `test_platforms.py` + 2 fixed uninstall assertions + 1 `_remove_section` regression), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-256`. Template-variable fix for `codegraph install claude` (and `--all`): all 7 vars (`NEO4J_BOLT_PORT`, `NEO4J_HTTP_PORT`, `PACKAGE_PATHS_FLAGS`, `DEFAULT_PACKAGE_PREFIX`, `CONTAINER_NAME`, `CROSS_PAIRS_TOML`, `PIPX_VERSION`) now resolved via `_build_install_vars(root)`. Closes issue #256. v0.1.95.
+- **Tests:** 797 passing (1 new regression test: `test_install_claude_no_unresolved_vars`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -24,7 +24,8 @@
 ## Shipped since the last roadmap update (commit `09f9d8a`)
 
 ```
-ff0b9e7  feat(install): add multi-platform codegraph install command (issue #48)
+ea07455  fix(install): resolve template variables in claude platform install (issue #256)
+d27301c  feat(install): add multi-platform codegraph install command (#258, closes #48)
 d2f08e4  feat(schema): add edge-level confidence labels to CALLS, IMPORTS, and resolver edges (#255)
 906983c  feat(schema): add hyperedge EdgeGroup for protocol-implementer sets (#254)
 e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
@@ -35,6 +36,25 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### install — resolve all template variables in `codegraph install claude` (issue #256)
+
+- `ea07455 fix(install)` — Three files changed:
+
+  **`codegraph/codegraph/cli.py`**:
+  - Added `import hashlib`.
+  - Added `_build_install_vars(root)` helper that loads `CodegraphConfig`, derives `PACKAGE_PATHS_FLAGS` (joined `-p` flags from `config.packages`), `DEFAULT_PACKAGE_PREFIX` (first package or `"codegraph"`), `CONTAINER_NAME` (repo name + 8-char path hash), and provides defaults for `CROSS_PAIRS_TOML`, `NEO4J_HTTP_PORT`, `PIPX_VERSION`.
+  - Updated `_install_callback` and `_make_install_cmd` to call `_build_install_vars(root)` instead of the inline `{"NEO4J_BOLT_PORT": ...}` one-key dict. Fixes the regression where 6 of 7 template variables were left unresolved as literal `$VAR` strings in the rendered CLAUDE.md.
+
+  **`codegraph/tests/test_platforms.py`**:
+  - Expanded `_default_vars()` from 1 key to the full 7-key dict matching all template variables.
+  - Added `test_install_claude_no_unresolved_vars` regression test — asserts that no `$VAR` literals remain in the rendered CLAUDE.md after install.
+  - Moved `import re` to module level (was inline inside the test function — style inconsistency found during code review).
+
+  **Code review (1 issue found and fixed):**
+  - `[LINT]` `import re` was inside the test function body instead of at module level → moved to top-level imports.
+
+  - **Validation:** 797 tests pass (1 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass (1 skipped).
 
 ### install — multi-platform codegraph install command (issue #48)
 
@@ -1379,15 +1399,15 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-48-v2` |
+| Current branch | `archon/task-fix-issue-256` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`ff0b9e7` feat(install): add multi-platform codegraph install command — pending PR) |
+| Unpushed commits | 1 (`ea07455` fix(install): resolve template variables in claude platform install — pending PR) |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/multi-platform-install.plan.md`) |
-| Test count | 796 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/fix-install-template-vars.plan.md`) |
+| Test count | 797 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `ff0b9e7`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"` after any `pyproject.toml` edit. |
+| Last editable install | After `ea07455`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"` after any `pyproject.toml` edit. |
 | Wheel built? | Not yet for v0.1.95. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
 | New files | `codegraph/codegraph/platforms.py`, `codegraph/codegraph/templates/platforms/` (8 templates), `codegraph/tests/test_platforms.py` |
 
