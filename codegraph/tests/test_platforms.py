@@ -6,6 +6,7 @@ operations run against real files.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -39,7 +40,15 @@ def _silent_console() -> Console:
 
 
 def _default_vars() -> dict[str, str]:
-    return {"NEO4J_BOLT_PORT": "7687"}
+    return {
+        "NEO4J_BOLT_PORT": "7687",
+        "NEO4J_HTTP_PORT": "7474",
+        "PACKAGE_PATHS_FLAGS": "",
+        "DEFAULT_PACKAGE_PREFIX": "",
+        "CROSS_PAIRS_TOML": "",
+        "CONTAINER_NAME": "codegraph-neo4j",
+        "PIPX_VERSION": "0.2.0",
+    }
 
 
 # ── Platform registry sanity ──────────────────────────────
@@ -168,6 +177,18 @@ def test_uninstall_claude_removes_section_and_hook(tmp_path: Path):
         data = json.loads(settings.read_text())
         pre_tool = data.get("hooks", {}).get("PreToolUse", [])
         assert not any("codegraph" in str(h) for h in pre_tool)
+
+
+def test_install_claude_no_unresolved_vars(tmp_path: Path):
+    """Regression test for #256: CLI install must resolve all template vars."""
+    _make_git_repo(tmp_path)
+    install_platform(
+        tmp_path, "claude",
+        template_vars=_default_vars(), console=_silent_console(),
+    )
+    content = (tmp_path / "CLAUDE.md").read_text()
+    unresolved = re.findall(r'\$\{?[A-Z_]+\}?', content)
+    assert unresolved == [], f"Unresolved template vars in CLAUDE.md: {unresolved}"
 
 
 # ── Cursor ─────────────────────────────────────────────────
