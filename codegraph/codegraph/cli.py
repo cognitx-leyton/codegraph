@@ -10,7 +10,6 @@ REPL with persistent session state (see :mod:`codegraph.repl`).
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -1428,31 +1427,23 @@ def watch(
 def _build_install_vars(root: Path) -> dict[str, str]:
     """Build the full template-variable dict for ``install`` commands.
 
-    Mirrors :func:`codegraph.init._template_vars` so every ``$VAR`` in
-    the shipped templates gets resolved even when ``codegraph init`` has
-    not been run.
+    Delegates to :func:`codegraph.init.build_template_vars` so every
+    ``$VAR`` in the shipped templates gets resolved even when
+    ``codegraph init`` has not been run.
     """
-    from .init import _sanitize_container_segment
+    from .init import _DEFAULT_BOLT_PORT, build_template_vars, derive_container_name
 
     config = load_config(root)
     packages = config.packages
-
-    flags = " ".join(f"-p {p}" for p in packages) if packages else ""
     prefix = (packages[0] + "/") if packages and packages[0] != "." else ""
+    bolt = int(os.environ.get("CODEGRAPH_NEO4J_BOLT_PORT", str(_DEFAULT_BOLT_PORT)))
 
-    repo_name = _sanitize_container_segment(root.name)
-    path_hash = hashlib.sha1(str(root.resolve()).encode()).hexdigest()[:8]
-    container_name = f"cognitx-codegraph-{repo_name}-{path_hash}"
-
-    return {
-        "PACKAGE_PATHS_FLAGS": flags,
-        "DEFAULT_PACKAGE_PREFIX": prefix,
-        "CROSS_PAIRS_TOML": "",
-        "CONTAINER_NAME": container_name,
-        "NEO4J_BOLT_PORT": os.environ.get("CODEGRAPH_NEO4J_BOLT_PORT", "7687"),
-        "NEO4J_HTTP_PORT": "7474",
-        "PIPX_VERSION": "0.2.0",
-    }
+    return build_template_vars(
+        packages=packages,
+        container_name=derive_container_name(root),
+        default_package_prefix=prefix,
+        bolt_port=bolt,
+    )
 
 
 @install_app.callback(invoke_without_command=True)

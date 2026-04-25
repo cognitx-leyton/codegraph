@@ -29,6 +29,8 @@ from codegraph.init import (
     _scaffold_files,
     _template_vars,
     _warn_orphaned_containers,
+    build_template_vars,
+    derive_container_name,
     run_init,
 )
 
@@ -143,6 +145,58 @@ def test_template_vars_no_cross_pairs():
     )
     vars_ = _template_vars(config)
     assert vars_["CROSS_PAIRS_TOML"] == ""
+
+
+# ── derive_container_name ─────────────────────────────────
+
+
+def test_derive_container_name_deterministic(tmp_path: Path):
+    name1 = derive_container_name(tmp_path)
+    name2 = derive_container_name(tmp_path)
+    assert name1 == name2
+    assert name1.startswith("cognitx-codegraph-")
+    suffix = name1.rsplit("-", 1)[-1]
+    assert re.fullmatch(r"[0-9a-f]{8}", suffix)
+
+
+def test_derive_container_name_differs_by_path(tmp_path: Path):
+    dir_a = tmp_path / "a" / "app"
+    dir_b = tmp_path / "b" / "app"
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+    assert derive_container_name(dir_a) != derive_container_name(dir_b)
+
+
+# ── build_template_vars ───────────────────────────────────
+
+
+def test_build_template_vars_all_keys():
+    vars_ = build_template_vars(packages=["a"], container_name="c")
+    assert set(vars_.keys()) == {
+        "PACKAGE_PATHS_FLAGS", "DEFAULT_PACKAGE_PREFIX", "CROSS_PAIRS_TOML",
+        "CONTAINER_NAME", "NEO4J_BOLT_PORT", "NEO4J_HTTP_PORT", "PIPX_VERSION",
+    }
+    assert vars_["PACKAGE_PATHS_FLAGS"] == "-p a"
+    assert vars_["CONTAINER_NAME"] == "c"
+    assert vars_["NEO4J_BOLT_PORT"] == "7687"
+    assert vars_["NEO4J_HTTP_PORT"] == "7474"
+
+
+def test_build_template_vars_cross_pairs():
+    vars_ = build_template_vars(
+        packages=["x"], container_name="c",
+        cross_pairs=[("x", "y")],
+    )
+    assert '{ importer = "x", importee = "y" }' in vars_["CROSS_PAIRS_TOML"]
+
+
+def test_build_template_vars_custom_ports():
+    vars_ = build_template_vars(
+        packages=["a"], container_name="c",
+        bolt_port=9999, http_port=8888,
+    )
+    assert vars_["NEO4J_BOLT_PORT"] == "9999"
+    assert vars_["NEO4J_HTTP_PORT"] == "8888"
 
 
 # ── _prompt_config container name ──────────────────────────

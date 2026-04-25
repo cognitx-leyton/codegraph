@@ -29,6 +29,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib.resources import files as _pkg_files
 from pathlib import Path
@@ -53,6 +54,16 @@ def _sanitize_container_segment(name: str) -> str:
     safe = re.sub(r"-{2,}", "-", safe)
     safe = safe.strip("-.")
     return safe or "repo"
+
+
+def derive_container_name(root: Path) -> str:
+    """Deterministic Docker container name from a repo root path.
+
+    Format: ``cognitx-codegraph-<sanitized-dir>-<8-hex-chars>``.
+    """
+    repo_name = _sanitize_container_segment(root.name)
+    path_hash = hashlib.sha1(str(root.resolve()).encode()).hexdigest()[:8]
+    return f"cognitx-codegraph-{repo_name}-{path_hash}"
 
 
 # ── Detection ────────────────────────────────────────────────
@@ -155,8 +166,7 @@ def _prompt_config(
     """
     default_packages = detected.package_candidates or ["."]
     default_pkg_str = ",".join(default_packages)
-    repo_name = _sanitize_container_segment(detected.root.name)
-    path_hash = hashlib.sha1(str(detected.root.resolve()).encode()).hexdigest()[:8]
+    container_name = derive_container_name(detected.root)
 
     if non_interactive:
         return InitConfig(
@@ -165,7 +175,7 @@ def _prompt_config(
             install_claude=True,
             install_ci=True,
             setup_neo4j=True,
-            container_name=f"cognitx-codegraph-{repo_name}-{path_hash}",
+            container_name=container_name,
             install_hooks=True,
             install_platforms=["claude"],
             bolt_port=bolt_port if bolt_port is not None else _DEFAULT_BOLT_PORT,
@@ -230,7 +240,7 @@ def _prompt_config(
         install_claude=install_claude,
         install_ci=install_ci,
         setup_neo4j=setup_neo4j,
-        container_name=f"cognitx-codegraph-{repo_name}-{path_hash}",
+        container_name=container_name,
         install_hooks=install_hooks,
         install_platforms=install_platforms,
         bolt_port=bolt_port if bolt_port is not None else _DEFAULT_BOLT_PORT,
@@ -242,25 +252,51 @@ def _prompt_config(
 # ── Scaffolder ───────────────────────────────────────────────
 
 
-def _template_vars(config: InitConfig) -> dict[str, str]:
-    """Build the substitution dict consumed by :class:`string.Template`."""
-    flags = " ".join(f"-p {p}" for p in config.packages) if config.packages else ""
+def build_template_vars(
+    *,
+    packages: list[str],
+    container_name: str,
+    cross_pairs: Sequence[tuple[str, str]] = (),
+    default_package_prefix: str = "",
+    bolt_port: int = _DEFAULT_BOLT_PORT,
+    http_port: int = _DEFAULT_HTTP_PORT,
+    pipx_version: str = "0.2.0",
+) -> dict[str, str]:
+    """Build the substitution dict consumed by :class:`string.Template`.
+
+    Single source of truth for template variables used by both
+    ``codegraph init`` and ``codegraph install``.
+    """
+    flags = " ".join(f"-p {p}" for p in packages) if packages else ""
 
     cross_pairs_toml = ""
-    for importer, importee in config.cross_pairs:
+    for importer, importee in cross_pairs:
         cross_pairs_toml += (
             f'  {{ importer = "{importer}", importee = "{importee}" }},\n'
         )
 
     return {
         "PACKAGE_PATHS_FLAGS": flags,
-        "DEFAULT_PACKAGE_PREFIX": config.default_package_prefix,
+        "DEFAULT_PACKAGE_PREFIX": default_package_prefix,
         "CROSS_PAIRS_TOML": cross_pairs_toml,
-        "CONTAINER_NAME": config.container_name,
-        "NEO4J_BOLT_PORT": str(config.bolt_port),
-        "NEO4J_HTTP_PORT": str(config.http_port),
-        "PIPX_VERSION": config.pipx_version,
+        "CONTAINER_NAME": container_name,
+        "NEO4J_BOLT_PORT": str(bolt_port),
+        "NEO4J_HTTP_PORT": str(http_port),
+        "PIPX_VERSION": pipx_version,
     }
+
+
+def _template_vars(config: InitConfig) -> dict[str, str]:
+    """Build the substitution dict consumed by :class:`string.Template`."""
+    return build_template_vars(
+        packages=config.packages,
+        container_name=config.container_name,
+        cross_pairs=config.cross_pairs,
+        default_package_prefix=config.default_package_prefix,
+        bolt_port=config.bolt_port,
+        http_port=config.http_port,
+        pipx_version=config.pipx_version,
+    )
 
 
 def _render(template_rel: str, variables: dict[str, str]) -> str:
