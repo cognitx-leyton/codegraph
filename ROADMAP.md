@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-26 after commits `6990e71` → `260394c` (PDF document ingestion with outline and page-based section extraction, closes issue #264). v0.1.103.
+> **Last updated:** 2026-04-26 after commits `6990e71` → `57b1a4a` (Markdown semantic extraction via Claude API — Concept/Decision/Rationale nodes, closes issue #265). v0.1.105.
 
 ---
 
@@ -27,11 +27,11 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-264-pdf-ingestion`. PDF document ingestion (`--extract-docs` flag on `codegraph index`) with two new schema nodes (`DocumentNode`, `DocumentSectionNode`), outline-based section splitting (page-fallback), size guard (50 MB), encrypted/empty PDF handling. New `doc_parser.py` module + `pypdf>=4.0` optional extra (`pip install "codegraph[docs]"`). Closes issue #264. v0.1.103.
-- **Tests:** 945 passing (8 new in `test_doc_parser.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-265-markdown-semantic`. Markdown semantic extraction (`--extract-markdown` flag on `codegraph index`) with three new schema nodes (`ConceptNode`, `DecisionNode`, `RationaleNode`) and four new edge types (`DOCUMENTS_CONCEPT`, `DECIDES`, `JUSTIFIES`, `SEMANTICALLY_SIMILAR_TO`). LLM-backed extraction via `semantic_extract.py` + `anthropic>=0.40` optional extra (`pip install "codegraph[semantic]"`). Per-file SHA-256 cache prevents duplicate API calls. Also fixes `wipe_scoped` to clean up Document/Concept/Decision/Rationale nodes (#274). Closes issue #265. v0.1.105.
+- **Tests:** 974 passing (10 new in `test_doc_parser_markdown.py`, 14 new in `test_semantic_extract.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
-- **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
+- **Package:** `cognitx-codegraph` v0.1.105 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
 - **Resolver:** Workspace import resolution now handles bare package names and subpath imports for monorepos (`twenty-ui/display` → `packages/twenty-ui/src/display/index.ts`). Scoped npm packages (`@scope/pkg/sub`) resolved correctly. `tsconfig.json` `"extends"` chains followed recursively (including TS 5.0+ array form). Estimated ~8,081 previously-unresolved Twenty workspace imports now route correctly.
 - **CI:** `.github/workflows/arch-check.yml` — every PR to `main` spins up Neo4j, indexes, runs `codegraph arch-check`, fails on architecture violations. Verified live on PR #8 (42s, exit 0).
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
@@ -43,7 +43,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
-260394c  feat(docs): PDF document ingestion with outline and page-based section extraction (#264)
+57b1a4a  feat(docs): markdown semantic extraction — concepts, decisions, rationales
+38bd173  feat(docs): PDF document ingestion with outline and page-based section extraction (#276)
 6990e71  fix(schema): namespace all node IDs with repo to prevent cross-repo overwrite (#273)
 743c02f  chore: bump version to 0.1.103
 0c659f3  fix: 5 issues uncovered by the 0.1.102 e2e run
@@ -67,6 +68,53 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### docs — markdown semantic extraction via Claude API (issue #265)
+
+- `57b1a4a feat(docs)` — Fifteen files changed (7 new, 8 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/semantic_extract.py`** (~270 LOC) — Claude API integration. `SemanticCache` (SHA-256 content hash + `rel` + `repo_name` → cached `SemanticResult`). `SemanticResult` dataclass (fields: `concepts: list[ConceptNode]`, `decisions: list[DecisionNode]`, `rationales: list[RationaleNode]`). `extract_semantics(content, rel, repo_name, api_key)` calls the Anthropic API with `max_tokens=2048`, parses the structured YAML-like response, and returns a `SemanticResult`. `_parse_response()` strips fenced code blocks, extracts headings-delimited sections, and maps them to node dataclasses. `_slugify(text)` normalises free-text LLM output into safe node-ID segments. `rationale_index` field disambiguates multiple rationales for the same decision.
+
+  2. **`codegraph/codegraph/templates/semantic/extract.md`** — Prompt template for concept/decision/rationale extraction. Instructs the model to identify concepts (named entities/abstractions), decisions (architectural/design choices with explicit rationale), and rationale nodes (the "why" behind each decision). Includes strict output schema and anti-hallucination constraints.
+
+  3. **`.env.example`** — Documents `ANTHROPIC_API_KEY` requirement for `--extract-markdown`.
+
+  4. **`codegraph/tests/fixtures/markdown/concepts.md`** — Fixture with headings + concept-dense text.
+  5. **`codegraph/tests/fixtures/markdown/decisions.md`** — Fixture with explicit architectural decisions.
+  6. **`codegraph/tests/fixtures/markdown/empty.md`** — Zero-content fixture.
+  7. **`codegraph/tests/fixtures/markdown/no-headings.md`** — Flat prose, no Markdown headings.
+
+  8. **`codegraph/tests/test_doc_parser_markdown.py`** (10 tests) — Deterministic markdown extraction: `extract_markdown()` returns `(DocumentNode, list[DocumentSectionNode])`, section IDs are sequential, headings inside fenced code blocks are not extracted, repo-namespaced IDs (`doc:repo:path` / `docsec:repo:path#0`), ISO-8601 `indexed_at`, path consistency.
+
+  9. **`codegraph/tests/test_semantic_extract.py`** (14 tests) — Semantic extraction with mocked Anthropic client: happy path (concept/decision/rationale counts), `rationale_index` uniqueness, degenerate fence stripping, cache hit/miss, empty-response handling, API key validation (whitespace rejected), `_slugify` output, `SemanticCache.cache_key` includes `rel` and `repo_name` (prevents cross-file cache collisions).
+
+  **Updated files:**
+
+  10. **`codegraph/codegraph/schema.py`** — Added `ConceptNode` (fields: `id`, `name`, `description`, `repo`, `path`), `DecisionNode` (fields: `id`, `title`, `description`, `repo`, `path`), `RationaleNode` (fields: `id`, `rationale_index`, `text`, `repo`, `path`, `decision_id`). All IDs embed `_slugify(name/title)` + hash suffix for safety. Added edge constants: `DOCUMENTS_CONCEPT`, `DECIDES`, `JUSTIFIES`, `SEMANTICALLY_SIMILAR_TO`.
+
+  11. **`codegraph/codegraph/doc_parser.py`** — Added `extract_markdown(path, repo_name)` function. Heading-based section extraction (`##`-level headings split sections). Fenced code block stripping before heading detection (headings inside ` ```...``` ` blocks are ignored). Returns `(DocumentNode, list[DocumentSectionNode])`.
+
+  12. **`codegraph/codegraph/loader.py`** — Added `ConceptNode`, `DecisionNode`, `RationaleNode` constraints and indexes. Added `concepts`, `decisions`, `rationales` fields to `LoadStats`. Added `_write_concepts()`, `_write_decisions()`, `_write_rationales()`, `_write_semantic_edges()` helpers. Fixed `wipe_scoped` to also clean up Document, DocumentSection, Concept, Decision, Rationale nodes (closes #274). Used labeled MATCH in `_write_semantic_edges` for query performance.
+
+  13. **`codegraph/codegraph/cli.py`** — Added `--extract-markdown` flag (requires `ANTHROPIC_API_KEY`). API key validated (rejects whitespace-only). Markdown walk runs under `--extract-docs` (globs `**/*.md`, applies `exclude_dirs` + `ignore_filter`). Semantic extraction dispatches per-file with per-file error handling (one file failure doesn't abort the batch). Cache key includes `rel` + `repo_name` to prevent cross-file collisions. Semantic nodes threaded into `loader.load()`.
+
+  14. **`codegraph/pyproject.toml`** — Added `[semantic]` extra (`anthropic>=0.40`). Added `anthropic` to `[test]` extra.
+
+  15. **`codegraph/docs/schema.md`** + **`codegraph/docs/cli.md`** — Documented all 5 new node types (Document, DocumentSection, Concept, Decision, Rationale), 6 new edge types, Phase 11/12 indexing, and `--extract-docs` / `--extract-markdown` / `--repo-name` CLI flags.
+
+  **Code review (8 issues found and fixed across two rounds):**
+  - `[HIGH]` `cli.py` name collision: `extract_markdown` bool shadowed by function import of the same name → renamed import to `extract_markdown_doc`.
+  - `[HIGH]` Cache key omitted `rel` and `repo_name` → cross-file cache collisions possible → added both to `SemanticCache.cache_key()`.
+  - `[HIGH]` Free-text LLM output used raw in node IDs (concept names could contain `#`, `:`, spaces) → `_slugify()` normalises to safe segments; hash suffix added for disambiguation.
+  - `[MEDIUM]` `RationaleNode` had no disambiguator when a document has multiple rationales for the same decision → `rationale_index: int` field added.
+  - `[MEDIUM]` `semantic_extract.py` fence stripping raised `ValueError` on degenerate ` ``` ` without closing fence → replaced with regex substitution.
+  - `[MEDIUM]` `_get_score` used name-based matching for rationales (fragile on LLM paraphrase) → replaced with index-based matching.
+  - `[MEDIUM]` `_write_semantic_edges` in loader used unlabeled `MATCH (n)` (full scan) → replaced with label-aware MATCH per edge kind.
+  - `[LOW]` `loader.py` `_write_rationales` omitted `rationale_index` from the Cypher SET → added.
+
+  - **Validation:** 974 tests pass (24 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass.
 
 ### docs — PDF document ingestion with outline and page-based section extraction (issue #264)
 
@@ -1608,17 +1656,17 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-264-pdf-ingestion` |
+| Current branch | `archon/task-feat-issue-265-markdown-semantic` |
 | Base branch | `main` |
-| Unpushed commits | Multiple — PDF ingestion (`260394c`) + repo-namespace fix (`6990e71`) + prior work |
+| Unpushed commits | Multiple — markdown semantic extraction (`57b1a4a`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/pdf-document-ingestion.plan.md`) |
-| Test count | 945 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/markdown-semantic-extraction.plan.md`) |
+| Test count | 974 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `260394c`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs]"` after any `pyproject.toml` edit. |
-| Wheel built? | Not yet for v0.1.103. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
-| New files | `codegraph/codegraph/doc_parser.py`, `codegraph/tests/test_doc_parser.py`, `codegraph/tests/fixtures/docs/sample.pdf` |
+| Last editable install | After `57b1a4a`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic]"` after any `pyproject.toml` edit. |
+| Wheel built? | Not yet for v0.1.105. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
+| New files | `codegraph/codegraph/semantic_extract.py`, `codegraph/codegraph/templates/semantic/extract.md`, `.env.example`, `tests/fixtures/markdown/{concepts,decisions,empty,no-headings}.md`, `tests/test_doc_parser_markdown.py`, `tests/test_semantic_extract.py` |
 
 ---
 
@@ -1827,7 +1875,7 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 
 - **`relationship_mapper` port** — `RENDERS` is already there; `NAVIGATES_TO` / `SHARES_STATE` are fuzzy heuristics. Not worth it until MCP usage reveals a specific need.
 - **Go parser frontend** — big tree-sitter work, not the bottleneck.
-- **`knowledge_enricher` LLM-powered semantic pass** — biggest bet from the agent-onboarding analysis. Revisit once real-world MCP usage surfaces questions worth enriching.
+- ~~**`knowledge_enricher` LLM-powered semantic pass**~~ — **PARTIALLY SHIPPED** (`57b1a4a`). `--extract-markdown` extracts Concept/Decision/Rationale nodes from Markdown docs via Claude API. Full graph-node enrichment (annotating existing Code nodes with LLM-inferred meaning) remains deferred — revisit once MCP usage surfaces specific needs.
 - **Web UI / dashboard** — Neo4j Browser at `:7475` is the interactive surface.
 - ~~**Real-time file watching**~~ — **SHIPPED** (`be939bc`). `codegraph watch` + `codegraph hook install` cover the automated re-index use case.
 
