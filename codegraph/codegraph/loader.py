@@ -169,6 +169,8 @@ _INDEXES = [
     "CREATE INDEX concept_source IF NOT EXISTS FOR (n:Concept) ON (n.source_file)",
     "CREATE INDEX decision_title IF NOT EXISTS FOR (n:Decision) ON (n.title)",
     "CREATE INDEX decision_source IF NOT EXISTS FOR (n:Decision) ON (n.source_file)",
+    "CREATE INDEX rationale_source IF NOT EXISTS FOR (n:Rationale) ON (n.source_file)",
+    "CREATE INDEX rationale_decision IF NOT EXISTS FOR (n:Rationale) ON (n.decision_title)",
 ]
 
 

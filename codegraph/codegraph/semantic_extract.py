@@ -227,6 +227,8 @@ def _parse_response(text: str, rel: str, repo_name: str) -> SemanticResult:
     for c in data.get("concepts", []):
         if not isinstance(c, dict) or "name" not in c:
             continue
+        if not str(c["name"]).strip():
+            continue
         concepts.append(ConceptNode(
             name=c["name"],
             description=c.get("description", ""),
@@ -237,6 +239,8 @@ def _parse_response(text: str, rel: str, repo_name: str) -> SemanticResult:
     decisions: list[DecisionNode] = []
     for d in data.get("decisions", []):
         if not isinstance(d, dict) or "title" not in d:
+            continue
+        if not str(d["title"]).strip():
             continue
         decisions.append(DecisionNode(
             title=d["title"],
@@ -329,8 +333,11 @@ def _get_score_by_index(raw_items: list[dict], index: int) -> float:
 
 def _clamp_score(value: object) -> float:
     """Clamp a value to [0.0, 1.0], defaulting to 0.7 on bad input."""
+    import math
     try:
         score = float(value)  # type: ignore[arg-type]
+        if math.isnan(score) or math.isinf(score):
+            return 0.7
         return max(0.0, min(1.0, score))
     except (ValueError, TypeError):
         return 0.7
