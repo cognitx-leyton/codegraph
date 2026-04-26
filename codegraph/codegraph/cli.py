@@ -221,6 +221,11 @@ def index(
         help="Extract image content (diagrams, screenshots) via Claude vision API. "
              "Requires the [semantic] extra and ANTHROPIC_API_KEY env var.",
     ),
+    extract_audio: bool = typer.Option(
+        False, "--extract-audio",
+        help="Transcribe audio/video files via Whisper. "
+             "Requires the [transcribe] extra.",
+    ),
 ) -> None:
     """Index a TypeScript monorepo into Neo4j."""
     try:
@@ -241,6 +246,7 @@ def index(
             extract_docs=extract_docs,
             extract_markdown=extract_markdown,
             extract_images=extract_images,
+            extract_audio=extract_audio,
         )
     except ConfigError as e:
         _emit_error(as_json, "config", str(e))
@@ -346,6 +352,7 @@ def _run_index(
     extract_docs: bool = False,
     extract_markdown: bool = False,
     extract_images: bool = False,
+    extract_audio: bool = False,
 ) -> dict[str, Any]:
     """Core indexing routine. Returns a flat dict of stats (files, edges, ...).
 
@@ -371,6 +378,8 @@ def _run_index(
     if extract_markdown:
         extract_docs = True
     if extract_images:
+        extract_docs = True
+    if extract_audio:
         extract_docs = True
 
     # ── Incremental mode setup ──────────────────────────────────
@@ -754,6 +763,74 @@ def _run_index(
             f"[bold green]✓[/] vision: {len([d for d in doc_nodes if d.file_type == 'image'])} image(s), "
             f"{sum(1 for e in semantic_edge_list if e.kind == ILLUSTRATES_CONCEPT)} concept edges "
             f"(cache: {vis_hits} hit, {vis_misses} miss)"
+        )
+
+    # ── Audio/video transcription (opt-in) ─────────────────────
+    if extract_audio:
+        from .schema import DocumentNode as _DocNode
+        from .transcribe import (
+            transcribe as _transcribe,
+            load_model as _load_model,
+            MEDIA_EXTENSIONS,
+            _MAX_MEDIA_SIZE,
+            _file_content_hash as _audio_hash,
+            _get_cached_transcript,
+            _put_cached_transcript,
+        )
+        from datetime import datetime as _dt, timezone as _tz
+        say("[bold]Transcribing audio/video…")
+        try:
+            whisper_model = _load_model()
+        except ImportError as exc:
+            raise ConfigError(str(exc))
+        audio_count = 0
+        audio_cache_hits = audio_cache_misses = 0
+        for pkg in pkg_configs:
+            for ext in MEDIA_EXTENSIONS:
+                for p in pkg.root.rglob(f"*{ext}"):
+                    if not p.is_file():
+                        continue
+                    if any(part in exclude_dirs for part in p.parts):
+                        continue
+                    rel = str(p.resolve().relative_to(repo)).replace("\\", "/")
+                    if ignore_filter is not None and ignore_filter.should_ignore_file(rel):
+                        continue
+                    fsize = p.stat().st_size
+                    if fsize > _MAX_MEDIA_SIZE:
+                        say(f"  [yellow]skip[/] {rel}: exceeds 500 MB size limit")
+                        continue
+                    # Cache check
+                    try:
+                        fhash = _audio_hash(p)
+                    except OSError:
+                        continue
+                    cached_text = _get_cached_transcript(repo, fhash)
+                    if cached_text is not None:
+                        text = cached_text
+                        audio_cache_hits += 1
+                        doc = _DocNode(
+                            path=rel,
+                            file_type="transcript",
+                            loc=len(text),
+                            extracted_at=_dt.now(_tz.utc).isoformat(),
+                            repo=effective_repo_name,
+                        )
+                    else:
+                        try:
+                            doc, text = _transcribe(
+                                p, rel, repo_name=effective_repo_name,
+                                model=whisper_model,
+                            )
+                        except Exception as exc:
+                            say(f"  [yellow]skip[/] {rel}: {exc}")
+                            continue
+                        _put_cached_transcript(repo, fhash, text)
+                        audio_cache_misses += 1
+                    doc_nodes.append(doc)
+                    audio_count += 1
+        say(
+            f"[bold green]✓[/] transcribed {audio_count} media file(s) "
+            f"(cache: {audio_cache_hits} hit, {audio_cache_misses} miss)"
         )
 
     say(f"[bold]Connecting to Neo4j…[/] {uri}")

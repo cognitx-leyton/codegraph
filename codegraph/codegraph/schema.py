@@ -407,6 +407,9 @@ SEMANTICALLY_SIMILAR_TO = "SEMANTICALLY_SIMILAR_TO"
 ILLUSTRATES_CONCEPT     = "ILLUSTRATES_CONCEPT"
 SHOWS_ARCHITECTURE      = "SHOWS_ARCHITECTURE"
 
+# Phase 14 — audio/video transcription
+TRANSCRIBED_FROM        = "TRANSCRIBED_FROM"
+
 
 # ── Test-file pairing conventions ────────────────────────────
 TS_TEST_SUFFIXES = (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx")

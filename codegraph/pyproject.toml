@@ -93,6 +93,13 @@ semantic = [
   # Required by --extract-markdown on `codegraph index`.
   "anthropic>=0.40",
 ]
+transcribe = [
+  # Whisper-based audio/video transcription for --extract-audio.
+  # faster-whisper uses CTranslate2 for fast CPU/GPU inference.
+  # yt-dlp downloads audio from YouTube and similar sites.
+  "faster-whisper>=1.0",
+  "yt-dlp>=2024.1",
+]
 test = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
@@ -102,6 +109,8 @@ test = [
   "pypdf>=4.0",
   # Required by tests/test_semantic_extract.py — semantic extraction tests.
   "anthropic>=0.40",
+  # Required by tests/test_transcribe.py — Whisper transcription tests.
+  "faster-whisper>=1.0",
 ]
 
 [project.scripts]
