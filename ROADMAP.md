@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-26 after commits `d2e6f06` → `66f70cd` (image/vision semantic extraction — ILLUSTRATES_CONCEPT edges, closes issue #266). v0.1.105.
+> **Last updated:** 2026-04-26 after commits `a6c9221` → `b7f331e` (Whisper-based audio/video transcription — `--extract-audio` flag, faster-whisper integration, closes issue #267). v0.1.105.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-266-image-vision`. Image/vision semantic extraction (`--extract-images` flag on `codegraph index`) with two new edge constants (`ILLUSTRATES_CONCEPT`, `SHOWS_ARCHITECTURE`). Vision extraction via `vision_extract.py` + `vision.md` prompt template — calls the Claude claude-sonnet-4-6 vision API, parses structured YAML-like response, emits `ILLUSTRATES_CONCEPT` edges from images to `ConceptNode` targets. Per-file SHA-256 cache reuses `SemanticCache`. 20 MB size guard. Closes issue #266. v0.1.105.
-- **Tests:** 992 passing (18 new in `test_vision_extract.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-267-whisper-transcription`. Whisper-based audio/video transcription (`--extract-audio` flag on `codegraph index`) via `faster-whisper`. New `transcribe.py` module: `load_model()` + `transcribe()`, SHA-256 content-addressed cache, chunked hashing (1 MB blocks, no OOM on 500 MB files), model reuse across files (loaded once per CLI run), 500 MB size guard, CUDA/CPU auto-detection. Emits `DocumentNode` per media file (no back-edge — media files have no `:File` node). 14 new tests. `[transcribe]` optional extra in `pyproject.toml`. Closes issue #267. v0.1.105.
+- **Tests:** 1006 passing (14 new in `test_transcribe.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.105 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -43,7 +43,9 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
-66f70cd  feat(vision): image/vision semantic extraction with ILLUSTRATES_CONCEPT edges
+b7f331e  fix(audio): wire TRANSCRIBED_FROM edge into loader and CLI emission
+3dde404  feat(audio): Whisper-based audio/video transcription with DocumentNode extraction
+a6c9221  feat(vision): image/vision semantic extraction with ILLUSTRATES_CONCEPT edges (#280)
 d2e6f06  feat(semantic): markdown semantic extraction — Concept, Decision, Rationale nodes (#279)
 38bd173  feat(docs): PDF document ingestion with outline and page-based section extraction (#276)
 6990e71  fix(schema): namespace all node IDs with repo to prevent cross-repo overwrite (#273)
@@ -69,6 +71,38 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### audio — Whisper-based audio/video transcription (issue #267)
+
+- `3dde404 feat(audio)` + `b7f331e fix(audio)` — Seven files changed (3 new, 4 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/transcribe.py`** (~248 LOC) — Core transcription module. `load_model(device, compute_type)` instantiates a `faster_whisper.WhisperModel` (model size `base`); auto-selects `cuda`/`float16` when CUDA available, else `cpu`/`int8`. `transcribe(path, rel, repo_name, model, cache_dir)` returns a `(DocumentNode, str)` pair — one `DocumentNode` plus the full transcript text. SHA-256 content-addressed cache via `_file_content_hash(path)` (chunked 1 MB reads — safe on the 500 MB limit). Cache stores `{id, path, repo, transcript, indexed_at}` as JSON keyed by `{sha256}:{rel}:{repo}`. 500 MB size guard raises `ValueError` on oversized files. Supported extensions: `.wav`, `.mp3`, `.m4a`, `.ogg`, `.flac`, `.mp4`, `.mov`, `.mkv`, `.webm`, `.avi`. Optional-import guard converts missing `faster_whisper` into a user-friendly `ImportError` message rather than a raw traceback. `faster_whisper` and `yt_dlp` are optional-imported at call time (not module import time) so the rest of codegraph works without the extra installed.
+
+  2. **`codegraph/tests/test_transcribe.py`** (14 tests) — All tests mock `faster_whisper.WhisperModel` so the suite runs without the package installed. Covers: `DocumentNode` field presence, transcript text output, ID format (`doc:{repo}:{rel}`), 500 MB size guard, missing `faster_whisper` guard, cache hit/miss round-trip, `TRANSCRIBED_FROM` schema constant presence, extension list completeness.
+
+  3. **`codegraph/tests/fixtures/audio/sample.wav`** — 1-second silence WAV at 44.1 kHz (16 KB). Used as the live fixture for all `transcribe` tests.
+
+  **Updated files:**
+
+  4. **`codegraph/codegraph/schema.py`** — Added `TRANSCRIBED_FROM = "TRANSCRIBED_FROM"` edge constant (Phase 14). Kept as a schema constant for future use; no edges of this type are currently written to Neo4j (media files never get `:File` nodes, so a back-edge target would not exist).
+
+  5. **`codegraph/codegraph/cli.py`** — Added `--extract-audio` flag to `codegraph index`. Auto-enables `--extract-docs` (so `DocumentNode` loading is wired). Validates `faster_whisper` availability at startup; converts `ImportError` to `ConfigError` (caught by CLI, exits cleanly). Calls `load_model()` once before the loop (not per file). Media walk globs all supported extensions, applies `exclude_dirs` + `ignore_filter`. Per-file error handling: one file failure doesn't abort the batch. `audio_count` only printed in summary when > 0.
+
+  6. **`codegraph/codegraph/loader.py`** — `TRANSCRIBED_FROM` imported from schema (present for completeness; not yet wired to a write path since no `:File` target nodes exist for media files).
+
+  7. **`codegraph/pyproject.toml`** — Added `[transcribe]` optional extra (`faster-whisper>=1.0`, `yt-dlp>=2024.1`). Added `faster-whisper` to `[test]` extra so `test_transcribe.py` can mock it.
+
+  **Code review (6 issues found and fixed):**
+  - `[CRITICAL]` `TRANSCRIBED_FROM` edges targeted non-existent `:File` nodes — media files never get `FileNode` entries, so all edges would be silently dropped by Neo4j MATCH → removed edge creation from CLI; removed from loader dict/loop. Schema constant kept for future use.
+  - `[HIGH]` Unused `Edge` and `TRANSCRIBED_FROM` imports in `transcribe.py` → removed dead imports.
+  - `[HIGH]` `WhisperModel` re-instantiated per file in CLI loop — seconds of model loading per file → extracted `load_model()` function; CLI calls once, passes `model` param to `transcribe()`.
+  - `[HIGH]` `_file_content_hash` read up to 500 MB into memory via `read_bytes()` → changed to chunked 1 MB reads.
+  - `[HIGH]` Missing `faster-whisper` + `--extract-audio` → unhandled `ImportError` raw traceback → wrapped `load_model()` call in try/except, converts to `ConfigError` (caught by CLI).
+  - `[MEDIUM]` Unused `load_model` import in test file → removed.
+
+  - **Validation:** 1006 tests pass (14 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass.
 
 ### vision — image/vision semantic extraction with ILLUSTRATES_CONCEPT edges (issue #266)
 
@@ -1686,17 +1720,17 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-266-image-vision` |
+| Current branch | `archon/task-feat-issue-267-whisper-transcription` |
 | Base branch | `main` |
-| Unpushed commits | Multiple — vision extraction (`66f70cd`) + markdown semantic extraction (`d2e6f06`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
+| Unpushed commits | Multiple — audio transcription (`b7f331e`, `3dde404`) + vision extraction (`a6c9221`) + markdown semantic extraction (`d2e6f06`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/image-vision-extract.plan.md`) |
-| Test count | 992 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/feat-whisper-transcription.plan.md`) |
+| Test count | 1006 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `66f70cd`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic]"` after any `pyproject.toml` edit. |
+| Last editable install | After `3dde404`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic,transcribe]"` after any `pyproject.toml` edit. |
 | Wheel built? | Not yet for v0.1.105. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
-| New files | `codegraph/codegraph/vision_extract.py`, `codegraph/codegraph/templates/semantic/vision.md`, `tests/fixtures/images/sample.png`, `tests/test_vision_extract.py` |
+| New files | `codegraph/codegraph/transcribe.py`, `tests/fixtures/audio/sample.wav`, `tests/test_transcribe.py` |
 
 ---
 
@@ -1905,7 +1939,7 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 
 - **`relationship_mapper` port** — `RENDERS` is already there; `NAVIGATES_TO` / `SHARES_STATE` are fuzzy heuristics. Not worth it until MCP usage reveals a specific need.
 - **Go parser frontend** — big tree-sitter work, not the bottleneck.
-- ~~**`knowledge_enricher` LLM-powered semantic pass**~~ — **PARTIALLY SHIPPED** (`d2e6f06`, `66f70cd`). `--extract-markdown` extracts Concept/Decision/Rationale nodes from Markdown docs via Claude API; `--extract-images` extracts ILLUSTRATES_CONCEPT edges from images via the vision API. Full graph-node enrichment (annotating existing Code nodes with LLM-inferred meaning) remains deferred — revisit once MCP usage surfaces specific needs.
+- ~~**`knowledge_enricher` LLM-powered semantic pass**~~ — **PARTIALLY SHIPPED** (`d2e6f06`, `a6c9221`, `3dde404`). `--extract-markdown` extracts Concept/Decision/Rationale nodes from Markdown docs via Claude API; `--extract-images` extracts ILLUSTRATES_CONCEPT edges from images via the vision API; `--extract-audio` transcribes audio/video files via faster-whisper into `DocumentNode` entries. Full graph-node enrichment (annotating existing Code nodes with LLM-inferred meaning) remains deferred — revisit once MCP usage surfaces specific needs.
 - **Web UI / dashboard** — Neo4j Browser at `:7475` is the interactive surface.
 - ~~**Real-time file watching**~~ — **SHIPPED** (`be939bc`). `codegraph watch` + `codegraph hook install` cover the automated re-index use case.
 
