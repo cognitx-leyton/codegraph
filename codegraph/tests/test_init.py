@@ -7,6 +7,8 @@ so the tests stay fast and pure. The end-to-end Docker path is covered by
 """
 from __future__ import annotations
 
+import io
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,9 +23,14 @@ from codegraph.init import (
     RepoShape,
     _detect_repo_shape,
     _find_git_root,
+    _prompt_config,
     _render,
+    _sanitize_container_segment,
     _scaffold_files,
     _template_vars,
+    _warn_orphaned_containers,
+    build_template_vars,
+    derive_container_name,
     run_init,
 )
 
@@ -86,6 +93,34 @@ def test_detect_empty_repo(tmp_path: Path):
     assert shape.package_candidates == []
 
 
+# ── _sanitize_container_segment ────────────────────────────
+
+
+def test_sanitize_replaces_spaces_and_special_chars():
+    assert _sanitize_container_segment("my project") == "my-project"
+    assert _sanitize_container_segment("foo@bar!baz") == "foo-bar-baz"
+
+
+def test_sanitize_collapses_repeated_dashes():
+    assert _sanitize_container_segment("a - - b") == "a-b"
+
+
+def test_sanitize_strips_leading_trailing():
+    assert _sanitize_container_segment("-leading") == "leading"
+    assert _sanitize_container_segment("trailing-") == "trailing"
+    assert _sanitize_container_segment(".dotted.") == "dotted"
+
+
+def test_sanitize_preserves_valid_names():
+    assert _sanitize_container_segment("my-repo") == "my-repo"
+    assert _sanitize_container_segment("my_repo.v2") == "my_repo.v2"
+
+
+def test_sanitize_fallback_on_empty():
+    assert _sanitize_container_segment("---") == "repo"
+    assert _sanitize_container_segment("") == "repo"
+
+
 # ── _template_vars ──────────────────────────────────────────
 
 
@@ -110,6 +145,224 @@ def test_template_vars_no_cross_pairs():
     )
     vars_ = _template_vars(config)
     assert vars_["CROSS_PAIRS_TOML"] == ""
+
+
+# ── derive_container_name ─────────────────────────────────
+
+
+def test_derive_container_name_deterministic(tmp_path: Path):
+    name1 = derive_container_name(tmp_path)
+    name2 = derive_container_name(tmp_path)
+    assert name1 == name2
+    assert name1.startswith("cognitx-codegraph-")
+    suffix = name1.rsplit("-", 1)[-1]
+    assert re.fullmatch(r"[0-9a-f]{8}", suffix)
+
+
+def test_derive_container_name_differs_by_path(tmp_path: Path):
+    dir_a = tmp_path / "a" / "app"
+    dir_b = tmp_path / "b" / "app"
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+    assert derive_container_name(dir_a) != derive_container_name(dir_b)
+
+
+# ── build_template_vars ───────────────────────────────────
+
+
+def test_build_template_vars_all_keys():
+    vars_ = build_template_vars(packages=["a"], container_name="c")
+    assert set(vars_.keys()) == {
+        "PACKAGE_PATHS_FLAGS", "PACKAGES_TOML_LIST",
+        "DEFAULT_PACKAGE_PREFIX", "CROSS_PAIRS_TOML",
+        "CONTAINER_NAME", "NEO4J_BOLT_PORT", "NEO4J_HTTP_PORT", "PIPX_VERSION",
+    }
+    assert vars_["PACKAGE_PATHS_FLAGS"] == "-p a"
+    assert vars_["PACKAGES_TOML_LIST"] == '  "a"'
+    assert vars_["CONTAINER_NAME"] == "c"
+    # Defaults are offset from Neo4j stock 7687/7474 to avoid collisions and to
+    # match cli.py's DEFAULT_URI = bolt://localhost:7688.
+    assert vars_["NEO4J_BOLT_PORT"] == "7688"
+    assert vars_["NEO4J_HTTP_PORT"] == "7475"
+
+
+def test_build_template_vars_packages_toml_list():
+    """Multi-package list renders as one indented quoted entry per line."""
+    vars_ = build_template_vars(
+        packages=["src/server", "src/web"], container_name="c",
+    )
+    assert vars_["PACKAGES_TOML_LIST"] == '  "src/server",\n  "src/web"'
+
+
+def test_build_template_vars_packages_toml_list_empty():
+    """Empty package list renders a placeholder comment, keeping the file parseable."""
+    vars_ = build_template_vars(packages=[], container_name="c")
+    assert "# add packages here" in vars_["PACKAGES_TOML_LIST"]
+
+
+def test_build_template_vars_cross_pairs():
+    vars_ = build_template_vars(
+        packages=["x"], container_name="c",
+        cross_pairs=[("x", "y")],
+    )
+    assert '{ importer = "x", importee = "y" }' in vars_["CROSS_PAIRS_TOML"]
+
+
+def test_build_template_vars_custom_ports():
+    vars_ = build_template_vars(
+        packages=["a"], container_name="c",
+        bolt_port=9999, http_port=8888,
+    )
+    assert vars_["NEO4J_BOLT_PORT"] == "9999"
+    assert vars_["NEO4J_HTTP_PORT"] == "8888"
+
+
+# ── _prompt_config container name ──────────────────────────
+#
+# As of the shared-Neo4j refactor, _prompt_config returns the constant
+# SHARED_CONTAINER_NAME ("codegraph-neo4j") regardless of repo path. The
+# old per-repo derive_container_name() is kept exported for opt-in
+# isolation but is no longer the default — its own unit tests are above.
+
+
+def test_container_name_is_shared_across_repos(tmp_path: Path):
+    """Different repo paths share the same codegraph-neo4j container."""
+    from codegraph.init import SHARED_CONTAINER_NAME
+
+    path_a = tmp_path / "a" / "app"
+    path_b = tmp_path / "b" / "app"
+    path_a.mkdir(parents=True)
+    path_b.mkdir(parents=True)
+
+    cfg_a = _prompt_config(
+        RepoShape(root=path_a), non_interactive=True, console=_silent_console(),
+    )
+    cfg_b = _prompt_config(
+        RepoShape(root=path_b), non_interactive=True, console=_silent_console(),
+    )
+
+    assert cfg_a.container_name == SHARED_CONTAINER_NAME
+    assert cfg_b.container_name == SHARED_CONTAINER_NAME
+
+
+def test_container_name_is_deterministic(tmp_path: Path):
+    """Same path produces the same container name on repeated calls."""
+    shape = RepoShape(root=tmp_path)
+    cfg1 = _prompt_config(shape, non_interactive=True, console=_silent_console())
+    cfg2 = _prompt_config(shape, non_interactive=True, console=_silent_console())
+    assert cfg1.container_name == cfg2.container_name
+
+
+def test_container_name_unaffected_by_directory_chars(tmp_path: Path):
+    """Shared container name doesn't depend on the directory name at all."""
+    from codegraph.init import SHARED_CONTAINER_NAME
+
+    spaced = tmp_path / "my project"
+    spaced.mkdir()
+    cfg = _prompt_config(
+        RepoShape(root=spaced), non_interactive=True, console=_silent_console(),
+    )
+    assert cfg.container_name == SHARED_CONTAINER_NAME
+    assert re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", cfg.container_name)
+
+
+# ── _warn_orphaned_containers ─────────────────────────────
+
+
+def test_warn_orphaned_container_prints_warning(tmp_path: Path, monkeypatch):
+    """Old-style container (no hash suffix) triggers a warning."""
+    repo_name = tmp_path.name
+    config = InitConfig(
+        packages=["."], cross_pairs=[], install_claude=True,
+        install_ci=True, setup_neo4j=True,
+        container_name=f"cognitx-codegraph-{repo_name}-abcd1234",
+    )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            a[0], 0, stdout=f"cognitx-codegraph-{repo_name}\n",
+        ),
+    )
+    console = Console(record=True, file=io.StringIO())
+    _warn_orphaned_containers(tmp_path, config, console)
+    text = console.export_text()
+    assert f"cognitx-codegraph-{repo_name}" in text
+    assert "docker rm -f" in text
+
+
+def test_warn_orphaned_container_no_false_positive(tmp_path: Path, monkeypatch):
+    """Current container name must NOT be flagged as orphan."""
+    repo_name = tmp_path.name
+    current_name = f"cognitx-codegraph-{repo_name}-abcd1234"
+    config = InitConfig(
+        packages=["."], cross_pairs=[], install_claude=True,
+        install_ci=True, setup_neo4j=True,
+        container_name=current_name,
+    )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            a[0], 0, stdout=f"{current_name}\n",
+        ),
+    )
+    console = Console(record=True, file=io.StringIO())
+    _warn_orphaned_containers(tmp_path, config, console)
+    assert "Warning" not in console.export_text()
+
+
+def test_warn_orphaned_container_ignores_other_repo(tmp_path: Path, monkeypatch):
+    """Container from a different repo whose name is a superstring must not be flagged."""
+    repo_name = tmp_path.name
+    config = InitConfig(
+        packages=["."], cross_pairs=[], install_claude=True,
+        install_ci=True, setup_neo4j=True,
+        container_name=f"cognitx-codegraph-{repo_name}-abcd1234",
+    )
+    # docker ps substring match might return a container from repo "myrepo-v2"
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            a[0], 0,
+            stdout=f"cognitx-codegraph-{repo_name}-v2-beef5678\n",
+        ),
+    )
+    console = Console(record=True, file=io.StringIO())
+    _warn_orphaned_containers(tmp_path, config, console)
+    assert "Warning" not in console.export_text()
+
+
+def test_warn_orphaned_container_docker_unavailable(tmp_path: Path, monkeypatch):
+    """FileNotFoundError (docker not on PATH) must not crash."""
+    config = InitConfig(
+        packages=["."], cross_pairs=[], install_claude=True,
+        install_ci=True, setup_neo4j=True,
+        container_name="cognitx-codegraph-x-abcd1234",
+    )
+
+    def _raise(*a, **kw):
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(subprocess, "run", _raise)
+    console = Console(record=True, file=io.StringIO())
+    _warn_orphaned_containers(tmp_path, config, console)
+    assert console.export_text().strip() == ""
+
+
+def test_warn_orphaned_container_docker_daemon_down(tmp_path: Path, monkeypatch):
+    """CalledProcessError (daemon down) must not crash."""
+    config = InitConfig(
+        packages=["."], cross_pairs=[], install_claude=True,
+        install_ci=True, setup_neo4j=True,
+        container_name="cognitx-codegraph-x-abcd1234",
+    )
+
+    def _raise(*a, **kw):
+        raise subprocess.CalledProcessError(1, "docker")
+
+    monkeypatch.setattr(subprocess, "run", _raise)
+    console = Console(record=True, file=io.StringIO())
+    _warn_orphaned_containers(tmp_path, config, console)
+    assert console.export_text().strip() == ""
 
 
 # ── _render (template smoke) ────────────────────────────────
@@ -235,6 +488,25 @@ def test_scaffold_claude_md_append_is_idempotent(tmp_path: Path):
     assert first == second
 
 
+def test_append_claude_md_crlf(tmp_path: Path):
+    """CLAUDE.md with CRLF endings must be appended without corruption."""
+    _make_git_repo(tmp_path)
+    (tmp_path / "CLAUDE.md").write_bytes(b"# My Project\r\n\r\nSome notes.\r\n")
+
+    config = InitConfig(
+        packages=["src"], cross_pairs=[],
+        install_claude=False, install_ci=False, setup_neo4j=False,
+        container_name="cognitx-codegraph-demo",
+    )
+    _scaffold_files(tmp_path, config, force=False, console=_silent_console())
+
+    with open(tmp_path / "CLAUDE.md", encoding="utf-8", newline="") as fh:
+        content = fh.read()
+    assert "# My Project" in content              # existing preserved
+    assert "codegraph knowledge graph" in content  # snippet appended
+    assert "\r\r" not in content                   # no double-CR corruption
+
+
 def test_scaffold_respects_opt_outs(tmp_path: Path):
     _make_git_repo(tmp_path)
     config = InitConfig(
@@ -248,6 +520,75 @@ def test_scaffold_respects_opt_outs(tmp_path: Path):
     assert not (tmp_path / "docker-compose.yml").exists()
     # But the policy config still lands (it's the authoritative tunable).
     assert (tmp_path / ".arch-policies.toml").exists()
+
+
+# ── .gitignore cache entry ──────────────────────────────────
+
+
+def test_scaffold_creates_gitignore_with_cache_entry(tmp_path: Path):
+    _make_git_repo(tmp_path)
+    config = InitConfig(
+        packages=["src"], cross_pairs=[],
+        install_claude=False, install_ci=False, setup_neo4j=False,
+        container_name="cognitx-codegraph-demo",
+    )
+    _scaffold_files(tmp_path, config, force=False, console=_silent_console())
+
+    gitignore = tmp_path / ".gitignore"
+    assert gitignore.exists()
+    content = gitignore.read_text()
+    assert ".codegraph-cache/" in content
+    assert "# codegraph" in content
+
+
+def test_scaffold_appends_cache_entry_to_existing_gitignore(tmp_path: Path):
+    _make_git_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("node_modules/\n*.pyc\n")
+
+    config = InitConfig(
+        packages=["src"], cross_pairs=[],
+        install_claude=False, install_ci=False, setup_neo4j=False,
+        container_name="cognitx-codegraph-demo",
+    )
+    _scaffold_files(tmp_path, config, force=False, console=_silent_console())
+
+    content = (tmp_path / ".gitignore").read_text()
+    assert "node_modules/" in content         # existing preserved
+    assert "*.pyc" in content                 # existing preserved
+    assert ".codegraph-cache/" in content     # entry appended
+
+
+def test_scaffold_gitignore_cache_entry_is_idempotent(tmp_path: Path):
+    _make_git_repo(tmp_path)
+    config = InitConfig(
+        packages=["src"], cross_pairs=[],
+        install_claude=False, install_ci=False, setup_neo4j=False,
+        container_name="cognitx-codegraph-demo",
+    )
+    _scaffold_files(tmp_path, config, force=False, console=_silent_console())
+    first = (tmp_path / ".gitignore").read_text()
+    _scaffold_files(tmp_path, config, force=False, console=_silent_console())
+    second = (tmp_path / ".gitignore").read_text()
+    assert first == second
+
+
+def test_scaffold_gitignore_no_trailing_newline(tmp_path: Path):
+    _make_git_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("node_modules/")  # no trailing \n
+
+    config = InitConfig(
+        packages=["src"], cross_pairs=[],
+        install_claude=False, install_ci=False, setup_neo4j=False,
+        container_name="cognitx-codegraph-demo",
+    )
+    _scaffold_files(tmp_path, config, force=False, console=_silent_console())
+
+    content = (tmp_path / ".gitignore").read_text()
+    assert "node_modules/" in content
+    assert ".codegraph-cache/" in content
+    # Entry must be on its own line (no corruption)
+    lines = content.splitlines()
+    assert ".codegraph-cache/" in lines
 
 
 # ── run_init full flow (docker + index disabled) ────────────
@@ -267,6 +608,10 @@ def test_run_init_non_interactive_happy_path(tmp_path: Path, monkeypatch):
     # Sanity check: scaffolder ran
     assert (tmp_path / ".arch-policies.toml").exists()
     assert (tmp_path / ".claude" / "commands" / "graph.md").exists()
+    # .gitignore has cache entry
+    gitignore = tmp_path / ".gitignore"
+    assert gitignore.exists()
+    assert ".codegraph-cache/" in gitignore.read_text()
 
 
 def test_run_init_outside_git_repo(tmp_path: Path, monkeypatch):
@@ -274,6 +619,25 @@ def test_run_init_outside_git_repo(tmp_path: Path, monkeypatch):
     exit_code = run_init(
         force=False, non_interactive=True,
         skip_docker=True, skip_index=True,
+        console=_silent_console(),
+    )
+    assert exit_code == 1
+
+
+def test_run_init_returns_1_when_first_index_fails(tmp_path: Path, monkeypatch):
+    """run_init must return 1 when _run_first_index fails (issue #157)."""
+    _make_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+    monkeypatch.chdir(tmp_path)
+
+    # Stub _run_first_index to simulate failure
+    monkeypatch.setattr(init_module, "_run_first_index", lambda *a, **kw: False)
+    # Stub _start_and_wait_for_neo4j to simulate success (so we reach _run_first_index)
+    monkeypatch.setattr(init_module, "_start_and_wait_for_neo4j", lambda *a, **kw: True)
+
+    exit_code = run_init(
+        force=False, non_interactive=True,
+        skip_docker=False, skip_index=False,
         console=_silent_console(),
     )
     assert exit_code == 1

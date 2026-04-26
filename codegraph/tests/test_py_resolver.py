@@ -47,7 +47,7 @@ def _run_pipeline(
 
     pkg_config = load_python_package_config(repo_root, package_dir)
     resolver = Resolver(repo_root, [pkg_config])
-    edges = link_cross_file(index, resolver)
+    edges, _edge_groups = link_cross_file(index, resolver)
     return index, edges
 
 
@@ -222,14 +222,14 @@ def test_ts_import_unaffected_by_python_dispatch(tmp_path: Path):
     no_pkg.set_path_index(PathIndex(fileset))
 
     # Python-aware resolver resolves the relative import.
-    assert py_aware.resolve("pkg/a.py", ".b") == "pkg/b.py"
+    assert py_aware.resolve("pkg/a.py", ".b").path == "pkg/b.py"
     # No-package resolver falls into the TS code path and either returns
     # None (no .ts/.tsx extension candidates match) or a non-Python file.
     # Critically: it does NOT try Python rules and does NOT crash.
     result = no_pkg.resolve("pkg/a.py", ".b")
     # The TS path would try pkg/a/../.b + TS extensions; none exist, so None.
     # (We just want no crash and no accidental Python resolution.)
-    assert result is None or not result.endswith(".py")
+    assert result is None or not result.path.endswith(".py")
 
 
 # ── Phase 4: method CALLS resolution (Python) ───────────────────────
@@ -256,7 +256,7 @@ def test_self_call_resolves_typed(tmp_path: Path):
     assert any(
         e.src_id == "method:class:pkg/a.py#A#run"
         and e.dst_id == "method:class:pkg/a.py#A#foo"
-        and e.props.get("confidence") == "typed"
+        and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed self.foo() edge; got {calls}"
 
@@ -282,7 +282,7 @@ def test_super_call_resolves_to_parent(tmp_path: Path):
     assert any(
         e.src_id == "method:class:pkg/child.py#A#run"
         and e.dst_id == "method:class:pkg/base.py#B#run"
-        and e.props.get("confidence") == "typed"
+        and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed super().run() edge; got {calls}"
 
@@ -306,6 +306,72 @@ def test_cls_call_resolves_like_self(tmp_path: Path):
     assert any(
         e.src_id == "method:class:pkg/a.py#A#make"
         and e.dst_id == "method:class:pkg/a.py#A#foo"
-        and e.props.get("confidence") == "typed"
+        and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed cls.foo() edge; got {calls}"
+
+
+# ── Phase 4: function-to-function + module-level CALLS (issue #88) ──
+
+
+def test_function_to_function_same_file_resolves(tmp_path: Path):
+    """helper() called from run() in the same file produces a CALLS edge."""
+    _build_pkg(tmp_path, {
+        "pkg/__init__.py": "",
+        "pkg/a.py": (
+            "def helper():\n"
+            "    pass\n"
+            "\n"
+            "def run():\n"
+            "    helper()\n"
+        ),
+    })
+    _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
+    calls = _calls_edges(edges)
+    assert any(
+        e.src_id == "func:pkg/a.py#run"
+        and e.dst_id == "func:pkg/a.py#helper"
+        for e in calls
+    ), f"expected func-to-func CALLS edge; got {calls}"
+
+
+def test_function_to_function_cross_file_resolves(tmp_path: Path):
+    """helper() imported from another module produces cross-file CALLS edge."""
+    _build_pkg(tmp_path, {
+        "pkg/__init__.py": "",
+        "pkg/utils.py": "def helper():\n    pass\n",
+        "pkg/main.py": (
+            "from .utils import helper\n"
+            "\n"
+            "def run():\n"
+            "    helper()\n"
+        ),
+    })
+    _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
+    calls = _calls_edges(edges)
+    assert any(
+        e.src_id == "func:pkg/main.py#run"
+        and e.dst_id == "func:pkg/utils.py#helper"
+        for e in calls
+    ), f"expected cross-file func-to-func CALLS edge; got {calls}"
+
+
+def test_module_level_call_to_function_resolves(tmp_path: Path):
+    """Module-level main() call produces CALLS edge from file to function."""
+    _build_pkg(tmp_path, {
+        "pkg/__init__.py": "",
+        "pkg/app.py": (
+            "def main():\n"
+            "    pass\n"
+            "\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        ),
+    })
+    _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
+    calls = _calls_edges(edges)
+    assert any(
+        e.src_id == "file:pkg/app.py"
+        and e.dst_id == "func:pkg/app.py#main"
+        for e in calls
+    ), f"expected module-level-to-func CALLS edge; got {calls}"

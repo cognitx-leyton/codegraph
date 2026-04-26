@@ -180,3 +180,21 @@ def test_load_ignore_filter_explicit_absolute_path(tmp_path: Path) -> None:
     filt = _load_ignore_filter(tmp_path, configured=str(target))
     assert filt is not None
     assert filt.should_ignore_component("AdminPanel")
+
+
+def test_ignore_crlf_line_endings(tmp_path: Path) -> None:
+    """CRLF line endings in .codegraphignore must parse correctly."""
+    p = tmp_path / ".codegraphignore"
+    p.write_bytes(
+        b"**/admin/**\r\n"
+        b"@route:/api/*\r\n"
+        b"@component:*Widget*\r\n"
+    )
+    f = IgnoreFilter(p)
+    assert f.counts() == (1, 1, 1)
+    assert f.should_ignore_file("src/admin/Users.tsx")
+    assert not f.should_ignore_file("src/public/Home.tsx")
+    assert f.should_ignore_route("/api/users")
+    assert not f.should_ignore_route("/home")
+    assert f.should_ignore_component("FooWidget")
+    assert not f.should_ignore_component("FooPanel")

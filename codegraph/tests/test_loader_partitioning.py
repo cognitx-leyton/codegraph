@@ -12,8 +12,7 @@ import pytest
 
 from codegraph import loader
 from codegraph.py_parser import PyParser
-from codegraph.schema import DECORATED_BY, Edge
-
+from codegraph.schema import DECORATED_BY, Edge, EndpointNode, FileNode, ParseResult
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CODEGRAPH_PKG = REPO_ROOT / "codegraph" / "codegraph"
@@ -54,7 +53,7 @@ def test_decorated_by_partitions_function_src_ids(captured_runs):
     func_runs = [
         (cypher, rows) for cypher, rows in captured_runs
         if "MATCH (a:Function {id: r.src})" in cypher
-        and "MERGE (a)-[:DECORATED_BY]->(d)" in cypher
+        and "MERGE (a)-[rel:DECORATED_BY]->(d)" in cypher
     ]
     assert len(func_runs) == 1, "expected exactly one Function DECORATED_BY MERGE"
     rows = func_runs[0][1]
@@ -67,7 +66,7 @@ def test_decorated_by_partitions_function_src_ids(captured_runs):
 
 
 def test_decorated_by_func_smoke_from_parser():
-    """Parsing ``mcp.py`` must yield exactly 13 function-level decorators.
+    """Parsing ``mcp.py`` must yield exactly 16 function-level decorators.
 
     All are ``@mcp.tool()`` on module-level tool functions. If this count
     changes, ``mcp.py`` grew a new tool — update this assertion and ROADMAP.
@@ -80,7 +79,7 @@ def test_decorated_by_func_smoke_from_parser():
         e for e in result.edges
         if e.kind == DECORATED_BY and e.src_id.startswith("func:")
     ]
-    assert len(func_decs) == 13
+    assert len(func_decs) == 17
     assert all(e.dst_id == "dec:mcp.tool()" for e in func_decs)
 
 
@@ -98,3 +97,180 @@ def test_unknown_prefix_logs_debug(captured_runs, caplog):
         "unknown src prefix" in rec.message and "garbage:x#y" in rec.message
         for rec in caplog.records
     ), "expected a debug log about the unknown prefix"
+
+
+# ── Endpoint EXPOSES tests ───────────────────────────────────────
+
+
+class _FakeRecord:
+    """Minimal stand-in for a Neo4j record."""
+
+    def __getitem__(self, key):
+        return 0
+
+
+class _FakeResult:
+    """Minimal stand-in for a Neo4j result."""
+
+    def single(self):
+        return _FakeRecord()
+
+
+class _FakeSession:
+    """Minimal stand-in for a Neo4j session (context-manager protocol)."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+    def run(self, *a, **kw):
+        return _FakeResult()
+
+
+class _FakeDriver:
+    """Minimal stand-in for a Neo4j driver."""
+
+    def __init__(self):
+        self._session = _FakeSession()
+
+    def session(self, **kw):
+        return self._session
+
+
+def _make_loader(monkeypatch):
+    """Build a Neo4jLoader without connecting to real Neo4j."""
+    monkeypatch.setattr(
+        loader.GraphDatabase, "driver", lambda *a, **kw: _FakeDriver()
+    )
+    return loader.Neo4jLoader("bolt://fake", "u", "p")
+
+
+def _make_index(endpoints, file_path="/tmp/app.py"):
+    """Build a minimal Index containing *endpoints* under *file_path*."""
+    from codegraph.resolver import Index
+
+    idx = Index()
+    result = ParseResult(
+        file=FileNode(path=file_path, package="pkg", language="py", loc=1),
+        endpoints=list(endpoints),
+    )
+    idx.add(result)
+    return idx
+
+
+def test_load_file_level_endpoint_exposes(monkeypatch, captured_runs):
+    """File-level endpoints must MERGE EXPOSES via File {path:}, not Class {id:}."""
+    ldr = _make_loader(monkeypatch)
+    ep = EndpointNode(
+        method="GET", path="/",
+        controller_class="file:/tmp/app.py",
+        file="/tmp/app.py", handler="index",
+    )
+    idx = _make_index([ep])
+
+    ldr.load(idx, edges=[])
+
+    file_runs = [
+        (cypher, rows) for cypher, rows in captured_runs
+        if "File {path: r.fpath}" in cypher and "EXPOSES" in cypher
+    ]
+    assert len(file_runs) == 1, "expected one file-level EXPOSES batch"
+    rows = file_runs[0][1]
+    assert len(rows) == 1
+    assert rows[0]["fpath"] == "/tmp/app.py"
+
+    # Must NOT appear in the class-level batch
+    class_runs = [
+        rows for cypher, rows in captured_runs
+        if "Class {id: r.cls}" in cypher and "EXPOSES" in cypher
+    ]
+    for rows in class_runs:
+        assert len(rows) == 0
+
+
+def test_load_class_level_endpoint_exposes(monkeypatch, captured_runs):
+    """Class-level endpoints must still MERGE EXPOSES via Class {id:}."""
+    ldr = _make_loader(monkeypatch)
+    ep = EndpointNode(
+        method="POST", path="/items",
+        controller_class="class:/tmp/app.py#ItemController",
+        file="/tmp/app.py", handler="create",
+    )
+    idx = _make_index([ep])
+
+    ldr.load(idx, edges=[])
+
+    class_runs = [
+        (cypher, rows) for cypher, rows in captured_runs
+        if "Class {id: r.cls}" in cypher and "EXPOSES" in cypher
+    ]
+    assert len(class_runs) == 1, "expected one class-level EXPOSES batch"
+    rows = class_runs[0][1]
+    assert len(rows) == 1
+    assert rows[0]["cls"] == "class:/tmp/app.py#ItemController"
+
+    # Must NOT appear in the file-level batch
+    file_runs = [
+        (cypher, rows) for cypher, rows in captured_runs
+        if "File {path: r.fpath}" in cypher and "EXPOSES" in cypher
+    ]
+    for _, rows in file_runs:
+        assert len(rows) == 0
+
+
+# ── Confidence fields in Cypher rows ──────────────────────────────
+
+
+def test_calls_edges_carry_confidence(captured_runs):
+    """CALLS bucket rows must contain confidence and confidence_score."""
+    from codegraph.schema import CALLS as CALLS_KIND
+
+    edges = [
+        Edge(
+            kind=CALLS_KIND,
+            src_id="method:class:a.py#A#run",
+            dst_id="method:class:a.py#A#foo",
+            props={"resolution": "typed"},
+            confidence="EXTRACTED",
+            confidence_score=1.0,
+        ),
+    ]
+    loader._write_edges(session=None, edges=edges, stats=_Stats())
+
+    calls_runs = [
+        (cypher, rows) for cypher, rows in captured_runs
+        if "MERGE (a)-[rel:CALLS]->(b)" in cypher
+    ]
+    assert len(calls_runs) == 1
+    rows = calls_runs[0][1]
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == "EXTRACTED"
+    assert rows[0]["confidence_score"] == 1.0
+    assert rows[0]["resolution"] == "typed"
+
+
+def test_imports_edges_carry_confidence(captured_runs):
+    """IMPORTS bucket rows must contain confidence and confidence_score."""
+    edges = [
+        Edge(
+            kind="IMPORTS",
+            src_id="file:a.py",
+            dst_id="file:b.py",
+            props={"specifier": ".b", "type_only": False},
+            confidence="INFERRED",
+            confidence_score=0.8,
+        ),
+    ]
+    loader._write_edges(session=None, edges=edges, stats=_Stats())
+
+    import_runs = [
+        (cypher, rows) for cypher, rows in captured_runs
+        if "MERGE (a)-[rel:IMPORTS]->(b)" in cypher
+    ]
+    assert len(import_runs) == 1
+    rows = import_runs[0][1]
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == "INFERRED"
+    assert rows[0]["confidence_score"] == 0.8

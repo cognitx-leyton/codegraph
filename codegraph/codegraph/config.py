@@ -71,6 +71,10 @@ class CodegraphConfig:
     auto-detect ``<repo>/.codegraphignore`` at load time; if that file doesn't
     exist either, no ignore filtering is applied. See :mod:`codegraph.ignore`."""
 
+    analyze: bool = False
+    """Run Leiden community detection + GRAPH_REPORT after indexing.
+    Requires the ``[analyze]`` extra (networkx + graspologic)."""
+
     source: Optional[str] = None
     """Where the config came from (``"codegraph.toml"``,
     ``"pyproject.toml"``, or ``None`` for CLI-only)."""
@@ -118,6 +122,7 @@ def merge_cli_overrides(
     exclude_dirs: Optional[Iterable[str]] = None,
     exclude_suffixes: Optional[Iterable[str]] = None,
     ignore_file: Optional[str] = None,
+    analyze: Optional[bool] = None,
 ) -> CodegraphConfig:
     """Return a new config with CLI-provided values taking precedence.
 
@@ -130,6 +135,7 @@ def merge_cli_overrides(
         exclude_dirs=set(config.exclude_dirs),
         exclude_suffixes=tuple(config.exclude_suffixes),
         ignore_file=config.ignore_file,
+        analyze=config.analyze,
         source=config.source,
     )
     if packages:
@@ -140,6 +146,8 @@ def merge_cli_overrides(
         merged.exclude_suffixes = tuple(exclude_suffixes)
     if ignore_file:
         merged.ignore_file = ignore_file
+    if analyze is not None:
+        merged.analyze = analyze
     return merged
 
 
@@ -184,10 +192,14 @@ def _build_config(data: dict, *, source: str) -> CodegraphConfig:
     ignore_file = data.get("ignore_file")
     if ignore_file is not None and not isinstance(ignore_file, str):
         raise ConfigError(f"{source}: `ignore_file` must be a string")
+    analyze = data.get("analyze", False)
+    if not isinstance(analyze, bool):
+        raise ConfigError(f"{source}: `analyze` must be a boolean")
     return CodegraphConfig(
         packages=list(packages),
         exclude_dirs=set(exclude_dirs),
         exclude_suffixes=tuple(exclude_suffixes),
         ignore_file=ignore_file,
+        analyze=analyze,
         source=source,
     )

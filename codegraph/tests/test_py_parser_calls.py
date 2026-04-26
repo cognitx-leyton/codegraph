@@ -1,9 +1,8 @@
 """Receiver-classification tests for :meth:`PyParser._classify_py_call`.
 
 Each test parses a tiny synthetic Python source via ``tmp_path`` and asserts
-the resulting ``result.method_calls`` tuples. Only method-body calls are
-emitted — module-level function bodies are intentionally skipped (the
-resolver's Phase 4 can't wire them anyway).
+the resulting ``result.method_calls`` tuples. Method-body, function-body, and
+module-level calls are all emitted (issue #88).
 """
 from __future__ import annotations
 
@@ -125,14 +124,165 @@ class A:
     assert ("name", "", "get_obj") in calls
 
 
-def test_module_level_function_body_is_not_scanned(tmp_path):
-    """Resolver can't wire module-level callers — so we don't emit from them."""
+def test_function_body_calls_emitted(tmp_path):
+    """Function bodies now emit CALLS entries (issue #88)."""
     src = """
 def outer():
     helper()
 """
     r = _parse_snippet(tmp_path, src)
-    assert _calls(r) == []
+    assert ("name", "", "helper") in _calls(r)
+
+
+def test_function_body_attribute_call(tmp_path):
+    """obj.method() inside a function body is classified correctly."""
+    src = """
+def run(svc):
+    svc.execute()
+"""
+    r = _parse_snippet(tmp_path, src)
+    assert ("name", "svc", "execute") in _calls(r)
+
+
+def test_module_level_bare_call(tmp_path):
+    """Bare call at module level emits a CALLS entry with file ID as caller."""
+    src = """
+main()
+"""
+    r = _parse_snippet(tmp_path, src)
+    assert any(mid.startswith("file:") and t == "main"
+                for mid, _k, _n, t in r.method_calls)
+
+
+def test_module_level_if_main_call(tmp_path):
+    """if __name__ == '__main__': main() emits a CALLS entry."""
+    src = '''
+def main():
+    pass
+
+if __name__ == "__main__":
+    main()
+'''
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "main") in file_calls
+
+
+def test_module_level_attribute_call(tmp_path):
+    """app.run() at module level."""
+    src = """
+app.run()
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "app", "run") in file_calls
+
+
+def test_module_level_nested_in_try(tmp_path):
+    """Module-level call inside try/except."""
+    src = """
+try:
+    setup()
+except Exception:
+    pass
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "setup") in file_calls
+
+
+def test_module_level_nested_in_elif(tmp_path):
+    """Module-level call inside elif block."""
+    src = """
+if False:
+    pass
+elif True:
+    configure()
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "configure") in file_calls
+
+
+def test_module_level_nested_in_finally(tmp_path):
+    """Module-level call inside finally block."""
+    src = """
+try:
+    pass
+finally:
+    teardown()
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "teardown") in file_calls
+
+
+def test_module_level_nested_in_with(tmp_path):
+    """Module-level call inside with block."""
+    src = """
+with open("f") as fh:
+    process(fh)
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "process") in file_calls
+
+
+def test_module_level_nested_in_for(tmp_path):
+    """Module-level call inside for loop (issue #227)."""
+    src = """
+for plugin in plugins:
+    register(plugin)
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "register") in file_calls
+
+
+def test_module_level_nested_in_while(tmp_path):
+    """Module-level call inside while loop (issue #227)."""
+    src = """
+while not ready:
+    setup()
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "setup") in file_calls
+
+
+def test_module_level_nested_in_match(tmp_path):
+    """Module-level call inside match/case block (Python 3.10+)."""
+    src = """
+match command:
+    case 'quit':
+        shutdown()
+    case 'help':
+        show_help()
+"""
+    r = _parse_snippet(tmp_path, src)
+    file_calls = [(k, n, t) for mid, k, n, t in r.method_calls
+                   if mid.startswith("file:")]
+    assert ("name", "", "shutdown") in file_calls
+    assert ("name", "", "show_help") in file_calls
+
+
+def test_function_body_caller_id_is_func(tmp_path):
+    """Caller ID for function-body calls uses func: prefix."""
+    src = """
+def outer():
+    helper()
+"""
+    r = _parse_snippet(tmp_path, src)
+    assert any(mid == "func:snippet.py#outer" and t == "helper"
+                for mid, _k, _n, t in r.method_calls)
 
 
 def test_comprehension_calls_emitted(tmp_path):

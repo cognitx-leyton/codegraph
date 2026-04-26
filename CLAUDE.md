@@ -7,7 +7,7 @@ Guidance for Claude Code (and similar coding agents) working on this repo.
 **codegraph** (package: `codegraph`) is a Python tool that indexes TypeScript and Python codebases into a Neo4j property graph. It walks source with tree-sitter, recognises framework constructs (NestJS controllers / injectables / modules, React components and hooks, TypeORM entities, GraphQL operations, Python classes and decorators), and loads typed nodes + edges into Neo4j. Downstream consumers:
 
 - **CLI**: `codegraph index`, `codegraph query`, `codegraph validate`, `codegraph wipe` — Typer app.
-- **MCP server**: `codegraph-mcp` stdio server with 10 read-only tools. Optional extra (`pip install "codegraph[mcp]"`).
+- **MCP server**: `codegraph-mcp` stdio server with 16 read-only tools. Optional extra (`pip install "codegraph[mcp]"`).
 - **REPL**: interactive Cypher shell at `codegraph repl`.
 
 This repo is itself **Python**, and codegraph parses Python since Stage 1 shipped. So we can dogfood: Claude Code can query the graph of codegraph-the-codebase while implementing codegraph-the-tool.
@@ -52,13 +52,16 @@ Five purpose-built wrappers over `/graph` for the patterns you'll reach for most
 
 **Configuring the trigger scope**: edit the `on:` block at the top of `.github/workflows/arch-check.yml`. The shipped default is `pull_request: branches: [main]` (strictest, lowest-noise). Two commented-out alternatives sit right below it: `push: branches: [dev]` to catch drift the moment it lands, and `workflow_dispatch` for manual runs from the Actions UI. Uncomment what you need.
 
-**Reproducing a failing check locally**: `cd codegraph && codegraph index . -p codegraph/codegraph -p codegraph/tests --skip-ownership && codegraph arch-check`. Exit code mirrors CI.
+**Reproducing a failing check locally**: `cd codegraph && codegraph index . -p codegraph -p tests --skip-ownership && codegraph arch-check`. Exit code mirrors CI.
 
 Policy reference + false-positive guidance: `codegraph/docs/arch-policies.md`.
 
 ### What's indexed (and what isn't)
 
-The slash commands point at `codegraph/codegraph/` (the Python package) and `codegraph/tests/` (its test suite). The package is ~18 files, 41 classes, 82 module functions, ~150 methods; tests add another handful of files that pair back via `TESTS` edges where they share a directory with their production peer. **Not indexed**: the root-level `dependency_slicer.py`, `.venv`, the repo root's config files.
+<!-- codegraph:stats-begin -->
+~20 files, 56 classes, 134 module functions, ~180 methods
+<!-- codegraph:stats-end -->
+The slash commands point at `codegraph/codegraph/` (the Python package) and `codegraph/tests/` (its test suite). Tests add another ~17 files that pair back via `TESTS` edges where they share a directory with their production peer. **Not indexed**: the root-level `dependency_slicer.py`, `.venv`, the repo root's config files. Run `codegraph stats --update` to refresh these numbers.
 
 If you want a query against other paths, re-run `codegraph/.venv/bin/codegraph index . -p <path>` with the package scope you want.
 
@@ -93,10 +96,30 @@ Key source files:
 | `codegraph/codegraph/resolver.py` | Cross-file import resolution (TS + Python) |
 | `codegraph/codegraph/loader.py` | Neo4j batch writer + constraints |
 | `codegraph/codegraph/schema.py` | Node + edge dataclasses (language-agnostic) |
-| `codegraph/codegraph/mcp.py` | FastMCP stdio server (10 tools) |
+| `codegraph/codegraph/mcp.py` | FastMCP stdio server (16 tools) |
 | `codegraph/codegraph/framework.py` | Per-package framework detection (TS only in Stage 1) |
 | `codegraph/codegraph/ignore.py` | `.codegraphignore` parser |
 | `codegraph/codegraph/config.py` | `codegraph.toml` / `pyproject.toml` config loader |
+
+User-facing reference docs (read these before answering questions about CLI flags, MCP tools, or the schema):
+
+| Doc | When to consult |
+|---|---|
+| `README.md` (repo root) | Pitch, quickstart, CLI cheat sheet, schema-at-a-glance, configuration. The user-facing front door. |
+| `CHANGELOG.md` (repo root) | Version-by-version log of shipped features and fixes. Use when the user asks "when did X ship?" or "what changed in 0.1.X?". |
+| `codegraph/README.md` | Inner package overview — denser CLI / MCP / schema / extras / platforms reference. |
+| `codegraph/docs/cli.md` | Full per-command reference (every flag, every `--json` shape, exit codes, examples). |
+| `codegraph/docs/mcp.md` | Full per-tool reference for the MCP server (17 tools incl. write tools). |
+| `codegraph/docs/schema.md` | Complete graph schema — 15 node types, 33 edge types, properties, indexing phases. |
+| `codegraph/docs/incremental.md` | `--update` cache, `--since` git-diff, `codegraph watch`, `codegraph hook install`. |
+| `codegraph/docs/platforms.md` | `codegraph install <platform>` for the 14 supported AI agent platforms. |
+| `codegraph/docs/confidence.md` | Edge confidence labels (`EXTRACTED` / `INFERRED` / `AMBIGUOUS`) and scores. |
+| `codegraph/docs/hyperedges.md` | `:EdgeGroup` model — protocol implementers and Leiden communities. |
+| `codegraph/docs/arch-policies.md` | All 5 built-in `arch-check` policies, `[[suppress]]` syntax, custom policies. |
+| `codegraph/docs/init.md` | `codegraph init` flow, prompts, port flags, container naming, troubleshooting. |
+| `codegraph/queries.md` | Canonical Cypher catalogue (12 categories). Also auto-loaded as MCP prompt templates. |
+
+When the user asks a question that the docs already answer, prefer linking the doc to repeating its content here.
 
 ## Non-goals to remember
 

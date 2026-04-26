@@ -29,3 +29,9 @@ Run after adding / removing / renaming classes, functions, methods, imports, dec
 1. Neo4j running: `docker compose ps` shows `$CONTAINER_NAME` up. If not: `docker compose up -d`.
 2. `codegraph --help` works (install with `pipx install cognitx-codegraph`).
 3. Graph indexed at least once — `codegraph init` does this the first time; `/graph-refresh` re-runs it later.
+
+### Auto-rebuild options
+
+- `codegraph hook install` — installs `post-commit` + `post-checkout` git hooks that re-index incrementally.
+- `codegraph watch` (requires `pip install "cognitx-codegraph[watch]"`) — file-system watcher with configurable debounce.
+- `codegraph index --update` — SHA256 incremental index. Run anytime; the cache lives in `.codegraph-cache/`.

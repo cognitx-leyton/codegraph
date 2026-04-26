@@ -71,16 +71,16 @@ jobs:
       - name: Index repo
         env:
           CODEGRAPH_NEO4J_URI: bolt://localhost:7687
-        run: codegraph index . -p codegraph/codegraph -p codegraph/tests --skip-ownership
+        run: cd codegraph && codegraph index . -p codegraph -p tests --skip-ownership
 
       - name: Run architecture policies
         env:
           CODEGRAPH_NEO4J_URI: bolt://localhost:7687
-        run: codegraph arch-check --json | tee arch-report.json
+        run: cd codegraph && codegraph arch-check --json | tee arch-report.json
 
       - name: Upload report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arch-report
-          path: arch-report.json
+          path: codegraph/arch-report.json

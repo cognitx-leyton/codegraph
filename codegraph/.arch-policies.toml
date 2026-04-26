@@ -1,0 +1,15 @@
+# codegraph's own architecture policy configuration.
+#
+# orphan_detection is disabled here because codegraph is a library/tool:
+#   - Public API functions (run_arch_check, load_config, …) are entry points
+#     called by the CLI (Typer) or by external consumers, not internally.
+#   - Private helpers (_*) are called within the same module; the CALLS graph
+#     currently tracks cross-function calls but same-file private helpers may
+#     not always have inbound edges when called only from within the same scope.
+#   - Pytest test classes (Test*) are discovered by name convention, not called.
+#
+# Downstream consumers that index application code (NestJS, React, Django, …)
+# will find orphan_detection more useful with the default enabled = true.
+
+[policies.orphan_detection]
+enabled = false

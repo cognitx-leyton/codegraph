@@ -5,3 +5,18 @@
 # approved by someone listed here.
 
 *   @egouilliard-leyton
+
+# ── Privileged surfaces ────────────────────────────────────────────
+# These files ship to every user's coding agent in unattended mode (the
+# `codegraph audit` flow). A malicious or careless edit could redirect
+# the audit on every user's machine. Always review the diff carefully
+# for prompt-injection attempts and unexpected new external URLs or
+# shell-execution call sites. The .github/workflows/audit-prompt-
+# integrity.yml CI gate runs static checks, but the human review is the
+# real safeguard.
+
+codegraph/codegraph/templates/audit/**          @egouilliard-leyton
+codegraph/codegraph/audit.py                    @egouilliard-leyton
+codegraph/codegraph/audit_agents.py             @egouilliard-leyton
+codegraph/codegraph/audit_prompt_lint.py        @egouilliard-leyton
+.github/workflows/audit-prompt-integrity.yml    @egouilliard-leyton

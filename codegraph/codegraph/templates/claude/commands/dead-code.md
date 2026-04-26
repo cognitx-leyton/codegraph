@@ -59,7 +59,6 @@ LIMIT 100
 ## Caveats
 
 - **Decorator exclusion is load-bearing.** Without the `DECORATED_BY` filter, every `@mcp.tool()`, `@app.command()`, `@pytest.fixture`, `@staticmethod` function shows up as "orphan" because framework dispatchers invoke them via reflection. Keep the filter even if it occasionally hides a genuinely-dead decorated function.
-- **Python module-level callers aren't tracked.** The Python parser doesn't emit `CALLS` from top-level code (Stage 1 limitation — resolver's Phase 4 requires a method-scoped caller). So a Python function called only from module-level `if __name__ == "__main__":` blocks will appear as orphan. Spot-check before deleting.
 - **Interface / Protocol implementations.** A class that only "satisfies" a duck-typed protocol (no `EXTENDS` edge, no explicit import) will show as `orphan_class`. For abstract-base-class compliance, use `/graph "MATCH (c:Class {name:'Foo'})-[:EXTENDS]->(p:Class) RETURN p"` to double-check.
 - **100-row limit.** Raise it for exhaustive cleanup passes.
 

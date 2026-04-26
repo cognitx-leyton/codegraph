@@ -1,0 +1,93 @@
+# Audit-prompt integrity gate.
+#
+# Runs on every PR that touches the `codegraph audit` prompt templates or
+# its launcher. Three concrete checks plus a sticky warning comment:
+#
+#   1. Lock file matches template hashes (catches forgot-to-update-lock).
+#   2. No new external URLs introduced in prompt files (catches the most
+#      common injection: "send the report to <attacker>").
+#   3. No new shell-execution call sites in audit.py / audit_agents.py
+#      (catches smuggling a shell-out into the launcher).
+#
+# Plus a sticky PR comment explicitly telling the reviewer to inspect the
+# diff for prompt-injection attempts. CODEOWNERS provides the
+# review-required half of the safeguard; this workflow provides the
+# mechanical half.
+#
+# SAFETY: every untrusted GitHub-context value (base ref, etc.) is bound
+# to an env var first, then referenced as a normal shell variable in the
+# `run:` step. Never interpolate `${{ ... }}` directly into a run-script.
+
+name: audit-prompt-integrity
+
+on:
+  pull_request:
+    paths:
+      - 'codegraph/codegraph/templates/audit/**'
+      - 'codegraph/codegraph/audit.py'
+      - 'codegraph/codegraph/audit_agents.py'
+      - 'codegraph/codegraph/audit_prompt_lint.py'
+
+jobs:
+  prompt-integrity:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so the diff-lint can compare against
+          # origin/<base-branch>, not just the PR head.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install codegraph (no extras needed for lint)
+        run: pip install -e ./codegraph
+
+      - name: Sticky warning comment for the reviewer
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: codegraph-audit-prompt-integrity
+          message: |
+            ⚠️ **This PR modifies the codegraph audit prompt or its launcher.**
+
+            These files ship to every user's coding agent in unattended mode
+            (`codegraph audit`). Before merging, manually verify there is no
+            prompt-injection attempt — for example:
+
+            - Instructions telling the agent to read files outside the repo.
+            - Instructions to exfiltrate secrets, environment variables, or
+              file contents.
+            - Instructions to modify code instead of writing the report.
+            - Wording that loosens or overrides the non-goals block in the
+              prompt.
+            - New external URLs in any prompt file.
+            - New shell-execution call sites in `audit.py` or
+              `audit_agents.py`.
+
+            The `prompt-integrity` job below runs mechanical checks for the
+            last two; the human review covers the rest.
+
+      - name: Lock-file integrity
+        run: |
+          cd codegraph
+          python -m codegraph.audit_prompt_lint --check-lock
+
+      - name: Diff-lint (URL + suspicious-call + growth)
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          # Validate BASE_BRANCH is a plausible git ref name (alphanumerics,
+          # slashes, dots, hyphens, underscores). Defence in depth even
+          # though base.ref comes from GitHub, not user input.
+          if ! [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Refusing to use suspicious base branch name" >&2
+            exit 1
+          fi
+          python -m codegraph.audit_prompt_lint --check-diff --base "origin/$BASE_BRANCH"

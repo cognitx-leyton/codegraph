@@ -5,7 +5,13 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
+
+
+class ResolveResult(NamedTuple):
+    """Result of import resolution: resolved path + strategy used."""
+    path: str
+    strategy: str  # "direct", "relative", "alias", "workspace", "barrel"
 
 from .schema import (
     CALLS,
@@ -13,6 +19,7 @@ from .schema import (
     ClassNode,
     DECLARES_CONTROLLER,
     Edge,
+    EdgeGroupNode,
     EXPORTS_PROVIDER,
     EXTENDS,
     FunctionNode,
@@ -21,6 +28,7 @@ from .schema import (
     IMPORTS_MODULE,
     IMPORTS_SYMBOL,
     INJECTS,
+    MEMBER_OF,
     MethodNode,
     PackageNode,
     ParseResult,
@@ -78,9 +86,28 @@ def _strip_jsonc(raw: str) -> str:
     return "".join(out)
 
 
-def _read_ts_paths(tsconfig: Path) -> dict[str, list[str]]:
+def _resolve_npm_tsconfig(start_dir: Path, package_name: str) -> Optional[Path]:
+    """Walk up from *start_dir* looking for node_modules/<package_name>/tsconfig.json."""
+    current = start_dir.resolve()
+    while True:
+        candidate = current / "node_modules" / package_name / "tsconfig.json"
+        if candidate.exists():
+            return candidate
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
+def _read_ts_paths(tsconfig: Path, _seen: Optional[set[str]] = None) -> dict[str, list[str]]:
     if not tsconfig.exists():
         return {}
+    resolved_key = str(tsconfig.resolve())
+    if _seen is None:
+        _seen = set()
+    if resolved_key in _seen or len(_seen) >= 10:
+        return {}
+    _seen.add(resolved_key)
     try:
         raw = tsconfig.read_text()
     except OSError:
@@ -91,7 +118,29 @@ def _read_ts_paths(tsconfig: Path) -> dict[str, list[str]]:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
         return {}
-    return (data.get("compilerOptions") or {}).get("paths") or {}
+    # Follow "extends" chain — parent paths are inherited, child overrides.
+    paths: dict[str, list[str]] = {}
+    extends = data.get("extends")
+    if isinstance(extends, str):
+        extends = [extends]
+    if isinstance(extends, list):
+        for ext in extends:
+            if not isinstance(ext, str):
+                continue
+            if ext.startswith(".") or ext.startswith("/"):
+                # Relative or absolute path — existing logic
+                parent = (tsconfig.parent / ext).resolve()
+                if not parent.suffix:
+                    parent = parent.with_suffix(".json")
+            else:
+                # npm package — resolve from node_modules
+                parent = _resolve_npm_tsconfig(tsconfig.parent, ext)
+                if parent is None:
+                    continue
+            paths.update(_read_ts_paths(parent, _seen))
+    child_paths = (data.get("compilerOptions") or {}).get("paths") or {}
+    paths.update(child_paths)
+    return paths
 
 
 @dataclass
@@ -101,6 +150,7 @@ class PackageConfig:
     repo_root: Path
     aliases: dict[str, list[Path]] = field(default_factory=dict)
     language: str = "ts"  # "ts" (TypeScript/TSX) or "py" (Python)
+    pkg_json_name: Optional[str] = None  # "name" from package.json (e.g. "twenty-ui")
 
 
 def load_package_config(repo_root: Path, package_dir: Path) -> PackageConfig:
@@ -111,6 +161,12 @@ def load_package_config(repo_root: Path, package_dir: Path) -> PackageConfig:
         for t in targets:
             resolved.append((package_dir / t.rstrip("*")).resolve())
         cfg.aliases[alias_prefix] = resolved
+    # Read package.json "name" for workspace package resolution.
+    try:
+        pkg_data = json.loads((package_dir / "package.json").read_text())
+        cfg.pkg_json_name = pkg_data.get("name") or None
+    except (OSError, json.JSONDecodeError):
+        pass
     return cfg
 
 
@@ -198,6 +254,7 @@ class Resolver:
         self.packages = packages
         self._path_index: Optional[PathIndex] = None
         self._alias_cache: dict[str, list[tuple[str, Path]]] = {}
+        self._workspace_pkgs: dict[str, PackageConfig] = {}
 
     def set_path_index(self, path_index: PathIndex) -> None:
         self._path_index = path_index
@@ -211,8 +268,14 @@ class Resolver:
                 self._alias_cache.setdefault(pkg_key, [])
                 for t in targets:
                     self._alias_cache[pkg_key].append((alias, t))
+        # Workspace package registry: map package.json "name" → PackageConfig
+        # so bare imports like 'twenty-ui/display' can resolve to source files.
+        self._workspace_pkgs = {}
+        for pkg in self.packages:
+            if pkg.pkg_json_name:
+                self._workspace_pkgs[pkg.pkg_json_name] = pkg
 
-    def resolve(self, importer_rel: str, specifier: str) -> Optional[str]:
+    def resolve(self, importer_rel: str, specifier: str) -> Optional[ResolveResult]:
         if self._path_index is None:
             return None
         spec = specifier.strip()
@@ -234,27 +297,32 @@ class Resolver:
                 return None
             hit = self._path_index.try_resolve(base_rel)
             if hit:
-                return hit
+                return ResolveResult(hit, "relative")
             # NodeNext: remap .js → .ts when the literal path doesn't exist
-            return self._try_js_remap(base_rel)
+            hit = self._try_js_remap(base_rel)
+            return ResolveResult(hit, "relative") if hit else None
 
         # Absolute from repo root — rare
         if spec.startswith("/"):
-            return self._path_index.try_resolve(spec.lstrip("/"))
+            hit = self._path_index.try_resolve(spec.lstrip("/"))
+            return ResolveResult(hit, "direct") if hit else None
 
         # Alias lookup — try importer's own package first, then fall through
         importer_pkg = self._package_for_file(importer_rel)
         if importer_pkg and importer_pkg in self._alias_cache:
             hit = self._try_aliases(spec, self._alias_cache[importer_pkg])
             if hit:
-                return hit
+                return ResolveResult(hit, "alias")
         for pkg_name, alias_pairs in self._alias_cache.items():
             if pkg_name == importer_pkg:
                 continue  # already tried
             hit = self._try_aliases(spec, alias_pairs)
             if hit:
-                return hit
-        return None
+                return ResolveResult(hit, "alias")
+        # Workspace package resolution: try matching bare specifier against
+        # package.json names (e.g. 'twenty-ui/display' → packages/twenty-ui/src/display)
+        hit = self._try_workspace(spec)
+        return ResolveResult(hit, "workspace") if hit else None
 
     def _try_aliases(self, spec: str, alias_pairs: list[tuple[str, Path]]) -> Optional[str]:
         """Try resolving *spec* against a list of (alias_prefix, target_dir) pairs."""
@@ -299,6 +367,40 @@ class Resolver:
                     return remapped
         return None
 
+    # ── Workspace (monorepo) resolution ────────────────────────────────
+
+    def _try_workspace(self, spec: str) -> Optional[str]:
+        """Resolve a bare workspace package import like ``twenty-ui/display``.
+
+        Splits the specifier on the first ``/``, matches the prefix against
+        ``package.json`` names of indexed packages, then resolves the
+        remainder under ``<pkg_root>/src/`` (falling back to ``<pkg_root>/``
+        if no ``src/`` directory exists).  Scoped packages (``@scope/name``)
+        are handled by splitting on the second ``/``.
+        """
+        if self._path_index is None:
+            return None
+        pkg_name, _, sub_path = spec.partition("/")
+        pkg = self._workspace_pkgs.get(pkg_name)
+        # Scoped packages: @scope/name → split on the second '/'
+        if pkg is None and pkg_name.startswith("@") and sub_path:
+            scoped_name, _, sub_path = sub_path.partition("/")
+            pkg_name = f"{pkg_name}/{scoped_name}"
+            pkg = self._workspace_pkgs.get(pkg_name)
+        if pkg is None:
+            return None
+        src_dir = pkg.root / "src"
+        source_root = src_dir if src_dir.is_dir() else pkg.root
+        candidate = (source_root / sub_path) if sub_path else source_root
+        try:
+            base_rel = str(candidate.resolve().relative_to(self.repo_root)).replace("\\", "/")
+        except ValueError:
+            return None
+        hit = self._path_index.try_resolve(base_rel)
+        if hit:
+            return hit
+        return self._try_js_remap(base_rel)
+
     # ── Python resolution ─────────────────────────────────────────────
 
     def _is_python_file(self, rel: str) -> bool:
@@ -314,7 +416,7 @@ class Resolver:
                 continue
         return False
 
-    def _resolve_python(self, importer_rel: str, spec: str) -> Optional[str]:
+    def _resolve_python(self, importer_rel: str, spec: str) -> Optional[ResolveResult]:
         """Resolve a Python import specifier to a rel file path, or ``None``.
 
         Three rules:
@@ -339,7 +441,11 @@ class Resolver:
             base = importer_abs.parent
             for _ in range(leading_dots - 1):
                 base = base.parent
-            return self._resolve_python_module(base, remainder)
+            hit = self._resolve_python_module(base, remainder)
+            if hit is not None:
+                strategy = "barrel" if hit.endswith("__init__.py") else "relative"
+                return ResolveResult(hit, strategy)
+            return None
 
         # Absolute intra-package import: strip the top-level name.
         # Try the importer's own package first to avoid basename collisions
@@ -354,7 +460,8 @@ class Resolver:
         for pkg in candidates:
             hit = self._resolve_python_module(pkg.root, remainder)
             if hit:
-                return hit
+                strategy = "barrel" if hit.endswith("__init__.py") else "direct"
+                return ResolveResult(hit, strategy)
 
         # External — the caller emits IMPORTS_EXTERNAL.
         return None
@@ -405,9 +512,23 @@ def _url_pattern_to_regex(path_template: str) -> re.Pattern:
     return re.compile(f"^{escaped}/?(?:[?#].*)?$")
 
 
+_STRATEGY_CONFIDENCE: dict[str, tuple[str, float]] = {
+    "direct":    ("EXTRACTED", 1.0),
+    "relative":  ("EXTRACTED", 1.0),
+    "alias":     ("INFERRED",  0.9),
+    "workspace": ("INFERRED",  0.85),
+    "barrel":    ("INFERRED",  0.8),
+}
+
+
+def _strategy_confidence(strategy: str) -> tuple[str, float]:
+    """Map a resolution strategy to (confidence_label, confidence_score)."""
+    return _STRATEGY_CONFIDENCE.get(strategy, ("INFERRED", 0.7))
+
+
 # ── Cross-file linker ────────────────────────────────────────
 
-def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
+def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[EdgeGroupNode]]:
     """Emit all cross-file edges in one pass."""
     edges: list[Edge] = []
 
@@ -429,13 +550,17 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
         # -- Imports --
         for spec in result.imports:
             total_imports += 1
-            target = resolver.resolve(rel, spec.specifier)
-            if target is not None:
+            rr = resolver.resolve(rel, spec.specifier)
+            if rr is not None:
+                target = rr.path
+                conf, score = _strategy_confidence(rr.strategy)
                 edges.append(Edge(
                     kind=IMPORTS,
                     src_id=fid,
                     dst_id=f"file:{target}",
                     props={"specifier": spec.specifier, "type_only": spec.type_only},
+                    confidence=conf,
+                    confidence_score=score,
                 ))
                 # Phase 1.1: per-symbol edges
                 all_syms = list(spec.symbols)
@@ -449,6 +574,8 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
                         src_id=fid,
                         dst_id=f"file:{target}",
                         props={"symbol": sym, "type_only": spec.type_only},
+                        confidence=conf,
+                        confidence_score=score,
                     ))
             else:
                 unresolved_count += 1
@@ -531,6 +658,8 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
                         src_id=src_id,
                         dst_id=ep.id,
                         props={"url": url_clean},
+                        confidence="INFERRED",
+                        confidence_score=0.7,
                     ))
 
         # -- Phase 3: gql literals → operations --
@@ -558,17 +687,41 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
                     rel, caller_mid, recv_kind, recv_name, index
                 )
             if target_class_id is None:
+                # Bare function call — try resolving as a function
+                if recv_kind == "name" and not recv_name:
+                    target_func = _resolve_call_target_func(
+                        rel, target_method, index, resolver
+                    )
+                    if target_func is not None:
+                        edges.append(Edge(
+                            kind=CALLS,
+                            src_id=caller_mid,
+                            dst_id=target_func.id,
+                            props={"resolution": "name"},
+                            confidence="INFERRED",
+                            confidence_score=0.5,
+                        ))
                 continue
             # Does target class have target_method?
             key = (target_class_id, target_method)
             if key in index.method_by_class_and_name:
                 m = index.method_by_class_and_name[key]
-                confidence = "typed" if recv_kind in ("this", "this.field", "super") else "name"
+                resolution = "typed" if recv_kind in ("this", "this.field", "super") else "name"
+                if recv_kind == "this":
+                    conf, score = "EXTRACTED", 1.0
+                elif recv_kind == "this.field":
+                    conf, score = "INFERRED", 0.6
+                elif recv_kind == "super":
+                    conf, score = "INFERRED", 0.7
+                else:
+                    conf, score = "INFERRED", 0.5
                 edges.append(Edge(
                     kind=CALLS,
                     src_id=caller_mid,
                     dst_id=m.id,
-                    props={"confidence": confidence},
+                    props={"resolution": resolution},
+                    confidence=conf,
+                    confidence_score=score,
                 ))
 
         # -- Phase 5: module providers/imports/exports/controllers --
@@ -613,6 +766,8 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
                     kind=RENDERS,
                     src_id=f"func:{rel}#{component_name}",
                     dst_id=f"func:{target}#{rendered}",
+                    confidence="INFERRED",
+                    confidence_score=0.8,
                 ))
 
         # -- Hooks --
@@ -622,6 +777,33 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
                 src_id=f"func:{rel}#{component_name}",
                 dst_id=f"hook:{hook}",
                 props={"hook": hook},
+                confidence="EXTRACTED",
+                confidence_score=0.9,
+            ))
+
+    # -- Protocol-implementer groups --
+    iface_to_implementers: dict[str, list[str]] = {}
+    for e in edges:
+        if e.kind == IMPLEMENTS:
+            iface_to_implementers.setdefault(e.dst_id, []).append(e.src_id)
+
+    edge_groups: list[EdgeGroupNode] = []
+    for iface_id, implementers in iface_to_implementers.items():
+        if len(implementers) < 2:
+            continue
+        # Use full iface_id in name to avoid collisions between
+        # same-named interfaces in different files.
+        eg = EdgeGroupNode(
+            name=f"{iface_id} implementers",
+            kind="protocol_implementers",
+            node_count=len(implementers),
+        )
+        edge_groups.append(eg)
+        for impl_id in implementers:
+            edges.append(Edge(
+                kind=MEMBER_OF,
+                src_id=impl_id,
+                dst_id=eg.id,
             ))
 
     edges.append(Edge(
@@ -630,7 +812,7 @@ def link_cross_file(index: Index, resolver: Resolver) -> list[Edge]:
         dst_id="",
         props={"total_imports": total_imports, "unresolved_imports": unresolved_count},
     ))
-    return edges
+    return edges, edge_groups
 
 
 def _caller_id_for_fn(rel: str, caller_name: str, index: Index) -> str:
@@ -728,11 +910,11 @@ def _find_class(importer: str, symbol: str, index: Index, resolver: Resolver) ->
     if result is None:
         return None
     for spec in result.imports:
-        target_path = resolver.resolve(importer, spec.specifier)
-        if target_path is None:
+        rr = resolver.resolve(importer, spec.specifier)
+        if rr is None:
             continue
-        if (target_path, symbol) in index.class_by_name_in_file:
-            return target_path
+        if (rr.path, symbol) in index.class_by_name_in_file:
+            return rr.path
     files = index.class_name_to_files.get(symbol, [])
     if len(files) == 1:
         return files[0]
@@ -744,12 +926,41 @@ def _find_func(importer: str, symbol: str, index: Index, resolver: Resolver) -> 
     if result is None:
         return None
     for spec in result.imports:
-        target_path = resolver.resolve(importer, spec.specifier)
-        if target_path is None:
+        rr = resolver.resolve(importer, spec.specifier)
+        if rr is None:
             continue
-        if (target_path, symbol) in index.func_by_name_in_file:
-            return target_path
+        if (rr.path, symbol) in index.func_by_name_in_file:
+            return rr.path
     files = index.func_name_to_files.get(symbol, [])
     if len(files) == 1:
         return files[0]
+    return None
+
+
+def _resolve_call_target_func(
+    importer: str,
+    func_name: str,
+    index: Index,
+    resolver: Resolver,
+) -> Optional[FunctionNode]:
+    """Resolve a bare function call to a FunctionNode.
+
+    Checks: (1) same-file function, (2) imported symbol, (3) unique global name.
+    """
+    # Same file
+    key = (importer, func_name)
+    if key in index.func_by_name_in_file:
+        return index.func_by_name_in_file[key]
+    # Imported symbol
+    result = index.files_by_path.get(importer)
+    if result is not None:
+        for spec in result.imports:
+            if func_name in spec.symbols:
+                rr = resolver.resolve(importer, spec.specifier)
+                if rr and (rr.path, func_name) in index.func_by_name_in_file:
+                    return index.func_by_name_in_file[(rr.path, func_name)]
+    # Unique global name
+    files = index.func_name_to_files.get(func_name, [])
+    if len(files) == 1:
+        return index.func_by_name_in_file.get((files[0], func_name))
     return None

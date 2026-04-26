@@ -22,18 +22,53 @@ python -m compileall codegraph/ -q
 
 ## Stage 2: Install Test
 
-Test that the published package is installable:
+Test that the published package is installable with version assertion and retry for PyPI propagation lag:
 
 ```bash
+SCOPE="${ARGUMENTS:-all}"
+if [[ "$SCOPE" != "all" && "$SCOPE" != "install" && "$SCOPE" != "" ]]; then
+  echo "SKIP: install test (scope is '$SCOPE', not 'install' or 'all')"
+else
+
 LATEST=$(grep '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
-TMPVENV=$(mktemp -d)/venv
-python3 -m venv "$TMPVENV"
-"$TMPVENV/bin/pip" install "cognitx-codegraph[python]==$LATEST" -q
-"$TMPVENV/bin/codegraph" --help > /dev/null && echo "Install OK" || echo "Install FAILED"
-rm -rf "$(dirname $TMPVENV)"
+MAX_ATTEMPTS=3
+BACKOFF=15
+INSTALL_OK=false
+
+for attempt in $(seq 1 $MAX_ATTEMPTS); do
+  _tmpdir=$(mktemp -d)
+  TMPVENV="$_tmpdir/venv"
+  python3 -m venv "$TMPVENV"
+  "$TMPVENV/bin/pip" install "cognitx-codegraph[python]==$LATEST" --no-cache-dir -q
+
+  INSTALLED=$("$TMPVENV/bin/pip" show cognitx-codegraph 2>/dev/null | grep '^Version:' | awk '{print $2}')
+  INSTALLED=${INSTALLED:-NONE}
+  rm -rf "$_tmpdir"
+
+  if [ "$INSTALLED" = "$LATEST" ]; then
+    echo "Install OK — version $INSTALLED verified (attempt $attempt/$MAX_ATTEMPTS)"
+    INSTALL_OK=true
+    break
+  fi
+
+  if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+    echo "Attempt $attempt/$MAX_ATTEMPTS: expected $LATEST, got $INSTALLED. Retrying in ${BACKOFF}s..."
+    sleep $BACKOFF
+    BACKOFF=$((BACKOFF * 2))
+  else
+    echo "Install FAILED — expected $LATEST but got $INSTALLED after $MAX_ATTEMPTS attempts"
+    exit 1
+  fi
+done
+
+fi
 ```
 
-**Pass criteria**: `codegraph --help` exits 0 in a fresh venv.
+**Pass criteria**: Installed version matches `pyproject.toml` version exactly. Retries up to 3 times with exponential backoff (15s, 30s) for PyPI propagation lag.
+
+> **Note**: The `exit 1` ensures a non-zero exit in standalone / CI contexts. When run as a Claude Code slash command, Claude also reads the "Install FAILED" echo to determine the outcome.
+
+> **Tip**: Run `/test unit` to skip the install test during local development.
 
 ## Stage 3: Self-Index (dogfood)
 

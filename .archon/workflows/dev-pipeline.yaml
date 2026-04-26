@@ -65,12 +65,19 @@ nodes:
         echo "PASS: Neo4j started"
       fi
 
-      # Venv
+      # Venv — create if missing (worktrees don't have .venv)
       if .venv/bin/codegraph --help > /dev/null 2>&1; then
         echo "PASS: venv OK"
       else
-        echo "FAIL: venv missing or broken"
-        PASS=false
+        echo "WARN: venv missing — creating..."
+        python3 -m venv .venv
+        .venv/bin/pip install -e ".[python,mcp,test]" -q
+        if .venv/bin/codegraph --help > /dev/null 2>&1; then
+          echo "PASS: venv created"
+        else
+          echo "FAIL: venv creation failed"
+          PASS=false
+        fi
       fi
 
       # Tests
@@ -100,6 +107,7 @@ nodes:
     depends_on: [preflight]
     model: opus
     effort: high
+    idle_timeout: 600000
     prompt: |
       You are researching a codegraph issue/feature before planning implementation.
 
@@ -182,6 +190,7 @@ nodes:
     depends_on: [research]
     model: opus
     effort: high
+    idle_timeout: 600000
     prompt: |
       Create an implementation plan based on the research. Do NOT enter plan mode.
       Do NOT use /plan or any interactive planning mode. Just write a plan file directly.
@@ -217,19 +226,92 @@ nodes:
       Output the plan file path when done.
 
   # ═══════════════════════════════════════════════════════════════
+  # Step 3b: Group similar issues
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: group-issues
+    depends_on: [plan]
+    model: opus
+    context: fresh
+    idle_timeout: 600000
+    prompt: |
+      You MUST check all open GitHub issues to find ones that should be grouped
+      with the current issue and addressed in the same PR. Do NOT skip this step.
+      Do NOT return empty output — you must always output the result format below.
+
+      Current issue from user request: $USER_MESSAGE
+      Plan (files being changed): $plan.output
+
+      ## Step 1: Get all open issues
+
+      ```bash
+      gh issue list --state open --json number,title,body --jq '.[] | "#\(.number) \(.title): \(.body[:300])"'
+      ```
+
+      ## Step 2: Read the plan to identify which files are being changed
+
+      Extract the list of files from the plan output above.
+
+      ## Step 3: For EACH open issue, explicitly check these criteria
+
+      Go through every open issue one by one and check:
+
+      **A. Exact duplicate?** Does it describe the SAME change as another open issue?
+         Example: "#151 move _LABEL_MAP to module level" and "#142 hoist _LABEL_MAP out of _query_graph_stats"
+         → These are the SAME fix. Group them.
+
+      **B. Same file + same area?** Does it touch a file being changed in the plan
+         AND the same function/class/section of that file?
+         Example: Two issues both about error handling in `arch_check.py` → Group them.
+
+      **C. Would fixing one naturally fix the other?** If implementing issue A
+         requires changing code that also resolves issue B, group them.
+         Example: "add scope filter to custom policies" and "apply --scope to user-authored policies"
+         → Same feature, group them.
+
+      **D. Same docs section?** Multiple issues about the same documentation file?
+         Example: "#86 stale extending section" and "#83 references non-existent variable"
+         → Both about arch-policies.md docs, group them.
+
+      Do NOT group issues that are just in the same category (e.g., "both are bugs")
+      but touch completely different code.
+
+      ## Step 4: Output (MANDATORY — never return empty)
+
+      You MUST output in this exact format:
+
+      ```
+      Primary: #<N>
+      Grouped: #<M> (reason), #<K> (reason)
+      All issue numbers: N, M, K
+      ```
+
+      If no similar issues found:
+      ```
+      Primary: #<N>
+      Grouped: none
+      All issue numbers: N
+      ```
+
+      Show your reasoning for EACH issue you considered — say why you grouped
+      or did not group it. Be thorough.
+
+  # ═══════════════════════════════════════════════════════════════
   # Step 4: Implement
   # ═══════════════════════════════════════════════════════════════
 
   - id: implement
-    depends_on: [plan]
+    depends_on: [group-issues]
     model: opus
     effort: high
     idle_timeout: 600000
     prompt: |
-      Read the plan and implement ALL tasks.
+      Read the plan and implement ALL tasks. If similar issues were grouped,
+      address ALL of them in this implementation.
 
       Plan: $plan.output
       User request: $USER_MESSAGE
+      Grouped issues: $group-issues.output
 
       ## Instructions
 
@@ -243,17 +325,12 @@ nodes:
       2. Implement the change
       3. Validate immediately after EVERY file change:
          ```bash
-         python -m compileall codegraph/ -q
+         python3 -m compileall codegraph/ -q
          .venv/bin/python -m pytest tests/ -q
          ```
       4. Fix any failures before moving to the next task
 
       After ALL tasks are done, output a summary of what was implemented.
-    hooks:
-      PostToolUse:
-        - matcher: "Write|Edit"
-          response:
-            systemMessage: "Run byte-compile and tests NOW to catch errors early."
 
   # ═══════════════════════════════════════════════════════════════
   # Step 5: Review (MANDATORY — separate node guarantees it runs)
@@ -263,9 +340,11 @@ nodes:
     depends_on: [implement]
     model: opus
     effort: high
-    idle_timeout: 300000
+    idle_timeout: 600000
     prompt: |
       You MUST run a code review on all changed files. This is a mandatory step.
+      This code was written by Codex. Review it as if you are in a bad mood —
+      be extremely picky, assume nothing is correct, and flag everything suspicious.
 
       Implementation summary: $implement.output
 
@@ -323,6 +402,7 @@ nodes:
     depends_on: [review]
     model: sonnet
     context: fresh
+    idle_timeout: 600000
     prompt: |
       Commit all changes with a conventional commit message.
 
@@ -369,6 +449,7 @@ nodes:
     model: opus
     effort: high
     context: fresh
+    idle_timeout: 600000
     output_format:
       type: object
       properties:
@@ -465,12 +546,7 @@ nodes:
       until_bash: |
         REPO=$(git rev-parse --show-toplevel)
         cd "$REPO/codegraph"
-        python -m compileall codegraph/ -q 2>&1 && .venv/bin/python -m pytest tests/ -q 2>&1
-    hooks:
-      PostToolUse:
-        - matcher: "Write|Edit"
-          response:
-            systemMessage: "Run byte-compile and tests NOW to catch errors early."
+        python3 -m compileall codegraph/ -q 2>&1 && .venv/bin/python -m pytest tests/ -q 2>&1
 
   # ═══════════════════════════════════════════════════════════════
   # Final gate — independent verification (fan-in from both paths)
@@ -483,10 +559,19 @@ nodes:
       REPO=$(git rev-parse --show-toplevel)
       cd "$REPO/codegraph"
       echo "=== Final Gate ==="
-      python -m compileall codegraph/ -q 2>&1 && echo "PASS: byte-compile" || exit 1
+
+      # Ensure venv exists and deps are current
+      if [ ! -f .venv/bin/python ]; then
+        echo "Creating venv..."
+        python3 -m venv .venv
+      fi
+      # Always re-install to pick up any dependency changes from implementation
+      .venv/bin/pip install -e ".[python,mcp,test]" -q 2>&1
+
+      python3 -m compileall codegraph/ -q 2>&1 && echo "PASS: byte-compile" || exit 1
       .venv/bin/python -m pytest tests/ -q 2>&1 && echo "PASS: tests" || exit 1
       echo "FINAL_GATE_PASS"
-    timeout: 120000
+    timeout: 300000
 
   # ═══════════════════════════════════════════════════════════════
   # Step 8: Update ROADMAP.md
@@ -495,6 +580,7 @@ nodes:
   - id: roadmap
     depends_on: [final-gate]
     context: fresh
+    idle_timeout: 600000
     prompt: |
       Update ROADMAP.md at the repo root to reflect what was just implemented.
       This step is MANDATORY — you MUST edit and commit the ROADMAP.md file.
@@ -580,6 +666,7 @@ nodes:
   - id: package
     depends_on: [roadmap-verify]
     context: fresh
+    idle_timeout: 600000
     prompt: |
       Bump the version, build, and publish to PyPI.
 
@@ -659,7 +746,7 @@ nodes:
         ### Stage 1: Unit tests
         ```bash
         .venv/bin/python -m pytest tests/ -q
-        python -m compileall codegraph/ -q
+        python3 -m compileall codegraph/ -q
         ```
 
         ### Stage 2: Install test
@@ -711,28 +798,85 @@ nodes:
       until_bash: |
         REPO=$(git rev-parse --show-toplevel)
         cd "$REPO/codegraph"
-        .venv/bin/python -m pytest tests/ -q 2>&1 && python -m compileall codegraph/ -q 2>&1
+        .venv/bin/python -m pytest tests/ -q 2>&1 && python3 -m compileall codegraph/ -q 2>&1
 
   # ═══════════════════════════════════════════════════════════════
-  # Step 11: File issues for discoveries
+  # Step 11: Fix small issues inline, file large ones
   # ═══════════════════════════════════════════════════════════════
 
-  - id: file-issues
+  - id: fix-and-file
     depends_on: [test-cycle]
     context: fresh
-    model: sonnet
+    model: opus
+    idle_timeout: 600000
     prompt: |
-      Review the implementation and testing for any enhancement ideas, bugs in
-      unrelated code, or technical debt worth tracking.
+      Review the implementation and testing for any bugs, enhancements, or
+      tech debt discovered during this workflow run. Fix small things inline.
+      Only file GitHub issues for things too complex to fix right now.
 
       Implementation output: $implement.output
       Review output: $review.output
       Test output: $test-cycle.output
 
-      ## Instructions
+      ## Step 1: Gather discoveries
 
-      For each discovery that is OUT OF SCOPE for the current work:
+      List everything you noticed during the workflow — bugs in existing code,
+      missing edge cases, inconsistencies, enhancement ideas.
 
+      Check existing open issues to avoid duplicates:
+      ```bash
+      gh issue list --state open --json number,title --jq '.[] | "#\(.number) \(.title)"' | head -30
+      ```
+
+      ## Step 2: Triage each discovery
+
+      For each discovery, decide: **FIX NOW** or **FILE ISSUE**.
+
+      ### FIX NOW if ALL of these are true:
+      - The fix is obvious from the description (no research or investigation needed)
+      - No public API changes (function signatures, CLI flags, config schema stay the same)
+      - No new dependencies
+      - Existing tests cover it OR the test change is trivial
+      - Won't conflict with other open issues
+      - You are confident about the correct fix
+
+      ### FILE ISSUE if ANY of these are true:
+      - Needs investigation ("why is this happening?")
+      - Changes a public API or config schema
+      - Requires adding a new dependency
+      - Could conflict with or duplicate another open issue
+      - Needs a design decision (multiple valid approaches)
+      - You are not confident about the right fix
+
+      ### SKIP entirely if:
+      - Requires LLM/AI calls (codegraph is deterministic — no-LLM)
+      - Outside codegraph's scope (web UIs, dashboards, real-time watchers)
+      - Vague idea without a concrete implementation path
+      - Already tracked in an existing open issue
+
+      ## Step 3: Fix inline discoveries
+
+      For each FIX NOW item:
+      ```bash
+      REPO=$(git rev-parse --show-toplevel)
+      cd "$REPO/codegraph"
+      ```
+      1. Make the fix
+      2. Run tests: `.venv/bin/python -m pytest tests/ -q`
+      3. If tests pass, commit:
+         ```bash
+         git add <files>
+         git commit -m "$(cat <<'EOF'
+         fix(<scope>): <description>
+
+         Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+         EOF
+         )"
+         ```
+
+      ## Step 4: File issues for complex discoveries
+
+      For each FILE ISSUE item:
       ```bash
       gh issue create --title "<type>: <title>" --body "$(cat <<'EOF'
       ## Context
@@ -747,22 +891,29 @@ nodes:
       )" --label "<enhancement|bug|tech-debt>"
       ```
 
-      If nothing was discovered, that's fine — just say "No new issues to file."
+      ## Step 5: Report
 
-      List all issues created with their numbers and titles.
+      Output:
+      - Fixes applied inline: list with descriptions
+      - Issues filed: list with numbers and titles
+      - Items skipped: list with reasons
+
+      If nothing was discovered, say "No discoveries."
 
   # ═══════════════════════════════════════════════════════════════
   # Step 12: Create PR to hotfix
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-pr
-    depends_on: [file-issues]
+    depends_on: [fix-and-file]
     context: fresh
+    idle_timeout: 600000
     prompt: |
       Create a pull request from the current feature branch to hotfix.
 
       Package version: $package.output
       Test results: $test-cycle.output
+      Grouped issues: $group-issues.output
 
       ## Instructions
 
@@ -783,8 +934,9 @@ nodes:
          curl -s https://pypi.org/pypi/cognitx-codegraph/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])"
          ```
 
-      4. MANDATORY — if the user's original request mentioned an issue number,
-         you MUST comment on the issue. Extract the issue number from: $USER_MESSAGE
+      4. MANDATORY — comment on ALL issues being addressed (primary + grouped).
+         Extract issue numbers from $USER_MESSAGE and $group-issues.output.
+         For EACH issue number:
          ```bash
          gh issue comment <N> --body "$(cat <<'EOF'
          ## Implementation Complete
@@ -809,11 +961,14 @@ nodes:
          gh issue view <N> --json comments --jq '.comments | length'
          ```
 
-      5. Create the PR with `Closes #N` in the body:
+      5. Create the PR with `Closes #N` for EVERY issue (primary + grouped).
+         Put each `Closes #N` on its own line:
          ```bash
          BRANCH=$(git branch --show-current)
          gh pr create --base hotfix --head "$BRANCH" --title "<type>: <description>" --body "$(cat <<'EOF'
          Closes #<N>
+         Closes #<M>
+         Closes #<K>
 
          ## Summary
          - <what changed>
@@ -834,6 +989,90 @@ nodes:
          )"
          ```
 
-      Output the PR URL.
+      6. MANDATORY — after creating the PR, explicitly close ALL issues
+         (primary + grouped). Do NOT rely on GitHub's auto-close from
+         `Closes #N` — it only works when the PR is merged into the
+         DEFAULT branch, which may not be hotfix.
+         For EACH issue number:
+         ```bash
+         gh issue close <N> --comment "Resolved in PR #<PR-number>"
+         ```
+         Verify all are closed:
+         ```bash
+         gh issue view <N> --json state --jq '.state'
+         # Should say CLOSED for every issue
+         ```
 
-      Workflow complete.
+      Output the PR URL and list of closed issues.
+
+  # ═══════════════════════════════════════════════════════════════
+  # Step 13: Scan for already-fixed issues
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: close-fixed-issues
+    depends_on: [create-pr]
+    context: fresh
+    model: sonnet
+    idle_timeout: 600000
+    prompt: |
+      Scan all open GitHub issues to find any that were inadvertently fixed by
+      the changes in this workflow run, but were NOT part of the grouped issues.
+
+      Implementation summary: $implement.output
+      Grouped issues: $group-issues.output
+
+      ## Instructions
+
+      1. List all open issues:
+         ```bash
+         gh issue list --state open --json number,title,body --jq '.[] | "#\(.number) \(.title): \(.body[:300])"'
+         ```
+
+      2. Get the files changed in this run:
+         ```bash
+         REPO=$(git rev-parse --show-toplevel)
+         cd "$REPO"
+         BRANCH=$(git branch --show-current)
+         git diff --name-only hotfix.."$BRANCH"
+         ```
+
+      3. For each open issue, check TWO things:
+
+         **A. Already fixed?** Check if the issue was resolved by the changes:
+         - Does the issue mention a file that was modified?
+         - Does the issue describe a bug in a function that was changed?
+         - Read the relevant code to verify the fix is actually in place
+         - Only close if you are CONFIDENT (>90%) the issue is resolved
+
+         **B. Out of scope / has constraint comments?** Check the issue comments:
+         ```bash
+         gh issue view <N> --json comments --jq '.comments[].body'
+         ```
+         Look for comments containing:
+         - "no-LLM" or "no-llm" — feature requires LLM which codegraph doesn't use
+         - "out of scope" or "not in scope"
+         - "will not implement" or "won't implement"
+         - "Scope note" with a constraint that makes the issue invalid
+         - "Implementation Complete" — issue was already done but not closed
+
+         If any of these are found, the issue should be closed.
+
+      4. For each issue that was inadvertently fixed:
+         ```bash
+         gh issue close <N> --comment "This issue was resolved as a side effect of the changes in PR #<PR>. The fix was applied in commit <SHA> which modified <file>."
+         ```
+
+      5. For each issue with scope constraints or "Implementation Complete":
+         ```bash
+         gh issue close <N> --comment "Closing — this issue has been marked as out of scope or already completed. See prior comments."
+         ```
+
+      6. Output a summary:
+         - Issues scanned: N
+         - Issues closed as already fixed: list with numbers and reasons
+         - Issues closed as out of scope: list with numbers and reasons
+         - Issues closed as already implemented: list with numbers
+         - Issues still open: count
+
+      If nothing to close, say "No additional issues resolved."
+

@@ -41,7 +41,7 @@ _COMMANDS: dict[str, str] = {
     "status":                "Print current repo + connection",
     "repo <path>":           "Set the current repo (for validate/index)",
     "connect [uri] [user]":  "Connect to Neo4j; prompts for password",
-    "index":                 "Index the current repo (use --no-wipe to keep existing data)",
+    "index":                 "Index the current repo (--no-wipe to keep data, --since <ref> for incremental)",
     "validate":              "Run the validation suite on the current repo",
     "query <cypher>":        "Run a Cypher query (wrap multi-word args in quotes)",
     "schema":                "Print the graph schema (node labels + edge types)",
@@ -196,6 +196,12 @@ def _cmd_index(skin: ReplSkin, session: Session, args: list[str]) -> None:
 
     wipe = "--no-wipe" not in args
 
+    since = None
+    if "--since" in args:
+        idx = args.index("--since")
+        if idx + 1 < len(args):
+            since = args[idx + 1]
+
     # Dynamically import to keep REPL startup fast
     from .cli import _run_index  # type: ignore[attr-defined]
 
@@ -209,6 +215,7 @@ def _cmd_index(skin: ReplSkin, session: Session, args: list[str]) -> None:
             user=session.user or "neo4j",
             password=session.password or "",
             skip_ownership=False,
+            since=since,
         )
         session.last_index_stats = stats
         skin.success("Index complete.")

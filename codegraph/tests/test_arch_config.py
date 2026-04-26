@@ -6,6 +6,7 @@ Every test writes a tiny TOML file into ``tmp_path`` and calls
 """
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import pytest
@@ -46,7 +47,16 @@ def test_missing_file_returns_defaults(tmp_path: Path):
     assert cfg.layer_bypass.repository_suffix == "Repository"
     assert cfg.layer_bypass.service_suffix == "Service"
     assert cfg.layer_bypass.call_depth == 3
+    assert cfg.coupling_ceiling.enabled is True
+    assert cfg.coupling_ceiling.max_imports == 20
+    assert cfg.orphan_detection.enabled is True
+    assert cfg.orphan_detection.path_prefix == ""
+    assert cfg.orphan_detection.kinds == ["function", "class", "atom", "endpoint"]
+    assert cfg.orphan_detection.exclude_prefixes == ["test_"]
+    assert cfg.orphan_detection.exclude_names[0] == "setup_module"
     assert cfg.custom == []
+    assert cfg.schema_version == 1
+    assert cfg.sample_limit == 10
 
 
 def test_empty_file_returns_defaults(tmp_path: Path):
@@ -61,6 +71,69 @@ def test_explicit_path_override(tmp_path: Path):
     custom_path.write_text("[policies.import_cycles]\nenabled = false\n")
     cfg = load_arch_config(tmp_path, path=custom_path)
     assert cfg.import_cycles.enabled is False
+
+
+# ── Schema versioning ─────────────────────────────────────
+
+
+def test_missing_meta_defaults_to_version_1(tmp_path: Path):
+    _write(tmp_path, """
+[policies.import_cycles]
+enabled = false
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.schema_version == 1
+
+
+def test_explicit_version_1_accepted(tmp_path: Path):
+    _write(tmp_path, """
+[meta]
+schema_version = 1
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.schema_version == 1
+
+
+def test_future_version_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[meta]
+schema_version = 99
+""")
+    with pytest.raises(ArchConfigError, match="not supported.*upgrade"):
+        load_arch_config(tmp_path)
+
+
+def test_version_zero_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[meta]
+schema_version = 0
+""")
+    with pytest.raises(ArchConfigError, match="positive integer"):
+        load_arch_config(tmp_path)
+
+
+def test_version_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[meta]
+schema_version = "1"
+""")
+    with pytest.raises(ArchConfigError, match="must be an integer"):
+        load_arch_config(tmp_path)
+
+
+def test_version_bool_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[meta]
+schema_version = true
+""")
+    with pytest.raises(ArchConfigError, match="must be an integer"):
+        load_arch_config(tmp_path)
+
+
+def test_meta_must_be_table(tmp_path: Path):
+    _write(tmp_path, 'meta = "wrong"\n')
+    with pytest.raises(ArchConfigError, match=r"\[meta\] must be a table"):
+        load_arch_config(tmp_path)
 
 
 # ── Built-in policy tuning ──────────────────────────────────
@@ -155,6 +228,37 @@ controller_labels = []
         load_arch_config(tmp_path)
 
 
+# ── Coupling ceiling ──────────────────────────────────────────
+
+
+def test_tune_coupling_ceiling(tmp_path: Path):
+    _write(tmp_path, """
+[policies.coupling_ceiling]
+max_imports = 10
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.coupling_ceiling.max_imports == 10
+    assert cfg.coupling_ceiling.enabled is True
+
+
+def test_coupling_ceiling_disabled(tmp_path: Path):
+    _write(tmp_path, """
+[policies.coupling_ceiling]
+enabled = false
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.coupling_ceiling.enabled is False
+
+
+def test_coupling_ceiling_max_imports_below_1_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.coupling_ceiling]
+max_imports = 0
+""")
+    with pytest.raises(ArchConfigError, match="max_imports must be >= 1"):
+        load_arch_config(tmp_path)
+
+
 # ── Custom policies ─────────────────────────────────────────
 
 
@@ -164,7 +268,7 @@ def test_single_custom_policy(tmp_path: Path):
 name          = "no_fat_files"
 description   = "Files over 500 LOC"
 count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
-sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path LIMIT 10"
+sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path LIMIT $limit"
 """)
     cfg = load_arch_config(tmp_path)
     assert len(cfg.custom) == 1
@@ -179,13 +283,13 @@ def test_multiple_custom_policies(tmp_path: Path):
 [[policies.custom]]
 name          = "a"
 count_cypher  = "MATCH (n) RETURN count(n) AS v"
-sample_cypher = "MATCH (n) RETURN n LIMIT 1"
+sample_cypher = "MATCH (n) RETURN n LIMIT $limit"
 
 [[policies.custom]]
 name          = "b"
 enabled       = false
 count_cypher  = "MATCH (x) RETURN count(x) AS v"
-sample_cypher = "MATCH (x) RETURN x LIMIT 1"
+sample_cypher = "MATCH (x) RETURN x LIMIT $limit"
 """)
     cfg = load_arch_config(tmp_path)
     assert [c.name for c in cfg.custom] == ["a", "b"]
@@ -219,6 +323,17 @@ sample_cypher = "MATCH (n) RETURN n"
         load_arch_config(tmp_path)
 
 
+def test_custom_collides_with_orphan_detection_builtin(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "orphan_detection"
+count_cypher  = "MATCH (n) RETURN count(n) AS v"
+sample_cypher = "MATCH (n) RETURN n"
+""")
+    with pytest.raises(ArchConfigError, match="collides with a built-in"):
+        load_arch_config(tmp_path)
+
+
 def test_custom_empty_count_cypher_rejected(tmp_path: Path):
     _write(tmp_path, """
 [[policies.custom]]
@@ -237,6 +352,166 @@ name          = "bad"
 count_cypher  = "MATCH (n) RETURN count(n) AS v"
 """)
     with pytest.raises(ArchConfigError, match="sample_cypher"):
+        load_arch_config(tmp_path)
+
+
+def test_custom_hardcoded_limit_emits_warning(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "warn_me"
+count_cypher  = "MATCH (f:File) RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) RETURN f LIMIT 10"
+""")
+    with pytest.warns(UserWarning, match="hardcoded LIMIT"):
+        cfg = load_arch_config(tmp_path)
+    assert len(cfg.custom) == 1  # config still loads
+
+
+def test_custom_parameterised_limit_no_warning(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "no_warn"
+count_cypher  = "MATCH (f:File) RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) RETURN f LIMIT $limit"
+""")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cfg = load_arch_config(tmp_path)
+    assert len(cfg.custom) == 1
+
+
+# ── Orphan detection ──────────────────────────────────────────
+
+
+def test_orphan_detection_defaults(tmp_path: Path):
+    _write(tmp_path, "")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.enabled is True
+    assert cfg.orphan_detection.path_prefix == ""
+    assert cfg.orphan_detection.kinds == ["function", "class", "atom", "endpoint"]
+    assert cfg.orphan_detection.exclude_prefixes == ["test_"]
+    assert cfg.orphan_detection.exclude_names == [
+        "setup_module", "teardown_module",
+        "setup_function", "teardown_function",
+        "setup_class", "teardown_class",
+        "setup_method", "teardown_method",
+    ]
+
+
+def test_orphan_detection_disabled(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+enabled = false
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.enabled is False
+
+
+def test_orphan_detection_custom_prefix(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+path_prefix = "src/core/"
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.path_prefix == "src/core/"
+
+
+def test_orphan_detection_custom_kinds(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+kinds = ["function", "class"]
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.kinds == ["function", "class"]
+
+
+def test_orphan_detection_invalid_kind_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+kinds = ["bogus"]
+""")
+    with pytest.raises(ArchConfigError, match="is not valid"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_empty_kinds_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+kinds = []
+""")
+    with pytest.raises(ArchConfigError, match="must not be empty"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_custom_exclude_prefixes(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_prefixes = ["test_", "check_"]
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.exclude_prefixes == ["test_", "check_"]
+
+
+def test_orphan_detection_custom_exclude_names(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_names = ["setUp", "tearDown"]
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.exclude_names == ["setUp", "tearDown"]
+
+
+def test_orphan_detection_empty_exclude_prefixes_allowed(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_prefixes = []
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.exclude_prefixes == []
+
+
+def test_orphan_detection_empty_exclude_names_allowed(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_names = []
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.orphan_detection.exclude_names == []
+
+
+def test_orphan_detection_exclude_prefixes_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_prefixes = "test_"
+""")
+    with pytest.raises(ArchConfigError, match="exclude_prefixes must be a list"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_exclude_names_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_names = 42
+""")
+    with pytest.raises(ArchConfigError, match="exclude_names must be a list"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_exclude_prefixes_non_string_element_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_prefixes = [42]
+""")
+    with pytest.raises(ArchConfigError, match="exclude_prefixes\\[0\\] must be a string"):
+        load_arch_config(tmp_path)
+
+
+def test_orphan_detection_exclude_names_non_string_element_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[policies.orphan_detection]
+exclude_names = [true]
+""")
+    with pytest.raises(ArchConfigError, match="exclude_names\\[0\\] must be a string"):
         load_arch_config(tmp_path)
 
 
@@ -261,4 +536,200 @@ def test_bool_field_type_checked(tmp_path: Path):
 enabled = "yes"
 """)
     with pytest.raises(ArchConfigError, match="enabled must be a boolean"):
+        load_arch_config(tmp_path)
+
+
+# ── Suppressions ─────────────────────────────────────────────
+
+
+def test_no_suppressions_returns_empty_list(tmp_path: Path):
+    _write(tmp_path, "")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.suppressions == []
+
+
+def test_single_suppression_parsed(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+key    = "a.py -> b.py"
+reason = "Intentional mutual dependency"
+""")
+    cfg = load_arch_config(tmp_path)
+    assert len(cfg.suppressions) == 1
+    s = cfg.suppressions[0]
+    assert s.policy == "import_cycles"
+    assert s.key == "a.py -> b.py"
+    assert s.reason == "Intentional mutual dependency"
+
+
+def test_multiple_suppressions_parsed(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+key    = "a.py -> b.py"
+reason = "reason one"
+
+[[suppress]]
+policy = "coupling_ceiling"
+key    = "src/App.tsx"
+reason = "reason two"
+""")
+    cfg = load_arch_config(tmp_path)
+    assert len(cfg.suppressions) == 2
+    assert cfg.suppressions[0].policy == "import_cycles"
+    assert cfg.suppressions[1].policy == "coupling_ceiling"
+
+
+def test_suppression_missing_policy_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+key    = "a.py -> b.py"
+reason = "some reason"
+""")
+    with pytest.raises(ArchConfigError, match="suppress\\[0\\].policy must be a non-empty string"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_missing_key_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+reason = "some reason"
+""")
+    with pytest.raises(ArchConfigError, match="suppress\\[0\\].key must be a non-empty string"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_missing_reason_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+key    = "a.py -> b.py"
+""")
+    with pytest.raises(ArchConfigError, match="suppress\\[0\\].reason must be a non-empty string"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_empty_reason_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycles"
+key    = "a.py -> b.py"
+reason = "   "
+""")
+    with pytest.raises(ArchConfigError, match="suppress\\[0\\].reason must be a non-empty string"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, 'suppress = "not a list"\n')
+    with pytest.raises(ArchConfigError, match="suppress must be an array of tables"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_typo_policy_rejected_with_suggestion(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "import_cycle"
+key    = "a.py -> b.py"
+reason = "some reason"
+""")
+    with pytest.raises(ArchConfigError, match=r"did you mean 'import_cycles'\?"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_unknown_policy_rejected_with_known_list(tmp_path: Path):
+    _write(tmp_path, """
+[[suppress]]
+policy = "totally_bogus"
+key    = "a.py -> b.py"
+reason = "some reason"
+""")
+    with pytest.raises(ArchConfigError, match=r"does not match any known policy.*known policies:"):
+        load_arch_config(tmp_path)
+
+
+def test_suppression_custom_policy_name_accepted(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "no_fat_files"
+description   = "Files over 500 LOC"
+count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file LIMIT $limit"
+
+[[suppress]]
+policy = "no_fat_files"
+key    = "src/big.py"
+reason = "legacy module"
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.suppressions[0].policy == "no_fat_files"
+
+
+def test_suppression_typo_of_custom_policy_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[[policies.custom]]
+name          = "no_fat_files"
+description   = "Files over 500 LOC"
+count_cypher  = "MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v"
+sample_cypher = "MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS file LIMIT $limit"
+
+[[suppress]]
+policy = "no_fat_file"
+key    = "src/big.py"
+reason = "legacy module"
+""")
+    with pytest.raises(ArchConfigError, match=r"did you mean 'no_fat_files'\?"):
+        load_arch_config(tmp_path)
+
+
+# ── Settings ──────────────────────────────────────────────────
+
+
+def test_default_sample_limit(tmp_path: Path):
+    _write(tmp_path, "")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.sample_limit == 10
+
+
+def test_custom_sample_limit(tmp_path: Path):
+    _write(tmp_path, """
+[settings]
+sample_limit = 50
+""")
+    cfg = load_arch_config(tmp_path)
+    assert cfg.sample_limit == 50
+
+
+def test_sample_limit_below_1_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[settings]
+sample_limit = 0
+""")
+    with pytest.raises(ArchConfigError, match="must be >= 1"):
+        load_arch_config(tmp_path)
+
+
+def test_settings_must_be_table(tmp_path: Path):
+    _write(tmp_path, 'settings = "wrong"\n')
+    with pytest.raises(ArchConfigError, match=r"\[settings\] must be a table"):
+        load_arch_config(tmp_path)
+
+
+def test_sample_limit_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[settings]
+sample_limit = "ten"
+""")
+    with pytest.raises(ArchConfigError, match="must be an integer"):
+        load_arch_config(tmp_path)
+
+
+def test_sample_limit_bool_rejected(tmp_path: Path):
+    _write(tmp_path, """
+[settings]
+sample_limit = true
+""")
+    with pytest.raises(ArchConfigError, match=r"settings\.sample_limit must be an integer"):
         load_arch_config(tmp_path)

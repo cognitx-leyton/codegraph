@@ -484,7 +484,9 @@ class FrameworkDetector:
             req_file = self.project_path / req_name
             if req_file.exists():
                 try:
-                    for line in req_file.read_text(encoding="utf-8").splitlines():
+                    with open(req_file, encoding="utf-8", newline="") as fh:
+                        _req_text = fh.read()
+                    for line in _req_text.splitlines():
                         line = line.strip()
                         if not line or line.startswith("#") or line.startswith("-"):
                             continue

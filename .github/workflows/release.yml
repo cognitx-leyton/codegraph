@@ -9,6 +9,9 @@
 # derives nothing from the tag — setuptools reads the version from
 # pyproject.toml, so bump that in the same commit as the tag.
 #
+# After publishing, the workflow waits up to 5 minutes for PyPI CDN
+# propagation, then installs and smoke-tests the package in a clean venv.
+#
 # SAFETY: No untrusted GitHub context (issue/PR/commit titles, bodies,
 # authors, refs) is interpolated into any `run:` command. Every step uses
 # either hardcoded arguments or pinned actions.
@@ -40,7 +43,93 @@ jobs:
         working-directory: codegraph
         run: python -m build
 
+      - name: Read package version
+        id: version
+        working-directory: codegraph
+        run: |
+          VERSION=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Package version: $VERSION"
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: codegraph/dist
+
+      - name: Wait for PyPI propagation
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          META_URL="https://pypi.org/pypi/cognitx-codegraph/${VERSION}/json"
+          TIMEOUT=300
+          INTERVAL=10
+          ELAPSED=0
+          echo "Waiting for cognitx-codegraph $VERSION to appear on PyPI..."
+          # Phase 1: wait for metadata API
+          while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+            if curl -sf "$META_URL" > /dev/null 2>&1; then
+              echo "Metadata API reports $VERSION available after ${ELAPSED}s"
+              break
+            fi
+            echo "  Not yet available (${ELAPSED}s/${TIMEOUT}s)..."
+            sleep "$INTERVAL"
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+          if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+            echo "::error::cognitx-codegraph $VERSION not available on PyPI metadata API after ${TIMEOUT}s"
+            exit 1
+          fi
+          # Phase 2: wait for CDN (files.pythonhosted.org) to serve the wheel
+          CDN_URL=$(curl -sf "$META_URL" | python3 -c "
+          import sys, json
+          urls = json.load(sys.stdin).get('urls', [])
+          whl = next((u['url'] for u in urls if u['url'].endswith('.whl')), None)
+          if whl: print(whl)
+          " 2>/dev/null || true)
+          if [ -n "$CDN_URL" ]; then
+            CDN_TIMEOUT=120
+            CDN_ELAPSED=0
+            echo "Waiting for CDN to serve wheel..."
+            while [ "$CDN_ELAPSED" -lt "$CDN_TIMEOUT" ]; do
+              if curl -sfI "$CDN_URL" > /dev/null 2>&1; then
+                echo "CDN serving wheel after ${CDN_ELAPSED}s"
+                break
+              fi
+              echo "  CDN not ready (${CDN_ELAPSED}s/${CDN_TIMEOUT}s)..."
+              sleep "$INTERVAL"
+              CDN_ELAPSED=$((CDN_ELAPSED + INTERVAL))
+            done
+            if [ "$CDN_ELAPSED" -ge "$CDN_TIMEOUT" ]; then
+              echo "::warning::CDN not serving wheel after ${CDN_TIMEOUT}s — proceeding with install retry"
+            fi
+          fi
+
+      - name: Verify PyPI install
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          MAX_ATTEMPTS=5
+          BACKOFF=30
+          INSTALL_OK=false
+
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            rm -rf /tmp/verify-venv
+            python -m venv /tmp/verify-venv
+            /tmp/verify-venv/bin/pip install "cognitx-codegraph==${VERSION}" --no-cache-dir -q && INSTALL_OK=true || INSTALL_OK=false
+
+            if [ "$INSTALL_OK" = "true" ]; then
+              /tmp/verify-venv/bin/codegraph --help
+              echo "Smoke test passed — codegraph CLI works from PyPI install (attempt $attempt/$MAX_ATTEMPTS)"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Attempt $attempt/$MAX_ATTEMPTS: pip install failed. Retrying in ${BACKOFF}s..."
+              sleep $BACKOFF
+              BACKOFF=$((BACKOFF * 2))
+            fi
+          done
+
+          echo "::error::cognitx-codegraph $VERSION install failed after $MAX_ATTEMPTS attempts"
+          exit 1
+

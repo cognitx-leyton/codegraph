@@ -2,15 +2,34 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
 import re
 import subprocess
 from collections import Counter
 from pathlib import Path
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
+_EMPTY_OWNERSHIP: dict = {
+    "authors": [],
+    "teams": [],
+    "last_modified": [],
+    "contributors": [],
+    "owned_by": [],
+}
+
 
 def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
-    """Build authors/teams/last_modified/contributors/owned_by from git + CODEOWNERS."""
+    """Build authors/teams/last_modified/contributors/owned_by from git + CODEOWNERS.
+
+    Returns a dict with keys ``authors``, ``teams``, ``last_modified``,
+    ``contributors``, and ``owned_by``.  On error (git not found, non-zero
+    exit, timeout) every value is an empty list -- but the dict itself is
+    **always truthy**.  Callers must not use ``if not ownership:`` as a
+    failure check; test individual lists or handle the logged warning
+    instead.
+    """
     authors: dict[str, dict] = {}
     last_modified: list[dict] = []
     contributors: list[dict] = []
@@ -18,12 +37,22 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
     # Single git log call: name + email + timestamp + file list per commit
     try:
         proc = subprocess.run(
-            ["git", "log", "--name-only", "--pretty=format:__COMMIT__%H|%ae|%an|%at"],
+            ["git", "log", "--name-only", "--pretty=format:__COMMIT__%H\x1f%ae\x1f%an\x1f%at"],
             cwd=str(repo_root), capture_output=True, text=True, check=False, timeout=120,
         )
-        log_text = proc.stdout
-    except (OSError, subprocess.SubprocessError):
-        return {}
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("collect_ownership: git log failed: %s", exc)
+        return {k: [] for k in _EMPTY_OWNERSHIP}
+
+    if proc.returncode != 0:
+        logger.warning(
+            "collect_ownership: git log failed (exit %d): %s",
+            proc.returncode,
+            proc.stderr.strip(),
+        )
+        return {k: [] for k in _EMPTY_OWNERSHIP}
+
+    log_text = proc.stdout
 
     file_last: dict[str, tuple[str, int]] = {}    # file -> (email, ts)
     file_counts: dict[str, Counter] = {}          # file -> Counter[email]
@@ -35,13 +64,14 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
         if line.startswith("__COMMIT__"):
             try:
                 _, payload = line.split("__COMMIT__", 1)
-                _h, email, name, ts = payload.split("|", 3)
+                _h, email, name, ts = payload.split("\x1f", 3)
                 current_email = email
                 current_name = name
                 current_ts = int(ts)
                 if email not in authors:
                     authors[email] = {"email": email, "name": name}
             except ValueError:
+                logger.warning("collect_ownership: malformed git log line: %r", line)
                 current_email = None
             continue
         if not line.strip():
@@ -60,7 +90,7 @@ def collect_ownership(repo_root: Path, indexed_files: set[str]) -> dict:
     for f, (email, ts) in file_last.items():
         last_modified.append({"path": f, "email": email, "at": ts})
     for f, counter in file_counts.items():
-        for email, count in counter.most_common(10):
+        for email, count in sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:10]:
             contributors.append({"path": f, "email": email, "commits": count})
 
     # CODEOWNERS
@@ -94,7 +124,13 @@ _CO_LINE_RE = re.compile(r"^\s*([^\s#]+)\s+(.+)$")
 
 def _parse_codeowners(p: Path) -> list[tuple[str, list[str]]]:
     rules: list[tuple[str, list[str]]] = []
-    for line in p.read_text(errors="replace").splitlines():
+    try:
+        with open(p, encoding="utf-8", newline="") as fh:
+            _text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("CODEOWNERS: cannot decode %s: %s", p, exc)
+        return []
+    for line in _text.splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
@@ -119,8 +155,9 @@ def _match_codeowners(path: str, rules: list[tuple[str, list[str]]]) -> list[str
 def _co_pattern_match(pat: str, path: str) -> bool:
     # /foo means rooted at repo root
     if pat.startswith("/"):
-        pat = pat[1:]
-        return fnmatch.fnmatch(path, pat) or fnmatch.fnmatch(path, pat + "*")
+        stripped = pat[1:]
+        base = stripped.rstrip("/")
+        return fnmatch.fnmatch(path, stripped) or fnmatch.fnmatch(path, base + "/*")
     # **/ pattern
     if "/" not in pat.rstrip("*/"):
         return any(fnmatch.fnmatch(seg, pat.rstrip("/")) for seg in path.split("/"))

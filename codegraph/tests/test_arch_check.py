@@ -17,19 +17,24 @@ from codegraph import arch_check
 from codegraph.arch_check import (
     ArchReport,
     PolicyResult,
+    _check_coupling_ceiling,
     _check_cross_package,
     _check_custom,
     _check_import_cycles,
     _check_layer_bypass,
+    _check_orphans,
+    _render,
     run_arch_check,
 )
 from codegraph.arch_config import (
     ArchConfig,
+    CouplingCeilingConfig,
     CrossPackageConfig,
     CrossPackagePair,
     CustomPolicy,
     ImportCyclesConfig,
     LayerBypassConfig,
+    OrphanDetectionConfig,
 )
 
 
@@ -96,6 +101,7 @@ def test_policy_result_defaults():
     p = PolicyResult(name="x", passed=True, violation_count=0)
     assert p.sample == []
     assert p.detail == ""
+    assert p.disabled is False
 
 
 def test_arch_report_ok_is_true_when_all_pass():
@@ -122,6 +128,7 @@ def test_arch_report_to_json_is_valid_and_contains_ok_flag():
     assert blob["ok"] is False
     assert blob["policies"][0]["violation_count"] == 2
     assert blob["policies"][0]["sample"] == [{"x": 1}]
+    assert blob["policies"][0]["disabled"] is False
 
 
 # ── import_cycles ───────────────────────────────────────────────────
@@ -253,6 +260,190 @@ def test_layer_bypass_uses_config_suffixes():
     assert captured_params["svc_suffix"] == "Manager"
 
 
+# ── coupling_ceiling ───────────────────────────────────────────────
+
+
+def test_coupling_ceiling_clean():
+    driver = _constant_driver({
+        "count(f) AS v": [{"v": 0}],
+    })
+    result = _check_coupling_ceiling(driver, CouplingCeilingConfig())
+    assert result.name == "coupling_ceiling"
+    assert result.passed is True
+    assert result.violation_count == 0
+    assert result.sample == []
+
+
+def test_coupling_ceiling_detected():
+    sample = [{"file": "src/god_object.ts", "deps": 35}]
+    driver = _constant_driver({
+        "count(f) AS v": [{"v": 1}],
+        "f.path AS file, deps": sample,
+    })
+    result = _check_coupling_ceiling(driver, CouplingCeilingConfig())
+    assert result.passed is False
+    assert result.violation_count == 1
+    assert result.sample == sample
+    assert "file" in result.sample[0]
+    assert "deps" in result.sample[0]
+
+
+def test_coupling_ceiling_uses_config_threshold():
+    captured_params: dict = {}
+
+    def resolver(cypher: str, **params):
+        captured_params.update(params)
+        return [{"v": 0}] if "count(f)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_coupling_ceiling(driver, CouplingCeilingConfig(max_imports=42))
+    assert captured_params["threshold"] == 42
+
+
+# ── orphan_detection ───────────────────────────────────────────────
+
+
+def test_orphan_detection_clean():
+    driver = _constant_driver({
+        "count(*) AS v": [{"v": 0}],
+    })
+    result = _check_orphans(driver, OrphanDetectionConfig())
+    assert result.name == "orphan_detection"
+    assert result.passed is True
+    assert result.violation_count == 0
+    assert result.sample == []
+
+
+def test_orphan_detection_detected():
+    sample = [
+        {"kind": "orphan_function", "name": "dead_fn", "file": "src/utils.py"},
+        {"kind": "orphan_class", "name": "UnusedClass", "file": "src/models.py"},
+    ]
+    driver = _constant_driver({
+        "count(*) AS v": [{"v": 2}],
+        "ORDER BY kind, file, name": sample,
+    })
+    result = _check_orphans(driver, OrphanDetectionConfig())
+    assert result.passed is False
+    assert result.violation_count == 2
+    assert len(result.sample) == 2
+    assert result.sample[0]["kind"] == "orphan_function"
+    assert result.sample[1]["kind"] == "orphan_class"
+
+
+def test_orphan_detection_uses_path_prefix():
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(driver, OrphanDetectionConfig(path_prefix="src/core/"))
+    assert any(p.get("prefix") == "src/core/" for p in captured_params)
+
+
+def test_orphan_detection_respects_kinds_config():
+    captured: list[str] = []
+
+    def resolver(cypher: str, **_params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(driver, OrphanDetectionConfig(kinds=["function"]))
+    # Only function sub-query should appear; class/atom/endpoint should not.
+    all_cypher = "\n".join(captured)
+    assert "orphan_function" in all_cypher
+    assert "orphan_class" not in all_cypher
+    assert "orphan_atom" not in all_cypher
+    assert "orphan_endpoint" not in all_cypher
+
+
+def test_orphan_detection_excludes_pytest_entry_points():
+    """Default config injects exclude_prefixes and exclude_names as Cypher params."""
+    captured: list[str] = []
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(driver, OrphanDetectionConfig(kinds=["function"]))
+    all_cypher = "\n".join(captured)
+    assert "$exclude_prefixes" in all_cypher
+    assert "$exclude_names" in all_cypher
+    assert any(p.get("exclude_prefixes") == ["test_"] for p in captured_params)
+    assert any("setup_module" in p.get("exclude_names", []) for p in captured_params)
+
+
+def test_orphan_detection_custom_exclude_prefixes_in_cypher():
+    """Custom exclude_prefixes are passed as Cypher params."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = OrphanDetectionConfig(kinds=["function"], exclude_prefixes=["check_"])
+    _check_orphans(driver, cfg)
+    assert any(p.get("exclude_prefixes") == ["check_"] for p in captured_params)
+
+
+def test_orphan_detection_custom_exclude_names_in_params():
+    """Custom exclude_names are passed as Cypher params."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = OrphanDetectionConfig(kinds=["function"], exclude_names=["setUp", "tearDown"])
+    _check_orphans(driver, cfg)
+    assert any(p.get("exclude_names") == ["setUp", "tearDown"] for p in captured_params)
+
+
+def test_orphan_detection_empty_exclude_lists_still_generate_clauses():
+    """Empty exclude lists produce valid Cypher (NONE(x IN [] WHERE ...) is valid)."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = OrphanDetectionConfig(
+        kinds=["function"], exclude_prefixes=[], exclude_names=[],
+    )
+    result = _check_orphans(driver, cfg)
+    assert result.passed is True
+    all_cypher = "\n".join(captured)
+    assert "$exclude_prefixes" in all_cypher
+    assert "$exclude_names" in all_cypher
+
+
+def test_orphan_detection_class_query_has_no_exclude_params():
+    """Class/atom/endpoint queries should NOT contain exclude_prefixes/names clauses."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    cfg = OrphanDetectionConfig(kinds=["class"])
+    _check_orphans(driver, cfg)
+    all_cypher = "\n".join(captured)
+    # The params are still passed (they're in the dict), but the Cypher
+    # for class queries should not reference them.
+    assert "orphan_class" in all_cypher
+    assert "NONE(pfx" not in all_cypher
+
+
 # ── custom policies ─────────────────────────────────────────────────
 
 
@@ -298,15 +489,64 @@ def test_custom_policy_detects_violations():
     assert result.detail == "Files over 500 LOC"
 
 
+def test_check_custom_passes_limit_param():
+    """_check_custom injects limit= into s.run() for sample_cypher."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        if "count(f)" in cypher:
+            return [{"v": 2}]
+        return [{"path": "a.py"}, {"path": "b.py"}]
+
+    driver = _FakeDriver(resolver)
+    custom = CustomPolicy(
+        name="fat_files",
+        description="Files over 500 LOC",
+        count_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v",
+        sample_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS path LIMIT $limit",
+    )
+    result = _check_custom(driver, custom, sample_limit=25)
+    assert result.violation_count == 2
+    # The sample_cypher call should have received limit=25
+    sample_call_params = captured_params[-1]
+    assert sample_call_params["limit"] == 25
+
+
+def test_check_custom_passes_scope_param():
+    """_check_custom injects scope= into s.run() for both queries."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        if "count(f)" in cypher:
+            return [{"v": 1}]
+        return [{"path": "src/a.py"}]
+
+    driver = _FakeDriver(resolver)
+    custom = CustomPolicy(
+        name="fat_files",
+        description="Files over 500 LOC",
+        count_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN count(f) AS v",
+        sample_cypher="MATCH (f:File) WHERE f.loc > 500 RETURN f.path AS path LIMIT $limit",
+    )
+    result = _check_custom(driver, custom, scope=["src/"], sample_limit=10)
+    assert result.violation_count == 1
+    # Both count and sample calls should have received scope=["src/"]
+    assert captured_params[0]["scope"] == ["src/"]
+    assert captured_params[1]["scope"] == ["src/"]
+
+
 # ── Orchestrator ────────────────────────────────────────────────────
 
 
-def test_run_arch_check_aggregates_three_policies(monkeypatch):
-    """``run_arch_check`` opens a driver, runs all 3 built-in policies, closes it."""
+def test_run_arch_check_aggregates_five_policies(monkeypatch):
+    """``run_arch_check`` opens a driver, runs all 5 built-in policies, closes it."""
     fake_driver = _constant_driver({
         "count(DISTINCT path) AS v": [{"v": 0}],
         "count(*) AS v": [{"v": 0}],
         "count(DISTINCT ctrl) AS v": [{"v": 0}],
+        "count(f) AS v": [{"v": 0}],
     })
 
     def _fake_driver_factory(uri, auth):
@@ -319,7 +559,10 @@ def test_run_arch_check_aggregates_three_policies(monkeypatch):
     )
     assert fake_driver.closed is True
     assert report.ok is True
-    assert [p.name for p in report.policies] == ["import_cycles", "cross_package", "layer_bypass"]
+    assert [p.name for p in report.policies] == [
+        "import_cycles", "cross_package", "layer_bypass", "coupling_ceiling",
+        "orphan_detection",
+    ]
 
 
 def test_run_arch_check_with_disabled_policy_emits_skip_marker(monkeypatch):
@@ -327,6 +570,7 @@ def test_run_arch_check_with_disabled_policy_emits_skip_marker(monkeypatch):
     fake_driver = _constant_driver({
         "count(*) AS v": [{"v": 0}],
         "count(DISTINCT ctrl) AS v": [{"v": 0}],
+        "count(f) AS v": [{"v": 0}],
     })
     monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
 
@@ -335,7 +579,7 @@ def test_run_arch_check_with_disabled_policy_emits_skip_marker(monkeypatch):
 
     cycles = next(p for p in report.policies if p.name == "import_cycles")
     assert cycles.passed is True
-    assert "disabled" in cycles.detail
+    assert cycles.disabled is True
 
 
 def test_run_arch_check_runs_custom_policies(monkeypatch):
@@ -346,6 +590,8 @@ def test_run_arch_check_runs_custom_policies(monkeypatch):
         if "count(*)" in cypher:
             return [{"v": 0}]
         if "count(DISTINCT ctrl)" in cypher:
+            return [{"v": 0}]
+        if "count(f) AS v" in cypher:
             return [{"v": 0}]
         if "count(custom_node)" in cypher:
             return [{"v": 1}]
@@ -358,13 +604,16 @@ def test_run_arch_check_runs_custom_policies(monkeypatch):
         name="my_rule",
         description="demo",
         count_cypher="MATCH (custom_node) RETURN count(custom_node) AS v",
-        sample_cypher="MATCH (n) RETURN n AS x LIMIT 10",
+        sample_cypher="MATCH (n) RETURN n AS x LIMIT $limit",
     )
     config = ArchConfig(custom=[custom])
     report = run_arch_check("bolt://fake:7687", "neo4j", "pw", console=None, config=config)
 
     policy_names = [p.name for p in report.policies]
-    assert policy_names == ["import_cycles", "cross_package", "layer_bypass", "my_rule"]
+    assert policy_names == [
+        "import_cycles", "cross_package", "layer_bypass", "coupling_ceiling",
+        "orphan_detection", "my_rule",
+    ]
     my_rule = report.policies[-1]
     assert my_rule.passed is False
     assert my_rule.violation_count == 1
@@ -380,3 +629,1108 @@ def test_run_arch_check_closes_driver_even_on_failure(monkeypatch):
             "bolt://fake:7687", "neo4j", "pw", console=None, config=ArchConfig(),
         )
     assert fake_driver.closed is True
+
+
+# ── --scope filtering ──────────────────────────────────────────────────
+
+
+def test_import_cycles_with_scope():
+    """Scope adds a WHERE … STARTS WITH clause and passes params."""
+    captured: list[str] = []
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        captured_params.append(params)
+        return [{"v": 0}] if "count(DISTINCT path)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_import_cycles(driver, ImportCyclesConfig(), scope=["src/"])
+    all_cypher = "\n".join(captured)
+    assert "STARTS WITH $_scope0" in all_cypher
+    assert any(p.get("_scope0") == "src/" for p in captured_params)
+
+
+def test_import_cycles_with_multiple_scopes():
+    """Multiple scope prefixes produce OR-joined conditions and distinct params."""
+    captured: list[str] = []
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        captured_params.append(params)
+        return [{"v": 0}] if "count(DISTINCT path)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_import_cycles(driver, ImportCyclesConfig(), scope=["src/", "lib/"])
+    all_cypher = "\n".join(captured)
+    assert "STARTS WITH $_scope0" in all_cypher
+    assert "STARTS WITH $_scope1" in all_cypher
+    assert " OR " in all_cypher
+    assert any(
+        p.get("_scope0") == "src/" and p.get("_scope1") == "lib/"
+        for p in captured_params
+    )
+
+
+def test_import_cycles_no_scope_no_where():
+    """Without scope, no STARTS WITH clause appears — backwards compat."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **_params):
+        captured.append(cypher)
+        return [{"v": 0}] if "count(DISTINCT path)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_import_cycles(driver, ImportCyclesConfig(), scope=None)
+    all_cypher = "\n".join(captured)
+    assert "STARTS WITH" not in all_cypher
+
+
+def test_cross_package_with_scope():
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        if "count(*) AS v" in cypher:
+            return [{"v": 0}]
+        return []
+
+    driver = _FakeDriver(resolver)
+    _check_cross_package(driver, CrossPackageConfig(), scope=["apps/"])
+    assert any(p.get("_scope0") == "apps/" for p in captured_params)
+
+
+def test_layer_bypass_with_scope():
+    captured: list[str] = []
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        captured_params.append(params)
+        return [{"v": 0}] if "count(DISTINCT ctrl)" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_layer_bypass(driver, LayerBypassConfig(), scope=["src/"])
+    all_cypher = "\n".join(captured)
+    assert "ctrl.file STARTS WITH $_scope0" in all_cypher
+    assert any(p.get("_scope0") == "src/" for p in captured_params)
+
+
+def test_coupling_ceiling_with_scope():
+    captured: list[str] = []
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        captured_params.append(params)
+        return [{"v": 0}] if "count(f) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_coupling_ceiling(driver, CouplingCeilingConfig(), scope=["codegraph/"])
+    all_cypher = "\n".join(captured)
+    # Scope WHERE must appear BEFORE the WITH aggregation
+    for cypher in captured:
+        if "STARTS WITH" in cypher:
+            starts_with_pos = cypher.index("STARTS WITH")
+            with_pos = cypher.index("WITH f, count")
+            assert starts_with_pos < with_pos, \
+                "scope filter must appear before WITH aggregation"
+    assert any(p.get("_scope0") == "codegraph/" for p in captured_params)
+
+
+def test_orphan_detection_scope_overrides_empty_path_prefix():
+    """When path_prefix is empty, scope is used for orphan filtering."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(
+        driver,
+        OrphanDetectionConfig(path_prefix=""),
+        scope=["src/"],
+    )
+    assert any(p.get("_scope0") == "src/" for p in captured_params)
+    # No $prefix param should be set
+    assert not any("prefix" in p for p in captured_params)
+
+
+def test_orphan_detection_path_prefix_takes_precedence_over_scope():
+    """Explicit path_prefix wins over --scope."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}] if "count(*) AS v" in cypher else []
+
+    driver = _FakeDriver(resolver)
+    _check_orphans(
+        driver,
+        OrphanDetectionConfig(path_prefix="core/"),
+        scope=["src/"],
+    )
+    assert any(p.get("prefix") == "core/" for p in captured_params)
+    # _scope0 must NOT be set — path_prefix takes precedence
+    assert not any("_scope0" in p for p in captured_params)
+
+
+def test_run_arch_check_passes_scope_to_policies(monkeypatch):
+    """run_arch_check forwards scope to _run_all and all built-in policies."""
+    fake_driver = _constant_driver({
+        "count(DISTINCT path) AS v": [{"v": 0}],
+        "count(*) AS v": [{"v": 0}],
+        "count(DISTINCT ctrl) AS v": [{"v": 0}],
+        "count(f) AS v": [{"v": 0}],
+    })
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    # Capture what _run_all receives
+    original_run_all = arch_check._run_all
+    received_scope = []
+
+    def spy_run_all(driver, config, scope=None, sample_limit=10):
+        received_scope.append(scope)
+        return original_run_all(driver, config, scope, sample_limit)
+
+    monkeypatch.setattr(arch_check, "_run_all", spy_run_all)
+
+    run_arch_check(
+        "bolt://fake:7687", "neo4j", "pw",
+        console=None, config=ArchConfig(),
+        scope=["x/", "y/"],
+    )
+    assert received_scope == [["x/", "y/"]]
+
+
+# ── Suppression ───────────────────────────────────────────────────
+
+
+from codegraph.arch_check import (
+    _apply_suppressions,
+    _count_unsuppressed,
+    _match_suppression_key,
+    _violation_key,
+)
+from codegraph.arch_config import Suppression
+
+
+# ── _violation_key ─────────────────────────────────────────────
+
+
+def test_violation_key_import_cycles():
+    row = {"cycle": ["a.py", "b.py", "a.py"], "hops": 2}
+    assert _violation_key("import_cycles", row) == "a.py -> b.py -> a.py"
+
+
+def test_violation_key_cross_package():
+    row = {
+        "importer_package": "web",
+        "importee_package": "api",
+        "importer": "web/a.ts",
+        "importee": "api/b.ts",
+    }
+    assert _violation_key("cross_package", row) == "web/a.ts -> api/b.ts"
+
+
+def test_violation_key_coupling_ceiling():
+    row = {"file": "src/app.ts", "deps": 30}
+    assert _violation_key("coupling_ceiling", row) == "src/app.ts"
+
+
+def test_violation_key_orphan_detection():
+    row = {"kind": "orphan_function", "name": "dead_fn", "file": "src/utils.py"}
+    assert _violation_key("orphan_detection", row) == "orphan_function:dead_fn"
+
+
+def test_violation_key_layer_bypass():
+    row = {"controller": "UserCtrl", "repository": "UserRepo", "method": "find"}
+    assert _violation_key("layer_bypass", row) == "UserCtrl -> UserRepo.find"
+
+
+def test_violation_key_custom_fallback():
+    row = {"path": "big.py", "loc": 999}
+    assert _violation_key("my_custom_rule", row) == "big.py | 999"
+
+
+# ── _match_suppression_key ─────────────────────────────────────
+
+
+def test_match_suppression_exact():
+    row = {"file": "src/app.ts", "deps": 30}
+    assert _match_suppression_key("coupling_ceiling", row, "src/app.ts") is True
+
+
+def test_match_suppression_cycle_edge():
+    """Edge key 'A -> B' matches any cycle containing that consecutive pair."""
+    row = {"cycle": ["a.py", "b.py", "c.py", "a.py"], "hops": 3}
+    assert _match_suppression_key("import_cycles", row, "a.py -> b.py") is True
+    assert _match_suppression_key("import_cycles", row, "b.py -> c.py") is True
+    assert _match_suppression_key("import_cycles", row, "c.py -> a.py") is True
+
+
+def test_match_suppression_no_match():
+    row = {"file": "src/app.ts", "deps": 30}
+    assert _match_suppression_key("coupling_ceiling", row, "src/other.ts") is False
+
+
+def test_match_suppression_cycle_edge_no_match():
+    row = {"cycle": ["a.py", "b.py", "a.py"], "hops": 2}
+    assert _match_suppression_key("import_cycles", row, "x.py -> y.py") is False
+
+
+# ── _apply_suppressions ─────────────────────────────────────────
+
+
+def test_apply_suppressions_all_suppressed_passes():
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=2,
+            sample=[
+                {"file": "a.ts", "deps": 25},
+                {"file": "b.ts", "deps": 30},
+            ],
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="a.ts", reason="r1"),
+        Suppression(policy="coupling_ceiling", key="b.ts", reason="r2"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.passed is True
+    assert p.violation_count == 0
+    assert p.suppressed_count == 2
+    assert len(p.suppressed_sample) == 2
+    assert p.sample == []
+    assert stale == []
+
+
+def test_apply_suppressions_partial():
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=3,
+            sample=[
+                {"file": "a.ts", "deps": 25},
+                {"file": "b.ts", "deps": 30},
+                {"file": "c.ts", "deps": 40},
+            ],
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="a.ts", reason="r1"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.passed is False
+    assert p.violation_count == 2
+    assert p.suppressed_count == 1
+    assert len(p.sample) == 2
+    assert stale == []
+
+
+def test_apply_suppressions_stale_detected():
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=True,
+            violation_count=0,
+            sample=[],
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="gone.ts", reason="was needed"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    assert len(stale) == 1
+    assert stale[0]["policy"] == "coupling_ceiling"
+    assert stale[0]["key"] == "gone.ts"
+    assert stale[0]["reason"] == "was needed"
+
+
+def test_apply_suppressions_empty_list_is_noop():
+    policies = [
+        PolicyResult(name="x", passed=True, violation_count=0),
+    ]
+    updated, stale = _apply_suppressions(policies, [])
+    assert updated is policies  # same object, untouched
+    assert stale == []
+
+
+def test_apply_suppressions_incomplete_coverage_when_truncated():
+    """Flag set when violation_count > len(sample) and no driver (fallback)."""
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=20,  # more than the 10 sample rows
+            sample=sample,
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="f0.ts", reason="ok"),
+    ]
+    # No driver → falls back to sample-based counting → incomplete flag.
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.incomplete_suppression_coverage is True
+    assert p.passed is False
+    assert p.suppressed_count == 1
+    assert p.violation_count == 19
+    assert stale == []
+
+
+def test_apply_suppressions_no_incomplete_flag_when_count_equals_sample():
+    """No flag when violation_count == len(sample) and all suppressed."""
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=2,
+            sample=[
+                {"file": "a.ts", "deps": 25},
+                {"file": "b.ts", "deps": 30},
+            ],
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="a.ts", reason="r1"),
+        Suppression(policy="coupling_ceiling", key="b.ts", reason="r2"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.incomplete_suppression_coverage is False
+    assert p.passed is True
+    assert p.violation_count == 0
+
+
+def test_apply_suppressions_no_incomplete_flag_when_no_suppression_matches():
+    """No flag when truncated but zero suppressions match."""
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=20,
+            sample=sample,
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="nonexistent.ts", reason="r"),
+    ]
+    updated, stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.incomplete_suppression_coverage is False
+    assert p.passed is False
+
+
+def test_invariant_incomplete_implies_not_passed():
+    """Without driver: incomplete_suppression_coverage=True → passed=False.
+
+    When violation_count > len(sample) and all sample rows are suppressed,
+    unseen violations beyond the sample window keep passed=False.
+    """
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=15,  # 5 more than the 10 sample rows
+            sample=sample,
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key=f"f{i}.ts", reason="ok")
+        for i in range(10)
+    ]
+    # No driver → fallback to sample-based counting.
+    updated, _stale = _apply_suppressions(policies, supps)
+    p = updated[0]
+    assert p.incomplete_suppression_coverage is True
+    assert p.passed is False, (
+        "invariant: incomplete_suppression_coverage=True must imply passed=False"
+    )
+    assert p.violation_count == 5  # 15 total - 10 suppressed = 5 unseen
+
+
+def test_incomplete_suppression_coverage_in_json():
+    """The flag appears in JSON output via asdict()."""
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=False,
+                violation_count=10,
+                incomplete_suppression_coverage=True,
+            ),
+        ],
+    )
+    blob = json.loads(report.to_json())
+    assert blob["policies"][0]["incomplete_suppression_coverage"] is True
+
+    # Also check False is serialised.
+    report2 = ArchReport(
+        policies=[
+            PolicyResult(name="x", passed=True, violation_count=0),
+        ],
+    )
+    blob2 = json.loads(report2.to_json())
+    assert blob2["policies"][0]["incomplete_suppression_coverage"] is False
+
+
+def test_render_incomplete_coverage_warning():
+    """_render emits a warning when incomplete_suppression_coverage is True."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=False,
+                violation_count=15,
+                sample=[{"cycle": ["a.py", "b.py", "a.py"], "hops": 2}],
+                suppressed_count=5,
+                suppressed_sample=[
+                    {"cycle": ["c.py", "d.py", "c.py"], "hops": 2},
+                ],
+                incomplete_suppression_coverage=True,
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = buf.getvalue()
+    assert "suppression coverage is partial" in output
+    assert "import_cycles" in output
+
+
+def test_render_no_warning_when_coverage_complete():
+    """_render does NOT emit the warning when the flag is False."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=True,
+                violation_count=0,
+                suppressed_count=2,
+                incomplete_suppression_coverage=False,
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = buf.getvalue()
+    assert "suppression coverage is partial" not in output
+
+
+# ── Issue #93 scenario tests ────────────────────────────────────
+
+
+def test_apply_suppressions_exact_count_beyond_sample_window():
+    """Issue #93: 50 violations, sample=10, key matches all 50 → count=0."""
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=50,  # 50 total violations
+            sample=sample,       # only 10 in sample
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key=f"f{i}.ts", reason="ok")
+        for i in range(50)  # keys for all 50
+    ]
+    # Driver returns 0 for the filtered count query.
+    driver = _FakeDriver(lambda cypher, **p: [{"v": 0}])
+    config = ArchConfig()
+    updated, stale = _apply_suppressions(
+        policies, supps, driver=driver, config=config,
+    )
+    p = updated[0]
+    assert p.violation_count == 0  # EXACT, not 50 - 10 = 40
+    assert p.passed is True
+    assert p.incomplete_suppression_coverage is False
+
+
+def test_apply_suppressions_exact_count_partial():
+    """50 violations, sample=10, Cypher says 20 unsuppressed → count=20."""
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=50,
+            sample=sample,
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key=f"f{i}.ts", reason="ok")
+        for i in range(30)
+    ]
+    driver = _FakeDriver(lambda cypher, **p: [{"v": 20}])
+    config = ArchConfig()
+    updated, _stale = _apply_suppressions(
+        policies, supps, driver=driver, config=config,
+    )
+    p = updated[0]
+    assert p.violation_count == 20  # from Cypher, not 50 - sample_matches
+    assert p.passed is False
+    assert p.incomplete_suppression_coverage is False
+
+
+def test_apply_suppressions_custom_policy_keeps_sample_counting():
+    """Custom policies still use sample-based counting (no Cypher filter)."""
+    sample = [{"path": f"f{i}.py", "loc": 500 + i} for i in range(5)]
+    policies = [
+        PolicyResult(
+            name="my_custom",
+            passed=False,
+            violation_count=10,
+            sample=sample,
+        ),
+    ]
+    supps = [
+        Suppression(policy="my_custom", key="f0.py | 500", reason="ok"),
+    ]
+    # Driver provided but _count_unsuppressed returns None for custom → fallback.
+    driver = _FakeDriver(lambda cypher, **p: [{"v": 999}])  # should not be used
+    config = ArchConfig()
+    updated, _stale = _apply_suppressions(
+        policies, supps, driver=driver, config=config,
+    )
+    p = updated[0]
+    # Sample-based: 10 - 1 = 9 (not the 999 from the driver).
+    assert p.violation_count == 9
+    assert p.passed is False
+    assert p.incomplete_suppression_coverage is True  # 10 > 5 sample rows
+
+
+def test_apply_suppressions_with_driver_no_incomplete_flag():
+    """With driver, incomplete_suppression_coverage is False for built-in."""
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+    policies = [
+        PolicyResult(
+            name="coupling_ceiling",
+            passed=False,
+            violation_count=20,
+            sample=sample,
+        ),
+    ]
+    supps = [
+        Suppression(policy="coupling_ceiling", key="f0.ts", reason="ok"),
+    ]
+    # Driver returns 19 unsuppressed.
+    driver = _FakeDriver(lambda cypher, **p: [{"v": 19}])
+    config = ArchConfig()
+    updated, _stale = _apply_suppressions(
+        policies, supps, driver=driver, config=config,
+    )
+    p = updated[0]
+    assert p.incomplete_suppression_coverage is False
+    assert p.violation_count == 19
+    assert p.passed is False
+
+
+# ── _count_unsuppressed ──────────────────────────────────────────
+
+
+def test_count_unsuppressed_coupling_ceiling():
+    """Filtered count excludes files in suppressed_keys."""
+    def resolver(cypher: str, **params):
+        if "suppressed_keys" in cypher and "count(f) AS v" in cypher:
+            return [{"v": 3}]
+        if "count(f) AS v" in cypher:
+            return [{"v": 5}]
+        return []
+
+    driver = _FakeDriver(resolver)
+    config = ArchConfig()
+    result = _count_unsuppressed(driver, "coupling_ceiling", ["a.ts", "b.ts"], None, config)
+    assert result == 3
+
+
+def test_count_unsuppressed_cross_package():
+    """Filtered count for cross_package per-pair queries."""
+    def resolver(cypher: str, **params):
+        if "suppressed_keys" in cypher:
+            return [{"v": 1}]
+        return [{"v": 3}]
+
+    driver = _FakeDriver(resolver)
+    config = ArchConfig(
+        cross_package=CrossPackageConfig(
+            pairs=[CrossPackagePair("web", "api")],
+        ),
+    )
+    result = _count_unsuppressed(
+        driver, "cross_package", ["web/a.ts -> api/b.ts"], None, config,
+    )
+    assert result == 1
+
+
+def test_count_unsuppressed_layer_bypass():
+    """Filtered count uses key format 'ctrl -> repo.method'."""
+    def resolver(cypher: str, **params):
+        if "suppressed_keys" in cypher and "count(DISTINCT ctrl)" in cypher:
+            return [{"v": 0}]
+        return [{"v": 2}]
+
+    driver = _FakeDriver(resolver)
+    config = ArchConfig()
+    result = _count_unsuppressed(
+        driver, "layer_bypass", ["UserCtrl -> UserRepo.find"], None, config,
+    )
+    assert result == 0
+
+
+def test_count_unsuppressed_orphan_detection():
+    """Filtered count for orphan_detection uses 'kind:name' format."""
+    def resolver(cypher: str, **params):
+        if "suppressed_keys" in cypher and "count(*) AS v" in cypher:
+            return [{"v": 1}]
+        return [{"v": 3}]
+
+    driver = _FakeDriver(resolver)
+    config = ArchConfig()
+    result = _count_unsuppressed(
+        driver, "orphan_detection", ["orphan_function:dead_fn"], None, config,
+    )
+    assert result == 1
+
+
+def test_count_unsuppressed_import_cycles_edge_key():
+    """Edge-pair keys (A -> B) produce NONE(...) filter in Cypher."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        if "edge_pairs" in cypher:
+            return [{"v": 2}]
+        return [{"v": 5}]
+
+    driver = _FakeDriver(resolver)
+    config = ArchConfig()
+    result = _count_unsuppressed(
+        driver, "import_cycles", ["a.py -> b.py"], None, config,
+    )
+    assert result == 2
+    assert any("edge_pairs" in c for c in captured)
+
+
+def test_count_unsuppressed_import_cycles_full_cycle_key():
+    """Full-cycle keys produce NOT reduce(...) IN filter in Cypher."""
+    captured: list[str] = []
+
+    def resolver(cypher: str, **params):
+        captured.append(cypher)
+        if "full_cycle_keys" in cypher:
+            return [{"v": 0}]
+        return [{"v": 1}]
+
+    driver = _FakeDriver(resolver)
+    config = ArchConfig()
+    result = _count_unsuppressed(
+        driver, "import_cycles", ["a.py -> b.py -> a.py"], None, config,
+    )
+    assert result == 0
+    assert any("full_cycle_keys" in c for c in captured)
+
+
+def test_count_unsuppressed_custom_returns_none():
+    """Custom policies return None — caller falls back to Python counting."""
+    driver = _FakeDriver(lambda *a, **kw: [])
+    config = ArchConfig()
+    result = _count_unsuppressed(driver, "my_custom_rule", ["x"], None, config)
+    assert result is None
+
+
+def test_count_unsuppressed_with_scope():
+    """Scope params are threaded into the filtered count query."""
+    captured_params: list[dict] = []
+
+    def resolver(cypher: str, **params):
+        captured_params.append(params)
+        return [{"v": 0}]
+
+    driver = _FakeDriver(resolver)
+    config = ArchConfig()
+    _count_unsuppressed(
+        driver, "coupling_ceiling", ["a.ts"], ["src/"], config,
+    )
+    assert any(p.get("_scope0") == "src/" for p in captured_params)
+
+
+# ── Integration: run_arch_check + suppressions ──────────────────
+
+
+def test_run_arch_check_with_suppressions_exits_zero(monkeypatch):
+    """All violations suppressed → report.ok is True."""
+    sample = [{"file": "god.ts", "deps": 50}]
+
+    def resolver(cypher: str, **params):
+        # Filtered count query (from _count_unsuppressed) → 0 unsuppressed.
+        if "suppressed_keys" in cypher:
+            return [{"v": 0}]
+        if "count(DISTINCT path) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(*) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(DISTINCT ctrl) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(f) AS v" in cypher:
+            return [{"v": 1}]
+        if "f.path AS file, deps" in cypher:
+            return sample
+        return []
+
+    fake_driver = _FakeDriver(resolver)
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    config = ArchConfig(
+        suppressions=[
+            Suppression(
+                policy="coupling_ceiling",
+                key="god.ts",
+                reason="Legacy monolith file",
+            ),
+        ],
+    )
+    report = run_arch_check(
+        "bolt://fake:7687", "neo4j", "pw", console=None, config=config,
+    )
+    assert report.ok is True
+    coupling = next(p for p in report.policies if p.name == "coupling_ceiling")
+    assert coupling.passed is True
+    assert coupling.suppressed_count == 1
+    assert coupling.violation_count == 0
+
+
+def test_run_arch_check_suppressions_in_json(monkeypatch):
+    """JSON output includes suppressed_count and stale_suppressions."""
+    sample = [{"file": "god.ts", "deps": 50}]
+
+    def resolver(cypher: str, **params):
+        # Filtered count query → 0 unsuppressed.
+        if "suppressed_keys" in cypher:
+            return [{"v": 0}]
+        if "count(DISTINCT path) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(*) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(DISTINCT ctrl) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(f) AS v" in cypher:
+            return [{"v": 1}]
+        if "f.path AS file, deps" in cypher:
+            return sample
+        return []
+
+    fake_driver = _FakeDriver(resolver)
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    config = ArchConfig(
+        suppressions=[
+            Suppression(
+                policy="coupling_ceiling",
+                key="god.ts",
+                reason="Legacy",
+            ),
+            Suppression(
+                policy="import_cycles",
+                key="x.py -> y.py",
+                reason="Stale entry",
+            ),
+        ],
+    )
+    report = run_arch_check(
+        "bolt://fake:7687", "neo4j", "pw", console=None, config=config,
+    )
+    blob = json.loads(report.to_json())
+    assert blob["ok"] is True
+
+    # suppressed_count should be in the per-policy data
+    coupling = next(p for p in blob["policies"] if p["name"] == "coupling_ceiling")
+    assert coupling["suppressed_count"] == 1
+
+    # The stale entry should appear
+    assert len(blob["stale_suppressions"]) == 1
+    assert blob["stale_suppressions"][0]["policy"] == "import_cycles"
+    assert blob["stale_suppressions"][0]["key"] == "x.py -> y.py"
+
+
+def test_run_arch_check_suppression_exact_count_integration(monkeypatch):
+    """End-to-end: 50 coupling_ceiling violations, all suppressed → count=0."""
+    sample = [{"file": f"f{i}.ts", "deps": 20 + i} for i in range(10)]
+
+    def resolver(cypher: str, **params):
+        # Filtered count → 0 unsuppressed.
+        if "suppressed_keys" in cypher:
+            return [{"v": 0}]
+        if "count(DISTINCT path) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(*) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(DISTINCT ctrl) AS v" in cypher:
+            return [{"v": 0}]
+        if "count(f) AS v" in cypher:
+            return [{"v": 50}]  # 50 total violations
+        if "f.path AS file, deps" in cypher:
+            return sample  # only 10 in sample
+        return []
+
+    fake_driver = _FakeDriver(resolver)
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    config = ArchConfig(
+        suppressions=[
+            Suppression(policy="coupling_ceiling", key=f"f{i}.ts", reason="ok")
+            for i in range(50)
+        ],
+    )
+    report = run_arch_check(
+        "bolt://fake:7687", "neo4j", "pw", console=None, config=config,
+    )
+    assert report.ok is True
+    coupling = next(p for p in report.policies if p.name == "coupling_ceiling")
+    assert coupling.violation_count == 0  # exact, not 50-10=40
+    assert coupling.passed is True
+    assert coupling.incomplete_suppression_coverage is False
+
+
+# ── CLI auto-scope tests ──────────────────────────────────────────────
+
+
+def _ok_report():
+    """Return a passing ArchReport with no violations."""
+    return ArchReport(policies=[], stale_suppressions=[])
+
+
+def _patch_cli(monkeypatch, config_packages=None, config_source=None):
+    """Patch run_arch_check, load_arch_config, and load_config for CLI tests.
+
+    Returns a dict whose ``"scope"`` key is set by the patched
+    ``run_arch_check`` each time it's called, so the test can inspect
+    what scope the CLI passed through.
+    """
+    from codegraph import cli as cli_mod
+    from codegraph.config import CodegraphConfig
+
+    captured: dict[str, Any] = {"scope": "NOT_CALLED"}
+
+    def fake_run(uri, user, password, *, console=None, config=None, scope=None):
+        captured["scope"] = scope
+        return _ok_report()
+
+    def fake_load_arch_config(repo, *, path=None):
+        return ArchConfig()
+
+    cfg = CodegraphConfig(
+        packages=config_packages or [],
+        source=config_source,
+    )
+
+    monkeypatch.setattr("codegraph.arch_check.run_arch_check", fake_run)
+    monkeypatch.setattr("codegraph.arch_config.load_arch_config", fake_load_arch_config)
+    monkeypatch.setattr(cli_mod, "load_config", lambda repo: cfg)
+    return captured
+
+
+def test_arch_check_cli_auto_scope_from_config(monkeypatch):
+    """When no --scope / --no-scope, packages from config become scope."""
+    from typer.testing import CliRunner
+    from codegraph.cli import app
+
+    captured = _patch_cli(
+        monkeypatch,
+        config_packages=["packages/server", "packages/web"],
+        config_source="codegraph.toml",
+    )
+    result = CliRunner().invoke(app, ["arch-check"])
+    assert result.exit_code == 0
+    assert captured["scope"] == ["packages/server", "packages/web"]
+
+
+def test_arch_check_cli_explicit_scope_overrides_config(monkeypatch):
+    """Explicit --scope wins over config packages."""
+    from typer.testing import CliRunner
+    from codegraph.cli import app
+
+    captured = _patch_cli(
+        monkeypatch,
+        config_packages=["packages/server"],
+        config_source="codegraph.toml",
+    )
+    result = CliRunner().invoke(app, ["arch-check", "--scope", "other/path"])
+    assert result.exit_code == 0
+    assert captured["scope"] == ["other/path"]
+
+
+def test_arch_check_cli_no_scope_flag_disables_auto(monkeypatch):
+    """--no-scope disables auto-scope even with packages configured."""
+    from typer.testing import CliRunner
+    from codegraph.cli import app
+
+    captured = _patch_cli(
+        monkeypatch,
+        config_packages=["packages/server"],
+        config_source="codegraph.toml",
+    )
+    result = CliRunner().invoke(app, ["arch-check", "--no-scope"])
+    assert result.exit_code == 0
+    assert captured["scope"] is None
+
+
+def test_arch_check_cli_no_config_no_scope_passes_none(monkeypatch):
+    """No config packages + no flags → scope=None (check entire graph)."""
+    from typer.testing import CliRunner
+    from codegraph.cli import app
+
+    captured = _patch_cli(monkeypatch)  # no packages
+    result = CliRunner().invoke(app, ["arch-check"])
+    assert result.exit_code == 0
+    assert captured["scope"] is None
+
+
+# ── sample_limit threading ──────────────────────────────────────────
+
+
+def test_sample_limit_threaded_to_policy_queries(monkeypatch):
+    """run_arch_check with sample_limit=25 passes limit=25 to Neo4j queries."""
+    captured_limits: list[int] = []
+
+    def resolver(cypher: str, **params):
+        if "limit" in params:
+            captured_limits.append(params["limit"])
+        if "count(DISTINCT path)" in cypher:
+            return [{"v": 0}]
+        if "count(*)" in cypher:
+            return [{"v": 0}]
+        if "count(DISTINCT ctrl)" in cypher:
+            return [{"v": 0}]
+        if "count(f) AS v" in cypher:
+            return [{"v": 0}]
+        return []
+
+    fake_driver = _FakeDriver(resolver)
+    monkeypatch.setattr(arch_check.GraphDatabase, "driver", lambda uri, auth: fake_driver)
+
+    config = ArchConfig(sample_limit=25)
+    run_arch_check(
+        "bolt://fake:7687", "neo4j", "pw", console=None, config=config,
+    )
+    assert captured_limits, "expected at least one limit param captured"
+    assert all(lim == 25 for lim in captured_limits), (
+        f"expected all limits to be 25, got {captured_limits}"
+    )
+
+
+def test_render_incomplete_warning_references_config():
+    """Warning message references settings.sample_limit, not SAMPLE_LIMIT."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=False,
+                violation_count=15,
+                sample=[{"cycle": ["a.py", "b.py", "a.py"], "hops": 2}],
+                suppressed_count=5,
+                suppressed_sample=[
+                    {"cycle": ["c.py", "d.py", "c.py"], "hops": 2},
+                ],
+                incomplete_suppression_coverage=True,
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = buf.getvalue()
+    assert "settings.sample_limit" in output
+    assert ".arch-policies.toml" in output
+    assert "SAMPLE_LIMIT" not in output
+
+
+def test_render_violation_section_when_sample_empty_but_violations_exist():
+    """_render shows fallback message when sample=[] but violation_count > 0."""
+    import re
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=False,
+                violation_count=5,
+                sample=[],
+                suppressed_count=10,
+                suppressed_sample=[{"cycle": ["c.py", "d.py", "c.py"], "hops": 2}],
+                incomplete_suppression_coverage=True,
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+    assert "beyond the sample window" in output
+    assert "import_cycles" in output
+    assert "5 violation(s)" in output
+
+
+def test_render_summary_excludes_disabled_policies():
+    """Summary line should not count disabled policies in passed/total."""
+    import re
+    from io import StringIO
+
+    from rich.console import Console
+
+    report = ArchReport(
+        policies=[
+            PolicyResult(
+                name="import_cycles",
+                passed=True,
+                violation_count=0,
+                sample=[],
+                detail="",
+            ),
+            PolicyResult(
+                name="cross_package",
+                passed=True,
+                violation_count=0,
+                sample=[],
+                detail="(disabled in .arch-policies.toml)",
+                disabled=True,
+            ),
+            PolicyResult(
+                name="orphan_detection",
+                passed=True,
+                violation_count=0,
+                sample=[],
+                detail="(disabled in .arch-policies.toml)",
+                disabled=True,
+            ),
+        ],
+    )
+    buf = StringIO()
+    _render(Console(file=buf, force_terminal=True, width=200), report)
+    output = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+    assert "1/1 policies passed" in output
+    assert "2 skipped" in output

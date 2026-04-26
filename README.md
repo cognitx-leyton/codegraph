@@ -34,21 +34,25 @@ Full walkthrough: [codegraph/docs/init.md](./codegraph/docs/init.md). Policy ref
 
 ## ✨ Highlights
 
-- **Framework-aware parsing** — not just imports: controllers, injectables, modules, entities, React components and hooks are first-class nodes.
-- **Neo4j-backed** — every relationship is a Cypher query away. Dependency walks, shortest paths, DI chains, orphan detection, all out of the box.
-- **Claude Code & AI agent native** — the typed graph is a structured retrieval backend for Claude Code, Claude, and other coding agents that need architectural context, not just nearest-neighbour code chunks.
-- **Monorepo-friendly** — scope indexing to specific packages (`twenty-server`, `twenty-front`, …) and exclude build/test artefacts by default.
-- **Batteries included** — a Typer CLI (`index`, `query`, `validate`), Docker Compose for Neo4j, and a library of example Cypher queries.
+- **Framework-aware parsing** — not just imports: NestJS controllers / injectables / modules, React components and hooks, TypeORM entities, GraphQL operations, FastAPI / Flask / Django routes, SQLAlchemy models, plus generic Python classes and decorators are all first-class nodes.
+- **Neo4j-backed** — every relationship is a Cypher query away. Dependency walks, shortest paths, DI chains, blast-radius, orphan detection, all out of the box.
+- **Claude Code & AI agent native** — first-class MCP server with 16 tools, plus `codegraph install <platform>` for Claude Code, Codex, Cursor, Gemini CLI, Aider, Copilot, and 8 more.
+- **Confidence-scored edges** — every relationship carries an `EXTRACTED` / `INFERRED` / `AMBIGUOUS` label and a numeric score; filter to a high-trust subgraph for strict checks.
+- **Incremental indexing** — SHA256 content-addressed cache (`--update`), git-diff mode (`--since`), filesystem watcher (`codegraph watch`), git hooks (`codegraph hook install`).
+- **Architecture conformance gate** — 5 built-in policies (cycles, cross-package, layer bypass, coupling ceiling, orphans) plus custom Cypher; ships with a GitHub Actions workflow scaffolded by `codegraph init`.
+- **Monorepo-friendly** — scope indexing to specific packages, exclude build/test artefacts by default, redact confidential routes/components from the graph via `.codegraphignore`.
+- **No LLM in the pipeline** — indexing is fully deterministic (AST + heuristic resolution). Predictable, reproducible, no cost-per-index.
 
 ## 📑 Table of Contents
 
 - [Why a code knowledge graph?](#-why-a-code-knowledge-graph)
 - [Using with Claude Code & AI agents](#-using-with-claude-code--ai-agents)
 - [Architecture](#-architecture)
-- [Quickstart](#-quickstart)
+- [CLI cheat sheet](#-cli-cheat-sheet)
 - [Graph schema](#-graph-schema)
 - [Example queries](#-example-queries)
 - [Configuration](#-configuration)
+- [Documentation](#-documentation)
 - [Roadmap](#-roadmap)
 - [Contributing](#-contributing)
 - [Contributors](#-contributors)
@@ -114,85 +118,97 @@ In `~/.claude.json` (or your Claude Desktop config):
 }
 ```
 
-Restart Claude Code. Five tools become available:
+Restart Claude Code. 16 tools become available:
 
 | Tool | Purpose |
 | --- | --- |
 | `query_graph(cypher, limit)` | Read-only Cypher escape hatch. Writes are rejected at the session level, so an LLM-generated `DROP`/`DELETE` can't mutate the graph. |
 | `describe_schema()` | Labels, relationship types, and per-label node counts — cheap way for an agent to learn what's in the graph at session start. |
 | `list_packages()` | Every indexed monorepo package with its detected framework, version, TypeScript flag, package manager, and detection confidence. |
-| `callers_of_class(class_name, max_depth)` | Blast-radius traversal over `INJECTS` / `EXTENDS` / `IMPLEMENTS`. The canonical "what breaks if I rename X" query. |
+| `callers_of_class(class_name, file, max_depth, limit)` | Blast-radius traversal over `INJECTS` / `EXTENDS` / `IMPLEMENTS`. The canonical "what breaks if I rename X" query. |
 | `endpoints_for_controller(controller_name)` | HTTP routes exposed by a NestJS controller class (method + path + handler). |
 | `files_in_package(name, limit)` | List files belonging to a `:Package` by name. |
 | `hook_usage(hook_name, limit)` | Which components / functions use a given React hook. |
 | `gql_operation_callers(op_name, op_type, limit)` | Who calls a GraphQL query / mutation / subscription, optionally narrowed by type. |
 | `most_injected_services(limit)` | Rank `@Injectable` classes by number of unique callers — the classic "DI hub detection" query. |
 | `find_class(name_pattern, limit)` | Case-sensitive substring search over class names, backed by the `class_name` index. |
+| `find_function(name_pattern, limit)` | Case-sensitive substring search over function and method names, backed by the `func_name` and `method_name` indexes. |
+| `describe_function(name, file, limit)` | Signature details (docstring, params, return type, decorators) for a function or method — answer "what does X do" in one call. |
+| `calls_from(name, file, max_depth, limit)` | What a function/method calls, optionally transitive up to 5 hops via `:CALLS` edges. |
+| `callers_of(name, file, max_depth, limit)` | Who calls a function/method, optionally transitive up to 5 hops (reverse `:CALLS`). |
+| `reindex_file(path, package)` | Re-index a single file (delete old subgraph, parse, reload). Requires `--allow-write`. |
+| `wipe_graph(confirm)` | Delete every node and relationship from the graph. Requires `--allow-write`. |
 
-All ten tools share a single long-lived Neo4j driver and open sessions in `READ_ACCESS` mode. Configuration is env-var only (the same `CODEGRAPH_NEO4J_*` vars the CLI uses). The server is stdio-only — no network exposure.
+All 16 tools share a single long-lived Neo4j driver and open sessions in `READ_ACCESS` mode. Configuration is env-var only (the same `CODEGRAPH_NEO4J_*` vars the CLI uses). The server is stdio-only — no network exposure.
 
 ## 🏗️ Architecture
 
 ```
-  TypeScript repo                Parser                Graph loader          Neo4j
+  TS / Python repo               Parser                Graph loader          Neo4j
  ┌────────────────┐      ┌──────────────────┐      ┌──────────────┐     ┌──────────┐
- │ *.ts / *.tsx   │ ───► │ AST walk          │ ───► │ Typed nodes  │───► │ Property │
- │ packages/*/src │      │ + framework       │      │ + edges      │     │ graph    │
- └────────────────┘      │ detection         │      └──────────────┘     └────┬─────┘
-                         │ (NestJS / React)  │                                │
+ │ *.ts / *.tsx   │ ───► │ tree-sitter walk  │ ───► │ Typed nodes  │───► │ Property │
+ │ *.py           │      │ + framework       │      │ + edges      │     │ graph    │
+ │ packages/*/src │      │ detection         │      │ + ownership  │     │          │
+ └────────────────┘      │ (NestJS / React / │      └──────────────┘     └────┬─────┘
+                         │  FastAPI / Django)│                                │
                          └──────────────────┘                                 ▼
                                                                          Cypher / RAG
+                                                                         + MCP tools
 ```
 
-All indexing is local: your code never leaves the machine, and Neo4j runs in a Docker container alongside the CLI.
+All indexing is local: your code never leaves the machine, and Neo4j runs in a Docker container alongside the CLI. The pipeline is fully deterministic — no LLM in the indexing path. Edges carry a `confidence` label (`EXTRACTED` / `INFERRED` / `AMBIGUOUS`) and a numeric score so consumers can filter the noisy parts of the graph out of strict checks.
 
-## 🚀 Quickstart
+## 🛠️ CLI cheat sheet
 
-```bash
-cd codegraph
+`codegraph` is a Typer app; every subcommand supports `--json` for agent-native output.
 
-# 1. Python environment
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+| Command | Purpose |
+| --- | --- |
+| `codegraph init` | Scaffold codegraph into a repo (interactive). `--yes`, `--bolt-port`, `--http-port`, `--skip-docker`, `--skip-index`. |
+| `codegraph index <repo>` | Walk source, parse, write the graph. `-p/--package`, `--update` (SHA256 cache), `--since <ref>` (git diff), `--no-wipe`, `--skip-ownership`, `--ignore-file`, `--json`. |
+| `codegraph query <cypher>` | Run a Cypher query. `-n/--limit`, `--json`. |
+| `codegraph arch-check` | Run architecture-conformance policies. Exits 1 on violations, 2 on config errors. |
+| `codegraph validate` | Sanity-check the loaded graph (counts, orphans, schema). |
+| `codegraph wipe` | `MATCH (n) DETACH DELETE n`. |
+| `codegraph stats` | Quick node / edge counts. Updates the `codegraph:stats-*` block in `CLAUDE.md` with `--update`. |
+| `codegraph export` | Produce `graph.html` (interactive), `graph.json`, and optional `graph.graphml` / `graph.cypher`. |
+| `codegraph benchmark` | Token-reduction benchmark vs. raw source. `--min-reduction` for CI gating. |
+| `codegraph report` | Generate `GRAPH_REPORT.md` from Leiden community detection. |
+| `codegraph watch` | Debounced filesystem watcher; rebuilds on save. Requires `[watch]` extra. |
+| `codegraph hook install` / `status` / `uninstall` | Manage post-commit + post-checkout git hooks that re-index automatically. |
+| `codegraph install <platform>` | Wire codegraph into one of 14 AI agent platforms (writes rules file, registers MCP server). |
+| `codegraph uninstall <platform>` | Remove integration; preserves shared rules sections still in use. |
+| `codegraph repl` | Interactive Cypher REPL. Same as `codegraph` with no args. |
 
-# 2. Neo4j (Docker)
-docker compose up -d
-# Browser UI:  http://localhost:7475   (neo4j / codegraph123)
-# Bolt:        bolt://localhost:7688
-
-# 3. Tell codegraph which packages in your monorepo to index.
-#    Either drop a codegraph.toml at the repo root (see Configuration below)
-#    or pass --package flags:
-.venv/bin/python -m codegraph.cli index /path/to/your-monorepo \
-  --package packages/server --package packages/web
-
-# 4. Sanity-check the load
-.venv/bin/python -m codegraph.cli validate /path/to/your-monorepo
-
-# 5. Ask a question
-.venv/bin/python -m codegraph.cli query \
-  "MATCH (e:Endpoint) RETURN e.method, e.path LIMIT 10"
-```
+Full reference with every flag and `--json` shape: [`codegraph/docs/cli.md`](./codegraph/docs/cli.md).
 
 ## 🧩 Graph schema
 
-**Nodes**
+**Nodes** — 15 typed labels with rich properties:
 
-| Kind | Examples / notes |
+| Kind | What it is |
 | --- | --- |
-| `Package` | One per configured monorepo package with detected `framework` (React / Next.js / Vue / Angular / Svelte / SvelteKit / **NestJS** / Odoo), `framework_version`, `typescript`, `styling`, `router`, `state_management`, `ui_library`, `build_tool`, `package_manager`, and a detection `confidence`. Framework detection walks up to the monorepo root for lockfiles + workspace-hoisted dependencies. |
-| `File` | TS/TSX files with language, LOC, and framework flags (`is_controller`, `is_component`, …) |
-| `Class` | NestJS controllers, injectables, modules, entities, resolvers |
-| `Function` | Exported functions and React components |
-| `Interface` | TypeScript interfaces |
-| `Endpoint` | HTTP routes exposed by controllers (method + path + handler) |
-| `Hook` | React hooks (custom and built-in usage sites) |
-| `Decorator` | Framework decorators applied to classes/methods |
-| `External` | Symbols imported from `node_modules` |
+| `Package` | One per configured monorepo package. Carries detected `framework` (React / Next.js / Vue / Angular / Svelte / SvelteKit / **NestJS** / Fastify / Odoo / **FastAPI** / Flask / Django), version, TS/JS flag, styling, router, state management, UI library, build tool, package manager, confidence. |
+| `File` | A `.ts` / `.tsx` / `.py` file. Properties: language, LOC, framework flags (`is_controller`, `is_injectable`, `is_module`, `is_component`, `is_entity`, `is_resolver`, `is_test`). |
+| `Class` | NestJS controllers / injectables / modules, TypeORM entities, GraphQL resolvers, Python classes. Carries `is_controller`, `is_injectable`, `base_path`, `table_name`, etc. |
+| `Method` | Class methods with visibility, async flag, return type, params, docstring. |
+| `Function` | Module-level functions, React components, FastAPI route handlers. Same metadata. |
+| `Interface` | TypeScript interfaces. |
+| `Endpoint` | HTTP route exposed by a controller (method + path + handler). NestJS, FastAPI, Flask, Django. |
+| `Column` | TypeORM / SQLAlchemy column with type, nullability, primary, generated. |
+| `GraphQLOperation` | Query / mutation / subscription with return type, resolver class, handler. |
+| `Event` | Event-bus events emitted or handled. |
+| `Atom` | Jotai / Recoil state atom. |
+| `EnvVar` | `process.env.X` / `os.environ['X']` reference. |
+| `Route` | React Router / Next.js / file-system route with target component. |
+| `External` | Symbol imported from `node_modules` / unresolved. |
+| `EdgeGroup` | Hyperedge — protocol implementer set or Leiden community. Members link via `MEMBER_OF`. |
 
-**Edges**
+**Edges** — ~30 typed relationships, each with `confidence` + `confidence_score`. A representative slice:
 
-`IMPORTS`, `IMPORTS_EXTERNAL`, `DEFINES_CLASS`, `DEFINES_FUNC`, `DEFINES_IFACE`, `EXPOSES`, `INJECTS`, `EXTENDS`, `IMPLEMENTS`, `RENDERS`, `USES_HOOK`, `DECORATED_BY`, `BELONGS_TO` (File → Package).
+`IMPORTS`, `IMPORTS_SYMBOL`, `IMPORTS_EXTERNAL`, `DEFINES_CLASS`, `DEFINES_FUNC`, `DEFINES_IFACE`, `HAS_METHOD`, `HAS_COLUMN`, `EXPOSES`, `INJECTS`, `PROVIDES`, `EXPORTS_PROVIDER`, `EXTENDS`, `IMPLEMENTS`, `RENDERS`, `USES_HOOK`, `DECORATED_BY`, `CALLS`, `CALLS_ENDPOINT`, `RESOLVES`, `HANDLES`, `HANDLES_EVENT`, `EMITS_EVENT`, `READS_ATOM`, `WRITES_ATOM`, `READS_ENV`, `BELONGS_TO`, `MEMBER_OF`, `OWNED_BY`, `LAST_MODIFIED_BY`, `CONTRIBUTED_BY`, `TESTS`, `TESTS_CLASS`.
+
+Full catalogue with property details and example queries: [`codegraph/docs/schema.md`](./codegraph/docs/schema.md). Edge confidence model: [`codegraph/docs/confidence.md`](./codegraph/docs/confidence.md). Hyperedges: [`codegraph/docs/hyperedges.md`](./codegraph/docs/hyperedges.md).
 
 ## 🔎 Example queries
 
@@ -259,7 +275,7 @@ If no config file exists and no `--package` flags are passed, `index` stops with
 
 ### Python support (`.py` indexing)
 
-codegraph also indexes Python codebases. The detector auto-picks the language based on the package directory: if the directory contains `__init__.py`, it's parsed as Python; otherwise it's parsed as TypeScript (with `tsconfig.json` / `package.json`).
+codegraph indexes Python codebases with the same fidelity as TypeScript. The detector auto-picks the language based on the package directory: if the directory contains `__init__.py`, `pyproject.toml`, or `setup.py`, it's parsed as Python; otherwise it's parsed as TypeScript.
 
 Install the optional `[python]` extra to enable the Python frontend:
 
@@ -267,13 +283,20 @@ Install the optional `[python]` extra to enable the Python frontend:
 pip install "codegraph[python]"
 ```
 
-Then point `--package` at a Python package root (the directory containing `__init__.py`):
+Then point `--package` at a Python package root:
 
 ```bash
 codegraph index . --package src/my_package
 ```
 
-Stage 1 indexes: modules (`.py` files), classes, functions, methods, imports (relative + absolute + `import x as y`), class inheritance, and decorators. Framework detection (FastAPI / Flask / Django / Typer / pytest) and route extraction land in Stage 2.
+What's indexed:
+
+- **AST surface** — modules, classes, functions, methods, decorators, imports (relative + absolute + aliased), class inheritance, docstrings, type hints (`return_type`, `params_json`).
+- **Method call graph** — `:CALLS` edges between methods/functions with confidence-scored resolution.
+- **Framework detection** — FastAPI, Flask, Django, Odoo. Detection runs per package via `pyproject.toml` / requirements / source-pattern signals.
+- **Endpoints** — `@app.get/post/...` (FastAPI), `@app.route` (Flask), Django URL config → `:Endpoint` nodes with method + path + handler.
+- **ORM** — SQLAlchemy `Column(...)` and Django `models.Field()` → `:Column` nodes; relationships → `RELATES_TO` edges.
+- **Tests** — `test_*.py` / `*_test.py` are paired back to their production peer via `:TESTS` and `:TESTS_CLASS` edges.
 
 ### Neo4j connection
 
@@ -310,12 +333,42 @@ For **confidential routes, components, or files** that shouldn't reach the graph
 
 Override the default location with `--ignore-file PATH` on the CLI or `ignore_file = "custom/.ignore"` in `codegraph.toml`. `.codegraphignore` is **additive** on top of `BASE_EXCLUDE_DIRS` — it doesn't replace them.
 
+## 📚 Documentation
+
+Deep dives, organised by topic:
+
+| Topic | Doc |
+| --- | --- |
+| Inner package overview, all 16 CLI commands at a glance | [`codegraph/README.md`](./codegraph/README.md) |
+| Per-command reference (every flag, every `--json` shape) | [`codegraph/docs/cli.md`](./codegraph/docs/cli.md) |
+| Per-tool reference for the MCP server | [`codegraph/docs/mcp.md`](./codegraph/docs/mcp.md) |
+| Full graph schema — nodes, edges, properties, indexing phases | [`codegraph/docs/schema.md`](./codegraph/docs/schema.md) |
+| Edge confidence labels and scores | [`codegraph/docs/confidence.md`](./codegraph/docs/confidence.md) |
+| `:EdgeGroup` hyperedges (protocol implementers, communities) | [`codegraph/docs/hyperedges.md`](./codegraph/docs/hyperedges.md) |
+| Incremental indexing — `--update`, `--since`, `watch`, `hook` | [`codegraph/docs/incremental.md`](./codegraph/docs/incremental.md) |
+| AI platform integrations (14 platforms) | [`codegraph/docs/platforms.md`](./codegraph/docs/platforms.md) |
+| Architecture-conformance policies | [`codegraph/docs/arch-policies.md`](./codegraph/docs/arch-policies.md) |
+| `codegraph init` walkthrough | [`codegraph/docs/init.md`](./codegraph/docs/init.md) |
+| Canonical Cypher query catalogue | [`codegraph/queries.md`](./codegraph/queries.md) |
+| Version-by-version changelog | [`CHANGELOG.md`](./CHANGELOG.md) |
+
 ## 🛣️ Roadmap
 
-- Incremental re-indexing on file changes
-- Python and Go language frontends
-- ~~First-class MCP server exposing the graph to LLM agents~~ — **shipped** (see [Exposing the graph to Claude via MCP](#exposing-the-graph-to-claude-via-mcp))
+Recent shipped highlights — full per-version detail in [`CHANGELOG.md`](./CHANGELOG.md):
+
+- ~~First-class MCP server exposing the graph to LLM agents~~ — **shipped** (16 tools, see [Exposing the graph to Claude via MCP](#exposing-the-graph-to-claude-via-mcp))
+- ~~Python language frontend~~ — **shipped** (Stage 1 parsing + Stage 2 framework detection / endpoints / ORM)
+- ~~Incremental re-indexing on file changes~~ — **shipped** (`--update` SHA256 cache, `--since <ref>`, `codegraph watch`, `codegraph hook install`)
+- ~~Multi-platform AI agent integrations~~ — **shipped** (`codegraph install <platform>` for 14 platforms: Claude Code, Codex, Cursor, Gemini CLI, Copilot, Aider, …)
+- ~~Edge-level confidence labels~~ — **shipped** (`EXTRACTED` / `INFERRED` / `AMBIGUOUS` with numeric scores)
+- ~~Hyperedge model for protocol implementers + communities~~ — **shipped** (`:EdgeGroup` nodes)
+- ~~Architecture-conformance policies~~ — **shipped** (5 built-in: import cycles, cross-package, layer bypass, coupling ceiling, orphan detection — plus custom Cypher policies)
+
+Up next:
+
+- Go and Rust language frontends
 - Pre-built RAG retrievers for common architecture questions
+- Auto-generated graph visualisations as PR comments
 
 ## 🤝 Contributing
 

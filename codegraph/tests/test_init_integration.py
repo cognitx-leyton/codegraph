@@ -7,12 +7,16 @@ in environments without Docker.
 """
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+_TEST_BOLT_PORT = 17687
+_TEST_HTTP_PORT = 17474
 
 
 def _docker_available() -> bool:
@@ -66,15 +70,22 @@ def test_init_scaffold_only_no_docker(fake_monorepo: Path):
     assert policies.exists()
     assert "policies.import_cycles" in policies.read_text()
 
-    # Compose file (even though we skipped starting it)
+    # Compose file (even though we skipped starting it). Every repo on the
+    # machine now shares one codegraph-neo4j container.
+    from codegraph.init import SHARED_CONTAINER_NAME
     compose = fake_monorepo / "docker-compose.yml"
     assert compose.exists()
-    assert f"cognitx-codegraph-{fake_monorepo.name}" in compose.read_text()
+    assert SHARED_CONTAINER_NAME in compose.read_text()
 
     # CLAUDE.md
     claude_md = fake_monorepo / "CLAUDE.md"
     assert claude_md.exists()
     assert "codegraph knowledge graph" in claude_md.read_text()
+
+    # .gitignore includes cache exclusion
+    gitignore = fake_monorepo / ".gitignore"
+    assert gitignore.exists()
+    assert ".codegraph-cache/" in gitignore.read_text()
 
 
 @pytest.mark.skipif(not _docker_available(), reason="docker not installed")
@@ -83,18 +94,21 @@ def test_init_full_flow_with_docker(fake_monorepo: Path):
     """Full end-to-end: scaffold + Neo4j + first index. Tears down the container on exit."""
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "codegraph.cli", "init", "--yes"],
+            [sys.executable, "-m", "codegraph.cli", "init", "--yes",
+             "--bolt-port", str(_TEST_BOLT_PORT),
+             "--http-port", str(_TEST_HTTP_PORT)],
             cwd=fake_monorepo, capture_output=True, text=True, timeout=300,
         )
         assert result.returncode == 0, (
             f"init failed.\nstdout={result.stdout}\nstderr={result.stderr}"
         )
-        # Container should be running
+        # Container should be running — shared codegraph-neo4j across all repos.
+        from codegraph.init import SHARED_CONTAINER_NAME
         ps = subprocess.run(
             ["docker", "ps", "--format", "{{.Names}}"],
             capture_output=True, text=True,
         )
-        assert f"cognitx-codegraph-{fake_monorepo.name}" in ps.stdout
+        assert SHARED_CONTAINER_NAME in ps.stdout
     finally:
         # Always tear down, even if the assertions above fail
         subprocess.run(

@@ -7,6 +7,9 @@
 #
 # Every section is optional — omit to use the shipped defaults.
 
+[meta]
+schema_version = 1
+
 # ── Built-in policies ────────────────────────────────────────────────
 
 [policies.import_cycles]
