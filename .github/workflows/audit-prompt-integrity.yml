@@ -37,7 +37,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Need full history so the diff-lint can compare against
           # origin/<base-branch>, not just the PR head.
