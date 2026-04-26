@@ -83,11 +83,18 @@ analyze = [
   "networkx>=3.0",
   "graspologic>=3.4; python_version < '3.13'",
 ]
+docs = [
+  # PDF and document text extraction for --extract-docs.
+  # pypdf is pure-Python with no system dependencies.
+  "pypdf>=4.0",
+]
 test = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
   # Required by tests/test_watch.py — the watch tests import watchdog directly.
   "watchdog>=4.0",
+  # Required by tests/test_doc_parser.py — PDF extraction tests.
+  "pypdf>=4.0",
 ]
 
 [project.scripts]
