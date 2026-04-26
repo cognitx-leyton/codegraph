@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cognitx-codegraph"
-version = "0.1.104"
+version = "0.1.105"
 description = "Code knowledge graph for Claude Code & AI coding agents — index TypeScript, Python, NestJS, FastAPI, React into Neo4j and query architecture in Cypher. Note: v0.2.0 is deprecated, use 0.1.x."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -83,11 +83,18 @@ analyze = [
   "networkx>=3.0",
   "graspologic>=3.4; python_version < '3.13'",
 ]
+docs = [
+  # PDF and document text extraction for --extract-docs.
+  # pypdf is pure-Python with no system dependencies.
+  "pypdf>=4.0",
+]
 test = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
   # Required by tests/test_watch.py — the watch tests import watchdog directly.
   "watchdog>=4.0",
+  # Required by tests/test_doc_parser.py — PDF extraction tests.
+  "pypdf>=4.0",
 ]
 
 [project.scripts]

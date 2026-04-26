@@ -19,6 +19,8 @@ from .schema import (
     DEFINES_FUNC,
     DEFINES_ATOM,
     DEFINES_IFACE,
+    DocumentNode,
+    DocumentSectionNode,
     Edge,
     EdgeGroupNode,
     EMITS_EVENT,
@@ -29,6 +31,7 @@ from .schema import (
     HANDLES_EVENT,
     HAS_COLUMN,
     HAS_METHOD,
+    HAS_SECTION,
     IMPLEMENTS,
     IMPORTS,
     IMPORTS_EXTERNAL,
@@ -134,6 +137,8 @@ _CONSTRAINTS = [
     "CREATE CONSTRAINT route_id IF NOT EXISTS FOR (n:Route) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT package_id IF NOT EXISTS FOR (n:Package) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT edgegroup_id IF NOT EXISTS FOR (n:EdgeGroup) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (n:Document) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT docsection_id IF NOT EXISTS FOR (n:DocumentSection) REQUIRE n.id IS UNIQUE",
 ]
 
 _INDEXES = [
@@ -147,6 +152,9 @@ _INDEXES = [
     "CREATE INDEX class_file IF NOT EXISTS FOR (n:Class) ON (n.file)",
     "CREATE INDEX gqlop_name IF NOT EXISTS FOR (n:GraphQLOperation) ON (n.name)",
     "CREATE INDEX edgegroup_kind IF NOT EXISTS FOR (n:EdgeGroup) ON (n.kind)",
+    "CREATE INDEX document_path IF NOT EXISTS FOR (n:Document) ON (n.path)",
+    "CREATE INDEX document_file_type IF NOT EXISTS FOR (n:Document) ON (n.file_type)",
+    "CREATE INDEX document_repo IF NOT EXISTS FOR (n:Document) ON (n.repo)",
 ]
 
 
@@ -166,6 +174,8 @@ class LoadStats:
     belongs_to_edges: int = 0
     edge_groups: int = 0
     member_of_edges: int = 0
+    documents: int = 0
+    document_sections: int = 0
     edges: dict = field(default_factory=dict)
 
 
@@ -266,6 +276,8 @@ class Neo4jLoader:
         touched_files: set[str] | None = None,
         edge_groups: list[EdgeGroupNode] | None = None,
         repo_name: str = "default",
+        documents: list[DocumentNode] | None = None,
+        document_sections: list[DocumentSectionNode] | None = None,
     ) -> LoadStats:
         stats = LoadStats()
         files = [r.file for r in index.files_by_path.values()]
@@ -572,6 +584,10 @@ class Neo4jLoader:
             if edge_groups:
                 _write_edge_groups(s, edge_groups, all_edges, stats)
 
+            # ── Documents (Phase 11) ─────────────────────────────
+            if documents:
+                _write_documents(s, documents, document_sections or [], stats)
+
         return stats
 
 
@@ -625,6 +641,43 @@ def _write_packages(session, packages: list[PackageNode], stats: LoadStats) -> N
             p.confidence        = r.confidence
     """, rows)
     stats.packages = len(rows)
+
+
+def _write_documents(
+    session,
+    documents: list[DocumentNode],
+    sections: list[DocumentSectionNode],
+    stats: LoadStats,
+) -> None:
+    """MERGE :Document and :DocumentSection nodes + HAS_SECTION edges."""
+    _run(session, """
+        UNWIND $rows AS r
+        MERGE (d:Document {id: r.id})
+        SET d.path = r.path, d.file_type = r.file_type,
+            d.loc = r.loc, d.extracted_at = r.extracted_at,
+            d.repo = r.repo
+    """, [dict(id=d.id, path=d.path, file_type=d.file_type,
+               loc=d.loc, extracted_at=d.extracted_at,
+               repo=d.repo) for d in documents])
+    stats.documents = len(documents)
+
+    _run(session, """
+        UNWIND $rows AS r
+        MERGE (s:DocumentSection {id: r.id})
+        SET s.path = r.path, s.heading = r.heading,
+            s.section_index = r.section_index,
+            s.text_sample = r.text_sample, s.repo = r.repo
+        WITH s, r
+        MATCH (d:Document {id: r.doc_id})
+        MERGE (d)-[rel:HAS_SECTION]->(s)
+        SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
+    """, [dict(id=sec.id, path=sec.path, heading=sec.heading,
+               section_index=sec.section_index,
+               text_sample=sec.text_sample, repo=sec.repo,
+               doc_id=f"doc:{sec.repo}:{sec.path}")
+          for sec in sections])
+    stats.document_sections = len(sections)
+    stats.edges[HAS_SECTION] = len(sections)
 
 
 def _write_belongs_to(session, files, stats: LoadStats) -> None:

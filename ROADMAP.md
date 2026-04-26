@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-26 — repo-namespace node IDs to prevent cross-repo overwrite (issue #263). v0.1.103.
+> **Last updated:** 2026-04-26 after commits `6990e71` → `260394c` (PDF document ingestion with outline and page-based section extraction, closes issue #264). v0.1.103.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-263-file-node-overwrite`. All file-bearing node IDs now include a `repo` segment (`file:myrepo:path`, `class:myrepo:path#Name`, etc.) to prevent cross-repo node collisions when multiple codebases share a Neo4j instance. New `--repo-name` CLI flag on `index` and `watch`. Schema migration in `init_schema` for existing graphs. Closes issue #263. v0.1.103.
-- **Tests:** 937 passing (31 new in `test_repo_namespace.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-264-pdf-ingestion`. PDF document ingestion (`--extract-docs` flag on `codegraph index`) with two new schema nodes (`DocumentNode`, `DocumentSectionNode`), outline-based section splitting (page-fallback), size guard (50 MB), encrypted/empty PDF handling. New `doc_parser.py` module + `pypdf>=4.0` optional extra (`pip install "codegraph[docs]"`). Closes issue #264. v0.1.103.
+- **Tests:** 945 passing (8 new in `test_doc_parser.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -43,7 +43,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
-9d19261  feat(schema): namespace all node IDs with repo to prevent cross-repo overwrite (#263)
+260394c  feat(docs): PDF document ingestion with outline and page-based section extraction (#264)
+6990e71  fix(schema): namespace all node IDs with repo to prevent cross-repo overwrite (#273)
 743c02f  chore: bump version to 0.1.103
 0c659f3  fix: 5 issues uncovered by the 0.1.102 e2e run
 c289630  chore: bump version to 0.1.102
@@ -66,6 +67,33 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### docs — PDF document ingestion with outline and page-based section extraction (issue #264)
+
+- `260394c feat(docs)` — Seven files changed (3 new, 4 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/doc_parser.py`** (~230 LOC) — PDF extraction module. `extract_pdf(path, repo_name)` returns a `(DocumentNode, list[DocumentSectionNode])` pair. `_sections_from_outline()` splits content by PDF bookmarks (each bookmark → one `DocumentSectionNode` with the page's extracted text). `_sections_from_pages()` falls back to one section per page when no outline is present. Size guard: files >50 MB are skipped with a warning. Encrypted PDFs: `reader.decrypt("")` attempted; failure raises `ValueError`. Empty-text pages are silently skipped (sequential `section_index` counter prevents ID gaps — one bug found and fixed during review). ISO-8601 `indexed_at` timestamp on every `DocumentNode`. Repo-namespaced IDs: `doc:{repo}:{path}` / `docsec:{repo}:{path}#{section_index}`.
+
+  2. **`codegraph/tests/test_doc_parser.py`** (8 tests) — Covers basic extraction (DocumentNode fields, section count), section IDs sequential, repo namespacing, missing `pypdf` error, ISO-8601 timestamp, path consistency (all sections share doc's path).
+
+  3. **`codegraph/tests/fixtures/docs/sample.pdf`** — 3-page PDF with outline bookmarks (~3 KB), generated from `fpdf2`. Used as the live fixture for all `doc_parser` tests.
+
+  **Updated files:**
+
+  4. **`codegraph/codegraph/schema.py`** — Added `DocumentNode` dataclass (fields: `id`, `path`, `repo`, `page_count`, `title`, `indexed_at`) and `DocumentSectionNode` dataclass (fields: `id`, `doc_id`, `path`, `repo`, `section_index`, `heading`, `text_sample`). Added `HAS_SECTION = "HAS_SECTION"` and `REFERENCES_DOCUMENT = "REFERENCES_DOCUMENT"` edge constants.
+
+  5. **`codegraph/codegraph/loader.py`** — Added `DocumentNode` / `DocumentSectionNode` constraints and indexes in `init_schema()`. Added `documents: int` and `document_sections: int` to `LoadStats`. Added `documents` / `document_sections` params to `load()`. Added `_write_documents(session, documents, document_sections)` helper with batched MERGE for both node types plus `HAS_SECTION` relationship.
+
+  6. **`codegraph/codegraph/cli.py`** — Added `--extract-docs` flag (opt-in, defaults `False`) to `codegraph index`. PDF walk block added to `_run_index()`: globs `**/*.pdf`, applies `exclude_dirs` and `ignore_filter`, calls `extract_pdf()` per file, aggregates results. `documents` / `document_sections` counts propagated through `_flatten_load_stats()` and `_print_load_stats_dict()`.
+
+  7. **`codegraph/pyproject.toml`** — Added `docs = ["pypdf>=4.0"]` optional extra. Added `pypdf` to the `test` extra so tests can import it without `[docs]`.
+
+  **Code review (1 bug found and fixed):**
+  - `[BUG]` `_sections_from_pages` used page enumeration index (`idx`) as `section_index`. When empty pages are skipped, this produced non-sequential IDs (e.g. `#0, #2`), breaking the sequential contract and leaving orphan ID slots → replaced `idx` with a `seq` counter that only increments when a section is emitted.
+
+  - **Validation:** 945 tests pass (8 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass (1 skipped).
 
 ### schema — repo-namespaced node IDs to prevent cross-repo overwrite (issue #263)
 
@@ -1580,17 +1608,17 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-fix-issue-259` |
+| Current branch | `archon/task-feat-issue-264-pdf-ingestion` |
 | Base branch | `main` |
-| Unpushed commits | 1 (`f887f70` refactor(install): deduplicate template-var logic into init.py — pending PR) |
+| Unpushed commits | Multiple — PDF ingestion (`260394c`) + repo-namespace fix (`6990e71`) + prior work |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/deduplicate-template-vars.plan.md`) |
-| Test count | 807 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/pdf-document-ingestion.plan.md`) |
+| Test count | 945 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `f887f70`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze]"` after any `pyproject.toml` edit. |
-| Wheel built? | Not yet for v0.1.95. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
-| New files | `codegraph/codegraph/platforms.py`, `codegraph/codegraph/templates/platforms/` (8 templates), `codegraph/tests/test_platforms.py` |
+| Last editable install | After `260394c`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs]"` after any `pyproject.toml` edit. |
+| Wheel built? | Not yet for v0.1.103. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
+| New files | `codegraph/codegraph/doc_parser.py`, `codegraph/tests/test_doc_parser.py`, `codegraph/tests/fixtures/docs/sample.pdf` |
 
 ---
 

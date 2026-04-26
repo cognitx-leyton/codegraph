@@ -207,6 +207,10 @@ def index(
              "directory name. Prevents File-node collisions when indexing "
              "multiple repos into one Neo4j with --no-wipe.",
     ),
+    extract_docs: bool = typer.Option(
+        False, "--extract-docs",
+        help="Extract PDF documents as :Document/:DocumentSection nodes.",
+    ),
 ) -> None:
     """Index a TypeScript monorepo into Neo4j."""
     try:
@@ -224,6 +228,7 @@ def index(
             since=since,
             update=update,
             repo_name=repo_name,
+            extract_docs=extract_docs,
         )
     except ConfigError as e:
         _emit_error(as_json, "config", str(e))
@@ -326,6 +331,7 @@ def _run_index(
     since: Optional[str] = None,
     update: bool = False,
     repo_name: Optional[str] = None,
+    extract_docs: bool = False,
 ) -> dict[str, Any]:
     """Core indexing routine. Returns a flat dict of stats (files, edges, ...).
 
@@ -564,6 +570,31 @@ def _run_index(
                 f"teams={len(ownership['teams'])}  [{time.time()-t0:.1f}s]"
             )
 
+    # ── Document extraction (opt-in) ──────────────────────────
+    doc_nodes: list = []
+    doc_section_nodes: list = []
+    if extract_docs:
+        from .doc_parser import extract_pdf
+        say("[bold]Extracting documents…")
+        pdf_count = 0
+        for pkg in pkg_configs:
+            for p in pkg.root.rglob("*.pdf"):
+                if not p.is_file():
+                    continue
+                if any(part in exclude_dirs for part in p.parts):
+                    continue
+                rel = str(p.resolve().relative_to(repo)).replace("\\", "/")
+                if ignore_filter is not None and ignore_filter.should_ignore_file(rel):
+                    continue
+                try:
+                    doc, sections = extract_pdf(p, rel, repo_name=effective_repo_name)
+                    doc_nodes.append(doc)
+                    doc_section_nodes.extend(sections)
+                    pdf_count += 1
+                except Exception as exc:
+                    say(f"  [yellow]skip[/] {rel}: {exc}")
+        say(f"[bold green]✓[/] extracted {pdf_count} PDF(s), {len(doc_section_nodes)} section(s)")
+
     say(f"[bold]Connecting to Neo4j…[/] {uri}")
     loader = Neo4jLoader(uri, user, password)
     try:
@@ -600,6 +631,8 @@ def _run_index(
             touched_files=changed_files,
             edge_groups=edge_groups,
             repo_name=effective_repo_name,
+            documents=doc_nodes or None,
+            document_sections=doc_section_nodes or None,
         )
         say(f"[bold green]✓[/] loaded in {time.time()-t0:.1f}s")
     finally:
@@ -616,6 +649,7 @@ def _flatten_load_stats(stats, *, total_imports: int, unresolved_imports: int) -
     for k in (
         "files", "classes", "functions", "methods", "interfaces", "endpoints",
         "gql_operations", "columns", "atoms", "externals",
+        "documents", "document_sections",
     ):
         out[k] = int(getattr(stats, k, 0))
     edges = getattr(stats, "edges", {}) or {}
@@ -629,6 +663,7 @@ def _print_load_stats_dict(stats: dict[str, Any]) -> None:
     for k in (
         "files", "classes", "functions", "methods", "interfaces", "endpoints",
         "gql_operations", "columns", "atoms", "externals",
+        "documents", "document_sections",
     ):
         t.add_row(k, str(stats.get(k, 0)))
     for k, v in sorted(stats.get("edges", {}).items()):

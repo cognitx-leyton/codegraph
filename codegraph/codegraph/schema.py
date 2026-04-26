@@ -247,6 +247,32 @@ class EdgeGroupNode:
         return f"edgegroup:{self.kind}:{self.name}"
 
 
+@dataclass
+class DocumentNode:
+    path: str
+    file_type: str       # "pdf", "markdown", future types
+    loc: int             # character count of extracted text
+    extracted_at: str    # ISO 8601 timestamp
+    repo: str = "default"
+
+    @property
+    def id(self) -> str:
+        return f"doc:{self.repo}:{self.path}"
+
+
+@dataclass
+class DocumentSectionNode:
+    path: str            # parent document path
+    heading: str
+    section_index: int
+    text_sample: str     # first 500 chars
+    repo: str = "default"
+
+    @property
+    def id(self) -> str:
+        return f"docsec:{self.repo}:{self.path}#{self.section_index}"
+
+
 # ── Edges ────────────────────────────────────────────────────
 
 @dataclass
@@ -318,6 +344,10 @@ BELONGS_TO        = "BELONGS_TO"
 
 # Phase 10 — hyperedges / group relationships
 MEMBER_OF         = "MEMBER_OF"
+
+# Phase 11 — documents
+HAS_SECTION           = "HAS_SECTION"
+REFERENCES_DOCUMENT   = "REFERENCES_DOCUMENT"
 
 
 # ── Test-file pairing conventions ────────────────────────────
