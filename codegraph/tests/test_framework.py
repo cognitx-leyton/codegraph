@@ -108,7 +108,7 @@ def test_package_node_from_framework_info() -> None:
     assert p.router == "next/router"
     assert p.state_management == ["zustand"]
     assert p.confidence == pytest.approx(0.92)
-    assert p.id == "package:packages/web"
+    assert p.id == "package:default:packages/web"
 
 
 def test_unknown_display_name_is_preserved() -> None:

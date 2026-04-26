@@ -69,6 +69,7 @@ def _rebuild(
     user: str = "",
     password: str = "",
     packages: Optional[list[str]] = None,
+    repo_name: Optional[str] = None,
 ) -> bool:
     """Trigger an incremental re-index via subprocess.
 
@@ -86,6 +87,8 @@ def _rebuild(
         cmd.extend(["--password", password])
     for pkg in (packages or []):
         cmd.extend(["--package", pkg])
+    if repo_name:
+        cmd.extend(["--repo-name", repo_name])
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, check=False, timeout=300,
@@ -109,6 +112,7 @@ def watch(
     user: str = "",
     password: str = "",
     packages: Optional[list[str]] = None,
+    repo_name: Optional[str] = None,
 ) -> None:
     """Watch *watch_path* for file changes and auto-rebuild the graph.
 
@@ -147,6 +151,7 @@ def watch(
                 ok = _rebuild(
                     watch_path, quiet=False,
                     uri=uri, user=user, password=password, packages=packages,
+                    repo_name=repo_name,
                 )
                 if ok:
                     print("[codegraph watch] Rebuild complete.")
@@ -165,6 +170,7 @@ def run_watch(
     user: str = "",
     password: str = "",
     packages: Optional[list[str]] = None,
+    repo_name: Optional[str] = None,
 ) -> int:
     """Entry point called from CLI. Returns exit code 0."""
     watch(
@@ -174,5 +180,6 @@ def run_watch(
         user=user,
         password=password,
         packages=packages,
+        repo_name=repo_name,
     )
     return 0

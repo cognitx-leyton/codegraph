@@ -67,8 +67,8 @@ def test_relative_import_resolves(tmp_path: Path):
     # Expect: a.py → b.py (intra-package)
     resolved = [e for e in imports if not e.dst_id.startswith("external:")]
     assert len(resolved) == 1
-    assert resolved[0].src_id == "file:pkg/a.py"
-    assert resolved[0].dst_id == "file:pkg/b.py"
+    assert resolved[0].src_id == "file:default:pkg/a.py"
+    assert resolved[0].dst_id == "file:default:pkg/b.py"
 
 
 def test_absolute_intra_package_import_resolves(tmp_path: Path):
@@ -82,8 +82,8 @@ def test_absolute_intra_package_import_resolves(tmp_path: Path):
 
     resolved = [e for e in edges if e.kind == IMPORTS and not e.dst_id.startswith("external:")]
     assert len(resolved) == 1
-    assert resolved[0].src_id == "file:pkg/a.py"
-    assert resolved[0].dst_id == "file:pkg/c.py"
+    assert resolved[0].src_id == "file:default:pkg/a.py"
+    assert resolved[0].dst_id == "file:default:pkg/c.py"
 
 
 def test_external_import_falls_through(tmp_path: Path):
@@ -113,8 +113,8 @@ def test_dotted_relative_import_walks_up(tmp_path: Path):
 
     resolved = [e for e in edges if e.kind == IMPORTS and not e.dst_id.startswith("external:")]
     assert len(resolved) == 1
-    assert resolved[0].src_id == "file:pkg/sub/d.py"
-    assert resolved[0].dst_id == "file:pkg/b.py"
+    assert resolved[0].src_id == "file:default:pkg/sub/d.py"
+    assert resolved[0].dst_id == "file:default:pkg/b.py"
 
 
 def test_import_of_subpackage_as_file(tmp_path: Path):
@@ -128,7 +128,7 @@ def test_import_of_subpackage_as_file(tmp_path: Path):
     index, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
 
     resolved = [e for e in edges if e.kind == IMPORTS and not e.dst_id.startswith("external:")]
-    assert any(e.dst_id == "file:pkg/sub/d.py" for e in resolved)
+    assert any(e.dst_id == "file:default:pkg/sub/d.py" for e in resolved)
 
 
 def test_import_of_subpackage_as_init(tmp_path: Path):
@@ -141,7 +141,7 @@ def test_import_of_subpackage_as_init(tmp_path: Path):
     index, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
 
     resolved = [e for e in edges if e.kind == IMPORTS and not e.dst_id.startswith("external:")]
-    assert any(e.dst_id == "file:pkg/sub/__init__.py" for e in resolved)
+    assert any(e.dst_id == "file:default:pkg/sub/__init__.py" for e in resolved)
 
 
 def test_walk_above_package_root_is_external(tmp_path: Path):
@@ -168,7 +168,7 @@ def test_bare_relative_from_import(tmp_path: Path):
     index, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
 
     resolved = [e for e in edges if e.kind == IMPORTS and not e.dst_id.startswith("external:")]
-    assert any(e.dst_id == "file:pkg/__init__.py" for e in resolved)
+    assert any(e.dst_id == "file:default:pkg/__init__.py" for e in resolved)
 
 
 def test_imports_symbol_edges_emitted(tmp_path: Path):
@@ -197,7 +197,7 @@ def test_import_statement_absolute(tmp_path: Path):
     index, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
 
     resolved = [e for e in edges if e.kind == IMPORTS and not e.dst_id.startswith("external:")]
-    assert any(e.dst_id == "file:pkg/b.py" for e in resolved)
+    assert any(e.dst_id == "file:default:pkg/b.py" for e in resolved)
 
 
 def test_ts_import_unaffected_by_python_dispatch(tmp_path: Path):
@@ -254,8 +254,8 @@ def test_self_call_resolves_typed(tmp_path: Path):
     _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
     calls = _calls_edges(edges)
     assert any(
-        e.src_id == "method:class:pkg/a.py#A#run"
-        and e.dst_id == "method:class:pkg/a.py#A#foo"
+        e.src_id == "method:class:default:pkg/a.py#A#run"
+        and e.dst_id == "method:class:default:pkg/a.py#A#foo"
         and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed self.foo() edge; got {calls}"
@@ -280,8 +280,8 @@ def test_super_call_resolves_to_parent(tmp_path: Path):
     _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
     calls = _calls_edges(edges)
     assert any(
-        e.src_id == "method:class:pkg/child.py#A#run"
-        and e.dst_id == "method:class:pkg/base.py#B#run"
+        e.src_id == "method:class:default:pkg/child.py#A#run"
+        and e.dst_id == "method:class:default:pkg/base.py#B#run"
         and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed super().run() edge; got {calls}"
@@ -304,8 +304,8 @@ def test_cls_call_resolves_like_self(tmp_path: Path):
     _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
     calls = _calls_edges(edges)
     assert any(
-        e.src_id == "method:class:pkg/a.py#A#make"
-        and e.dst_id == "method:class:pkg/a.py#A#foo"
+        e.src_id == "method:class:default:pkg/a.py#A#make"
+        and e.dst_id == "method:class:default:pkg/a.py#A#foo"
         and e.props.get("resolution") == "typed"
         for e in calls
     ), f"expected typed cls.foo() edge; got {calls}"
@@ -329,8 +329,8 @@ def test_function_to_function_same_file_resolves(tmp_path: Path):
     _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
     calls = _calls_edges(edges)
     assert any(
-        e.src_id == "func:pkg/a.py#run"
-        and e.dst_id == "func:pkg/a.py#helper"
+        e.src_id == "func:default:pkg/a.py#run"
+        and e.dst_id == "func:default:pkg/a.py#helper"
         for e in calls
     ), f"expected func-to-func CALLS edge; got {calls}"
 
@@ -350,8 +350,8 @@ def test_function_to_function_cross_file_resolves(tmp_path: Path):
     _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
     calls = _calls_edges(edges)
     assert any(
-        e.src_id == "func:pkg/main.py#run"
-        and e.dst_id == "func:pkg/utils.py#helper"
+        e.src_id == "func:default:pkg/main.py#run"
+        and e.dst_id == "func:default:pkg/utils.py#helper"
         for e in calls
     ), f"expected cross-file func-to-func CALLS edge; got {calls}"
 
@@ -371,7 +371,7 @@ def test_module_level_call_to_function_resolves(tmp_path: Path):
     _, edges = _run_pipeline(tmp_path, "pkg", tmp_path / "pkg")
     calls = _calls_edges(edges)
     assert any(
-        e.src_id == "file:pkg/app.py"
-        and e.dst_id == "func:pkg/app.py#main"
+        e.src_id == "file:default:pkg/app.py"
+        and e.dst_id == "func:default:pkg/app.py#main"
         for e in calls
     ), f"expected module-level-to-func CALLS edge; got {calls}"

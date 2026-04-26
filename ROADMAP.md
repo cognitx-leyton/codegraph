@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-25 — comprehensive docs sweep on `hotfix` (README, init.md, claude-md-snippet, ROADMAP). v0.1.99.
+> **Last updated:** 2026-04-26 — repo-namespace node IDs to prevent cross-repo overwrite (issue #263). v0.1.103.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-259`. Deduplication of template-var and container-name logic: `derive_container_name(root)` and `build_template_vars(...)` extracted into `init.py` as public helpers. `_build_install_vars` in `cli.py` now delegates to them. Port consistency fix: `NEO4J_BOLT_PORT` and `NEO4J_HTTP_PORT` now read from env (with `init.py` defaults) instead of hardcoded literals. Closes issue #259. v0.1.95.
-- **Tests:** 807 passing (5 new: `derive_container_name` determinism + path-differentiation, `build_template_vars` all-keys + cross-pairs + custom ports), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-263-file-node-overwrite`. All file-bearing node IDs now include a `repo` segment (`file:myrepo:path`, `class:myrepo:path#Name`, etc.) to prevent cross-repo node collisions when multiple codebases share a Neo4j instance. New `--repo-name` CLI flag on `index` and `watch`. Schema migration in `init_schema` for existing graphs. Closes issue #263. v0.1.103.
+- **Tests:** 937 passing (31 new in `test_repo_namespace.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.55 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -43,7 +43,15 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
-<unreleased> feat(audit): codegraph audit — agent-driven extraction self-check
+9d19261  feat(schema): namespace all node IDs with repo to prevent cross-repo overwrite (#263)
+743c02f  chore: bump version to 0.1.103
+0c659f3  fix: 5 issues uncovered by the 0.1.102 e2e run
+c289630  chore: bump version to 0.1.102
+87a0e9a  feat(audit): codegraph audit — agent-driven extraction self-check
+11135f9  fix(init): align _DEFAULT_BOLT_PORT/_DEFAULT_HTTP_PORT to 7688/7475 + bump 0.1.101
+137812e  chore: bump version to 0.1.100
+1cd47f3  feat(init): shared codegraph-neo4j container with auto-detect, auto-start, Docker preflight
+0f3480a  docs: refresh top-level README, add CHANGELOG, ship 5 deep-dive doc files
 f887f70  refactor(install): deduplicate template-var logic into init.py (issue #259)
 6a359f0  fix(install): preserve shared AGENTS.md sections during partial uninstall (#261, closes #257)
 9fae95b  fix(install): resolve template variables in platform install content (#260, closes #256)
@@ -58,6 +66,71 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### schema — repo-namespaced node IDs to prevent cross-repo overwrite (issue #263)
+
+- `9d19261 feat(schema)` — Nine production files changed, nine test files updated, one new test file:
+
+  **Root cause.** When two repos are indexed into the same Neo4j instance (e.g. a monorepo + a library), `MERGE (f:File {path: $path})` collides on any file that shares a relative path (`src/index.ts`). The same problem existed for `Class`, `Function`, `Method`, `Interface`, `Endpoint`, `Atom`, and `GraphQLOperation` nodes keyed on `#`-qualified paths. The fix namespaces every file-bearing ID with a `repo` segment.
+
+  **New ID format.** All IDs that embed a file path gain a `repo:` segment:
+  - `file:myrepo:src/index.ts` (was `file:src/index.ts`)
+  - `class:myrepo:src/index.ts#UserService` (was `class:src/index.ts#UserService`)
+  - `method:class:myrepo:src/index.ts#UserService#create` (unchanged outer prefix)
+  - `endpoint:POST:/users@myrepo:src/ctrl.ts#create` (was `endpoint:POST:/users@src/ctrl.ts#create`)
+  - `gqlop:query:ListUsers@myrepo:src/res.ts#listUsers`
+  - `route:`, `atom:`, `func:`, `interface:` — same pattern
+
+  **`--repo-name` CLI flag.** New optional flag on `codegraph index` and `codegraph watch`. Defaults to the directory name of the indexed root. Validated to reject `:` and `#` characters that would break ID parsing. Forwarded through `_run_index` → parsers → loader → watcher rebuild subprocess.
+
+  **Files changed:**
+
+  1. **`codegraph/codegraph/schema.py`** — Added `repo: str = "default"` field to `FileNode`, `ClassNode`, `FunctionNode`, `MethodNode`, `InterfaceNode`, `EndpointNode`, `AtomNode`, `GraphQLOperationNode`, `RouteNode`. Each node's `id` property now embeds `self.repo`. `PackageNode.id` uses `f"package:{self.repo}:{self.name}"`.
+
+  2. **`codegraph/codegraph/loader.py`** — All `MERGE` statements that previously keyed on `{path:}` now key on `{id:}` (the repo-namespaced ID). `_file_from_id()` updated to strip the repo segment when extracting the raw file path from any ID shape (handles `file:`, `class:`, `method:`, `endpoint:`, `gqlop:`, `route:` prefixes). `init_schema()` runs a migration step that adds `file_path` as a non-unique index on `:File` after dropping the old unique path constraint. `wipe_scoped()` returns file IDs (not paths) for `delete_file_subgraph()`. Added `file_path` index to `_INDEXES` for legacy-path queries.
+
+  3. **`codegraph/codegraph/cli.py`** — `--repo-name` option on `index` and `watch` sub-commands. Validation guard raises `ConfigError` on `:` or `#` in the value. `effective_repo_name` derived from folder name when flag omitted. File ID construction in incremental-wipe path updated.
+
+  4. **`codegraph/codegraph/resolver.py`** — All cross-file ID constructions (`f"class:{rel}#..."`, `f"func:{rel}#..."`, etc.) updated to embed `repo`. `_caller_id_for_fn` gains a `repo` param. `_find_class` returns raw paths; callers construct the namespaced ID.
+
+  5. **`codegraph/codegraph/py_parser.py`** — `parse_file()` accepts `repo_name: str = "default"`. `FileNode`, `ClassNode`, `FunctionNode`, `MethodNode`, `EndpointNode`, `AtomNode` all receive `repo=repo_name`.
+
+  6. **`codegraph/codegraph/parser.py`** (TS) — Same treatment: `parse_file()` accepts `repo_name`, all node constructors in `_Walker` receive `repo=self.result.file.repo`. `_extract_routes()` also updated.
+
+  7. **`codegraph/codegraph/mcp.py`** — `reindex_file()` constructs a `file_id = f"file:{repo}:{rel}"` and uses `{id: $fid}` for all node `MATCH`/`MERGE` Cypher instead of `{path: $path}`. Parser calls forward `repo_name=repo`.
+
+  8. **`codegraph/codegraph/repl.py`** — `--repo-name` parsed and forwarded to `_run_index`.
+
+  9. **`codegraph/codegraph/watch.py`** — `repo_name` threaded through `run_watch` → `watch` → `_rebuild` → subprocess CLI `--repo-name` flag.
+
+  **New test file:**
+
+  - **`codegraph/tests/test_repo_namespace.py`** (31 tests) — Covers: `file:`, `class:`, `method:`, `endpoint:`, `gqlop:`, `atom:`, `interface:`, `route:` ID format; `_file_from_id` for all prefix shapes including nested `method:class:`; backward-compat IDs without repo segment (defensive path); multi-repo isolation (same path, two repos → two distinct file IDs); `PackageNode` repo isolation; `--repo-name` validation (rejects `:` and `#`).
+
+  **Existing test files updated** (8 files) — Updated hardcoded IDs in `test_incremental.py`, `test_loader_partitioning.py`, `test_loader_pairing.py`, `test_wipe_scoped.py`, `test_confidence.py`, `test_framework.py`, `test_py_parser_calls.py`, `test_py_resolver.py` to include `default:` repo segment.
+
+  **Code review (4 issues found and fixed):**
+  - `[MEDIUM]` `_extract_routes()` created `RouteNode` without `repo` → added `repo_name` param, passed from call site.
+  - `[MEDIUM]` No validation on `--repo-name` for `:` or `#` chars → added `ConfigError` guard.
+  - `[MEDIUM]` Missing `file_path` index after migration drops old uniqueness constraint → added `CREATE INDEX file_path` to `_INDEXES`.
+  - `[LOW]` `AtomNode(family="constant")` in test → corrected to `family=True`.
+
+  - **Validation:** 937 tests pass (31 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: exit 0.
+
+### init — shared codegraph-neo4j container with auto-detect and auto-start
+
+- `1cd47f3 feat(init)` — `codegraph init` now scaffolds a shared `codegraph-neo4j` container (deterministic name across all repos on the machine) rather than one per project. `docker ps` auto-detect: if the container is already running (from another project's init), init skips the `docker run` step and reuses it. Auto-start: if the container exists but is stopped, init runs `docker start codegraph-neo4j`. Docker preflight check included. `--bolt-port` / `--http-port` flags let teams override the default `7688/7475` when those ports are taken.
+
+- `11135f9 fix(init)` — `_DEFAULT_BOLT_PORT` and `_DEFAULT_HTTP_PORT` constants aligned to `7688` and `7475` everywhere (previously `7687`/`7474` in some paths). `NEO4J_BOLT_PORT` and `NEO4J_HTTP_PORT` env-var reads updated to match.
+
+### fix — 5 issues uncovered by the 0.1.102 e2e run
+
+- `0c659f3 fix` — Five separate regressions surfaced during an end-to-end run against a real repo and fixed in a single commit:
+  1. `loader.py` — stale `{path: $path}` in one `_write_ownership` query missed by the id-migration sweep.
+  2. `resolver.py` — `_resolve_call_target_class` built IDs using bare path (missing repo) in one branch.
+  3. `mcp.py` — `reindex_file` EXPOSES edge used `file:` prefix instead of full `file:repo:path` ID.
+  4. `cli.py` — `delete_file_subgraph` called with raw path instead of file ID in incremental wipe.
+  5. `watch.py` — subprocess CLI call omitted `--repo-name` flag when repo was inferred from folder name.
 
 ### audit — agent-driven extraction self-check (`codegraph audit`)
 

@@ -122,8 +122,8 @@ def test_self_call_is_extracted(tmp_path: Path):
     calls = _calls_edges(edges)
     self_call = [
         e for e in calls
-        if e.src_id == "method:class:pkg/a.py#A#run"
-        and e.dst_id == "method:class:pkg/a.py#A#foo"
+        if e.src_id == "method:class:default:pkg/a.py#A#run"
+        and e.dst_id == "method:class:default:pkg/a.py#A#foo"
     ]
     assert len(self_call) == 1
     assert self_call[0].confidence == "EXTRACTED"
@@ -153,8 +153,8 @@ def test_super_call_is_inferred(tmp_path: Path):
     calls = _calls_edges(edges)
     super_call = [
         e for e in calls
-        if e.src_id == "method:class:pkg/child.py#A#run"
-        and e.dst_id == "method:class:pkg/base.py#B#run"
+        if e.src_id == "method:class:default:pkg/child.py#A#run"
+        and e.dst_id == "method:class:default:pkg/base.py#B#run"
     ]
     assert len(super_call) == 1
     assert super_call[0].confidence == "INFERRED"
@@ -201,7 +201,7 @@ def test_barrel_import_is_inferred(tmp_path: Path):
     imports = _import_edges(edges)
     barrel = [
         e for e in imports
-        if e.src_id == "file:pkg/a.py"
+        if e.src_id == "file:default:pkg/a.py"
         and "sub/__init__" in e.dst_id
     ]
     assert len(barrel) == 1
@@ -223,8 +223,8 @@ def test_direct_relative_import_is_extracted(tmp_path: Path):
     imports = _import_edges(edges)
     direct = [
         e for e in imports
-        if e.src_id == "file:pkg/a.py"
-        and e.dst_id == "file:pkg/b.py"
+        if e.src_id == "file:default:pkg/a.py"
+        and e.dst_id == "file:default:pkg/b.py"
     ]
     assert len(direct) == 1
     assert direct[0].confidence == "EXTRACTED"

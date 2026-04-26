@@ -202,6 +202,12 @@ def _cmd_index(skin: ReplSkin, session: Session, args: list[str]) -> None:
         if idx + 1 < len(args):
             since = args[idx + 1]
 
+    repo_name = None
+    if "--repo-name" in args:
+        idx = args.index("--repo-name")
+        if idx + 1 < len(args):
+            repo_name = args[idx + 1]
+
     # Dynamically import to keep REPL startup fast
     from .cli import _run_index  # type: ignore[attr-defined]
 
@@ -216,6 +222,7 @@ def _cmd_index(skin: ReplSkin, session: Session, args: list[str]) -> None:
             password=session.password or "",
             skip_ownership=False,
             since=since,
+            repo_name=repo_name,
         )
         session.last_index_stats = stats
         skin.success("Index complete.")

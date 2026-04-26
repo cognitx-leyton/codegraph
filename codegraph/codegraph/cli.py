@@ -201,6 +201,12 @@ def index(
                                       help="Skip token-reduction benchmark after indexing."),
     no_analyze: bool = typer.Option(False, "--no-analyze",
                                     help="Skip Leiden community detection + GRAPH_REPORT after indexing."),
+    repo_name: Optional[str] = typer.Option(
+        None, "--repo-name",
+        help="Namespace for multi-repo indexing. Defaults to the repo "
+             "directory name. Prevents File-node collisions when indexing "
+             "multiple repos into one Neo4j with --no-wipe.",
+    ),
 ) -> None:
     """Index a TypeScript monorepo into Neo4j."""
     try:
@@ -217,6 +223,7 @@ def index(
             quiet=as_json,
             since=since,
             update=update,
+            repo_name=repo_name,
         )
     except ConfigError as e:
         _emit_error(as_json, "config", str(e))
@@ -318,6 +325,7 @@ def _run_index(
     quiet: bool = False,
     since: Optional[str] = None,
     update: bool = False,
+    repo_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """Core indexing routine. Returns a flat dict of stats (files, edges, ...).
 
@@ -331,6 +339,12 @@ def _run_index(
     def say(msg: str) -> None:
         if not quiet:
             console.print(msg)
+
+    # ── Repo name derivation ───────────────────────────────────
+    effective_repo_name = repo_name or repo.resolve().name
+    if ":" in effective_repo_name or "#" in effective_repo_name:
+        raise ConfigError("--repo-name must not contain ':' or '#' (they break node ID parsing)")
+    say(f"[bold]Repo name[/] {effective_repo_name}")
 
     # ── Incremental mode setup ──────────────────────────────────
     if since is not None and update:
@@ -406,6 +420,7 @@ def _run_index(
         if pkg_config.language == "ts":
             info = FrameworkDetector(pkg_dir).detect()
             pkg_node = PackageNode.from_framework_info(pkg_config.name, info)
+            pkg_node.repo = effective_repo_name
             index_obj.packages.append(pkg_node)
             version_str = f" v{info.version}" if info.version else ""
             say(
@@ -418,6 +433,7 @@ def _run_index(
             # :Package node so the BELONGS_TO edges still wire up in the graph.
             pkg_node = PackageNode(
                 name=pkg_config.name, framework="Unknown", confidence=0.0,
+                repo=effective_repo_name,
             )
             index_obj.packages.append(pkg_node)
             say(f"    [cyan]framework[/] Unknown (python; detection in Stage 2)")
@@ -479,9 +495,11 @@ def _run_index(
             if py_parser is None:
                 from .py_parser import PyParser
                 py_parser = PyParser()
-            result = py_parser.parse_file(abs_p, rel, pkg_name, is_test=is_test)
+            result = py_parser.parse_file(abs_p, rel, pkg_name, is_test=is_test,
+                                              repo_name=effective_repo_name)
         else:
-            result = ts_parser.parse_file(abs_p, rel, pkg_name, is_test=is_test)
+            result = ts_parser.parse_file(abs_p, rel, pkg_name, is_test=is_test,
+                                           repo_name=effective_repo_name)
         if result is None:
             continue
         index_obj.add(result)
@@ -509,7 +527,7 @@ def _run_index(
     parse_time = time.time() - t0
     say(f"[bold green]✓[/] parsed {len(index_obj.files_by_path)} files in {parse_time:.1f}s")
 
-    _extract_routes(repo, index_obj, ignore_filter)
+    _extract_routes(repo, index_obj, ignore_filter, repo_name=effective_repo_name)
 
     if ignore_filter is not None:
         dropped = _strip_ignored_components(index_obj, ignore_filter)
@@ -557,7 +575,7 @@ def _run_index(
             scoped_packages = [p.name for p in pkg_configs]
             if scoped_packages:
                 say(f"[yellow]Wiping {len(scoped_packages)} package(s) from database…[/]")
-                deleted = loader.wipe_scoped(scoped_packages)
+                deleted = loader.wipe_scoped(scoped_packages, repo=effective_repo_name)
                 say(f"  cleared {deleted} file subgraph(s)")
             else:
                 # No packages resolved — fall back to the global wipe so the
@@ -571,7 +589,8 @@ def _run_index(
             cleanup_paths = list((changed_files | deleted_files))
             if cleanup_paths:
                 t0 = time.time()
-                loader.delete_file_subgraph(cleanup_paths)
+                cleanup_ids = [f"file:{effective_repo_name}:{p}" for p in cleanup_paths]
+                loader.delete_file_subgraph(cleanup_ids)
                 say(f"[yellow]Cleaned subgraph for {len(cleanup_paths)} files[/]  [{time.time()-t0:.1f}s]")
         t0 = time.time()
         ls = loader.load(
@@ -580,6 +599,7 @@ def _run_index(
             ownership=ownership,
             touched_files=changed_files,
             edge_groups=edge_groups,
+            repo_name=effective_repo_name,
         )
         say(f"[bold green]✓[/] loaded in {time.time()-t0:.1f}s")
     finally:
@@ -771,6 +791,7 @@ def _extract_routes(
     repo: Path,
     index_obj: Index,
     ignore_filter: Optional[IgnoreFilter] = None,
+    repo_name: str = "default",
 ) -> None:
     """Best-effort ``<Route path="…" element={<X/>}/>`` detection."""
     for rel, result in index_obj.files_by_path.items():
@@ -789,7 +810,7 @@ def _extract_routes(
             path, comp = m.group(1), m.group(2)
             if ignore_filter is not None and ignore_filter.should_ignore_route(path):
                 continue
-            result.routes.append(RouteNode(path=path, component_name=comp, file=rel))
+            result.routes.append(RouteNode(path=path, component_name=comp, file=rel, repo=repo_name))
 
 
 def _strip_ignored_components(index_obj: Index, ignore_filter: IgnoreFilter) -> int:
@@ -1561,6 +1582,10 @@ def watch(
     uri: str = DEFAULT_URI,
     user: str = DEFAULT_USER,
     password: str = DEFAULT_PASS,
+    repo_name: Optional[str] = typer.Option(
+        None, "--repo-name",
+        help="Repository namespace (default: folder name).",
+    ),
 ) -> None:
     """Watch for file changes and rebuild the graph incrementally."""
     from .watch import run_watch
@@ -1569,6 +1594,7 @@ def watch(
         debounce=debounce,
         packages=packages,
         uri=uri, user=user, password=password,
+        repo_name=repo_name,
     ))
 
 

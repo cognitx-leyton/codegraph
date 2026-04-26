@@ -77,8 +77,9 @@ def test_wipe_scoped_collects_paths_and_delegates(monkeypatch, loader_with_fake_
     loader, session = loader_with_fake_driver
 
     paths = ["packages/server/src/a.ts", "packages/server/src/b.ts"]
+    file_ids = [f"file:default:{p}" for p in paths]
     session.run.side_effect = [
-        iter([_FakeRecord(path=p) for p in paths]),
+        iter([_FakeRecord(id=fid) for fid in file_ids]),
         iter([]),  # Package cleanup
     ]
 
@@ -90,7 +91,7 @@ def test_wipe_scoped_collects_paths_and_delegates(monkeypatch, loader_with_fake_
 
     deleted = loader.wipe_scoped(["server"])
     assert deleted == 2
-    assert delegate_calls == [paths]
+    assert delegate_calls == [file_ids]
 
 
 def test_wipe_scoped_select_uses_in_clause(loader_with_fake_driver):
@@ -111,7 +112,7 @@ def test_wipe_scoped_drops_packages_after_delete(monkeypatch, loader_with_fake_d
     loader, session = loader_with_fake_driver
 
     session.run.side_effect = [
-        iter([_FakeRecord(path="x.ts")]),
+        iter([_FakeRecord(id="file:default:x.ts")]),
         iter([]),
     ]
     monkeypatch.setattr(

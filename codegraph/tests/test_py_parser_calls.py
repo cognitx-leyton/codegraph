@@ -281,7 +281,7 @@ def outer():
     helper()
 """
     r = _parse_snippet(tmp_path, src)
-    assert any(mid == "func:snippet.py#outer" and t == "helper"
+    assert any(mid == "func:default:snippet.py#outer" and t == "helper"
                 for mid, _k, _n, t in r.method_calls)
 
 

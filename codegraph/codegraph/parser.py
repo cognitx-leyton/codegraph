@@ -109,6 +109,7 @@ class TsParser:
         rel_path: str,
         package: str,
         is_test: bool = False,
+        repo_name: str = "default",
     ) -> Optional[ParseResult]:
         try:
             src = path.read_bytes()
@@ -125,6 +126,7 @@ class TsParser:
             language="tsx" if is_tsx else "ts",
             loc=loc,
             is_test=is_test,
+            repo=repo_name,
         )
         result = ParseResult(file=file_node)
         walker = _Walker(src, result, is_tsx)
@@ -343,7 +345,8 @@ class _Walker:
             return
         name = self._text(name_node)
 
-        cls = ClassNode(name=name, file=self.result.file.path, is_abstract=abstract)
+        cls = ClassNode(name=name, file=self.result.file.path, is_abstract=abstract,
+                        repo=self.result.file.repo)
 
         # Decorators (class-level)
         for dec in decorators:
@@ -452,6 +455,7 @@ class _Walker:
             is_async=is_async,
             is_constructor=(mname == "constructor"),
             visibility=visibility,
+            repo=self.result.file.repo,
         )
         self.result.methods.append(method)
         self.result.edges.append(Edge(kind=HAS_METHOD, src_id=cls.id, dst_id=method.id))
@@ -492,6 +496,7 @@ class _Walker:
                 controller_class=cls.id,
                 file=self.result.file.path,
                 handler=mname,
+                repo=self.result.file.repo,
             )
             self.result.endpoints.append(ep)
             self.result.edges.append(Edge(kind=EXPOSES, src_id=cls.id, dst_id=ep.id))
@@ -506,6 +511,7 @@ class _Walker:
                 file=self.result.file.path,
                 resolver_class=cls.id,
                 handler=mname,
+                repo=self.result.file.repo,
             )
             self.result.gql_operations.append(op)
             self.result.edges.append(Edge(kind=RESOLVES, src_id=cls.id, dst_id=op.id))
@@ -825,7 +831,8 @@ class _Walker:
         if name_node is None:
             return
         name = self._text(name_node)
-        fn = FunctionNode(name=name, file=self.result.file.path, exported=exported)
+        fn = FunctionNode(name=name, file=self.result.file.path, exported=exported,
+                          repo=self.result.file.repo)
         body = node.child_by_field_name("body")
         if self.is_tsx and _is_pascal(name) and body is not None and _contains_jsx(body):
             fn.is_component = True
@@ -852,7 +859,8 @@ class _Walker:
 
             # Function / component
             if value.type in ("arrow_function", "function_expression"):
-                fn = FunctionNode(name=name, file=self.result.file.path, exported=exported)
+                fn = FunctionNode(name=name, file=self.result.file.path, exported=exported,
+                                  repo=self.result.file.repo)
                 body = value.child_by_field_name("body")
                 if self.is_tsx and _is_pascal(name):
                     if body is not None and (
@@ -877,6 +885,7 @@ class _Walker:
                         name=name,
                         file=self.result.file.path,
                         family=(callee_name == "atomFamily"),
+                        repo=self.result.file.repo,
                     )
                     self.result.atoms.append(atom)
                     self.result.edges.append(
@@ -950,6 +959,7 @@ class _Walker:
                                     name=atom_name,
                                     file=self.result.file.path,
                                     family=(cname == "atomFamily"),
+                                    repo=self.result.file.repo,
                                 ))
 
             # All string literals: check if URL-like, register as rest_call
@@ -1007,13 +1017,14 @@ class _Walker:
                         ep = EndpointNode(
                             method=http_m,
                             path=first_str,
-                            controller_class=f"file:{self.result.file.path}",
+                            controller_class=self.result.file.id,
                             file=self.result.file.path,
                             handler=fn.name,
+                            repo=self.result.file.repo,
                         )
                         self.result.endpoints.append(ep)
                         self.result.edges.append(
-                            Edge(kind=EXPOSES, src_id=f"file:{self.result.file.path}", dst_id=ep.id)
+                            Edge(kind=EXPOSES, src_id=self.result.file.id, dst_id=ep.id)
                         )
                         self.result.edges.append(
                             Edge(kind=HANDLES, src_id=fn.id, dst_id=ep.id)
@@ -1096,7 +1107,7 @@ class _Walker:
         if name_node is None:
             return
         name = self._text(name_node)
-        iface = InterfaceNode(name=name, file=self.result.file.path)
+        iface = InterfaceNode(name=name, file=self.result.file.path, repo=self.result.file.repo)
         self.result.interfaces.append(iface)
         self.result.edges.append(Edge(kind=DEFINES_IFACE, src_id=self.result.file.id, dst_id=iface.id))
 

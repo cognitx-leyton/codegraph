@@ -545,7 +545,8 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
         endpoint_patterns.append((_url_pattern_to_regex(ep.path), ep, ep_file))
 
     for rel, result in index.files_by_path.items():
-        fid = f"file:{rel}"
+        repo = result.file.repo
+        fid = result.file.id
 
         # -- Imports --
         for spec in result.imports:
@@ -554,10 +555,11 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
             if rr is not None:
                 target = rr.path
                 conf, score = _strategy_confidence(rr.strategy)
+                target_fid = f"file:{repo}:{target}"
                 edges.append(Edge(
                     kind=IMPORTS,
                     src_id=fid,
-                    dst_id=f"file:{target}",
+                    dst_id=target_fid,
                     props={"specifier": spec.specifier, "type_only": spec.type_only},
                     confidence=conf,
                     confidence_score=score,
@@ -572,7 +574,7 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
                     edges.append(Edge(
                         kind=IMPORTS_SYMBOL,
                         src_id=fid,
-                        dst_id=f"file:{target}",
+                        dst_id=target_fid,
                         props={"symbol": sym, "type_only": spec.type_only},
                         confidence=conf,
                         confidence_score=score,
@@ -592,16 +594,16 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
             if target:
                 edges.append(Edge(
                     kind=EXTENDS,
-                    src_id=f"class:{rel}#{cls_name}",
-                    dst_id=f"class:{target}#{parent}",
+                    src_id=f"class:{repo}:{rel}#{cls_name}",
+                    dst_id=f"class:{repo}:{target}#{parent}",
                 ))
         for cls_name, iface in result.class_implements:
             target = _find_class(rel, iface, index, resolver)
             if target:
                 edges.append(Edge(
                     kind=IMPLEMENTS,
-                    src_id=f"class:{rel}#{cls_name}",
-                    dst_id=f"class:{target}#{iface}",
+                    src_id=f"class:{repo}:{rel}#{cls_name}",
+                    dst_id=f"class:{repo}:{target}#{iface}",
                 ))
 
         # -- DI --
@@ -610,8 +612,8 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
             if target:
                 edges.append(Edge(
                     kind=INJECTS,
-                    src_id=f"class:{rel}#{cls_name}",
-                    dst_id=f"class:{target}#{injected}",
+                    src_id=f"class:{repo}:{rel}#{cls_name}",
+                    dst_id=f"class:{repo}:{target}#{injected}",
                 ))
 
         # -- Phase 2: TypeORM --
@@ -620,16 +622,16 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
             if target:
                 edges.append(Edge(
                     kind=REPOSITORY_OF,
-                    src_id=f"class:{rel}#{cls_name}",
-                    dst_id=f"class:{target}#{repo_target}",
+                    src_id=f"class:{repo}:{rel}#{cls_name}",
+                    dst_id=f"class:{repo}:{target}#{repo_target}",
                 ))
         for entity_name, kind, field_name, target_name in result.relations:
             target = _find_class(rel, target_name, index, resolver)
             if target:
                 edges.append(Edge(
                     kind=RELATES_TO,
-                    src_id=f"class:{rel}#{entity_name}",
-                    dst_id=f"class:{target}#{target_name}",
+                    src_id=f"class:{repo}:{rel}#{entity_name}",
+                    dst_id=f"class:{repo}:{target}#{target_name}",
                     props={"kind": kind, "field": field_name},
                 ))
 
@@ -641,7 +643,7 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
                     edges.append(Edge(
                         kind=RETURNS,
                         src_id=op.id,
-                        dst_id=f"class:{target}#{op.return_type}",
+                        dst_id=f"class:{repo}:{target}#{op.return_type}",
                     ))
 
         # -- Phase 3: REST calls → endpoints --
@@ -652,7 +654,7 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
                 if http_method and ep.method != http_method:
                     continue
                 if pattern.match(url_clean):
-                    src_id = _caller_id_for_fn(rel, caller_name, index)
+                    src_id = _caller_id_for_fn(rel, caller_name, index, repo=repo)
                     edges.append(Edge(
                         kind=CALLS_ENDPOINT,
                         src_id=src_id,
@@ -667,7 +669,7 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
             key = (op_type, op_name)
             ops = index.gql_operations.get(key, [])
             for op, op_file in ops:
-                src_id = _caller_id_for_fn(rel, caller_name, index)
+                src_id = _caller_id_for_fn(rel, caller_name, index, repo=repo)
                 edges.append(Edge(
                     kind=USES_OPERATION,
                     src_id=src_id,
@@ -680,11 +682,11 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
             # Figure out target class (super() takes a special path).
             if recv_kind == "super":
                 target_class_id = _resolve_super_target_class(
-                    rel, caller_mid, result, index, resolver
+                    rel, caller_mid, result, index, resolver, repo=repo
                 )
             else:
                 target_class_id = _resolve_call_target_class(
-                    rel, caller_mid, recv_kind, recv_name, index
+                    rel, caller_mid, recv_kind, recv_name, index, repo=repo
                 )
             if target_class_id is None:
                 # Bare function call — try resolving as a function
@@ -730,32 +732,32 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
             if target:
                 edges.append(Edge(
                     kind=PROVIDES,
-                    src_id=f"class:{rel}#{module_name}",
-                    dst_id=f"class:{target}#{provider_name}",
+                    src_id=f"class:{repo}:{rel}#{module_name}",
+                    dst_id=f"class:{repo}:{target}#{provider_name}",
                 ))
         for module_name, exported in result.module_exports:
             target = _find_class(rel, exported, index, resolver)
             if target:
                 edges.append(Edge(
                     kind=EXPORTS_PROVIDER,
-                    src_id=f"class:{rel}#{module_name}",
-                    dst_id=f"class:{target}#{exported}",
+                    src_id=f"class:{repo}:{rel}#{module_name}",
+                    dst_id=f"class:{repo}:{target}#{exported}",
                 ))
         for module_name, imp_module in result.module_imports:
             target = _find_class(rel, imp_module, index, resolver)
             if target:
                 edges.append(Edge(
                     kind=IMPORTS_MODULE,
-                    src_id=f"class:{rel}#{module_name}",
-                    dst_id=f"class:{target}#{imp_module}",
+                    src_id=f"class:{repo}:{rel}#{module_name}",
+                    dst_id=f"class:{repo}:{target}#{imp_module}",
                 ))
         for module_name, ctrl in result.module_controllers:
             target = _find_class(rel, ctrl, index, resolver)
             if target:
                 edges.append(Edge(
                     kind=DECLARES_CONTROLLER,
-                    src_id=f"class:{rel}#{module_name}",
-                    dst_id=f"class:{target}#{ctrl}",
+                    src_id=f"class:{repo}:{rel}#{module_name}",
+                    dst_id=f"class:{repo}:{target}#{ctrl}",
                 ))
 
         # -- JSX renders --
@@ -764,8 +766,8 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
             if target:
                 edges.append(Edge(
                     kind=RENDERS,
-                    src_id=f"func:{rel}#{component_name}",
-                    dst_id=f"func:{target}#{rendered}",
+                    src_id=f"func:{repo}:{rel}#{component_name}",
+                    dst_id=f"func:{repo}:{target}#{rendered}",
                     confidence="INFERRED",
                     confidence_score=0.8,
                 ))
@@ -774,7 +776,7 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
         for component_name, hook in result.hook_calls:
             edges.append(Edge(
                 kind=USES_HOOK,
-                src_id=f"func:{rel}#{component_name}",
+                src_id=f"func:{repo}:{rel}#{component_name}",
                 dst_id=f"hook:{hook}",
                 props={"hook": hook},
                 confidence="EXTRACTED",
@@ -815,17 +817,17 @@ def link_cross_file(index: Index, resolver: Resolver) -> tuple[list[Edge], list[
     return edges, edge_groups
 
 
-def _caller_id_for_fn(rel: str, caller_name: str, index: Index) -> str:
+def _caller_id_for_fn(rel: str, caller_name: str, index: Index, repo: str = "default") -> str:
     """Figure out whether caller_name is a :Function, :Method, or fall back to :File."""
     if caller_name and (rel, caller_name) in index.func_by_name_in_file:
-        return f"func:{rel}#{caller_name}"
+        return f"func:{repo}:{rel}#{caller_name}"
     # Scan methods in this file for matching name
     if caller_name:
         for (class_id, mname), _m in index.method_by_class_and_name.items():
-            if mname == caller_name and class_id.startswith(f"class:{rel}#"):
+            if mname == caller_name and class_id.startswith(f"class:{repo}:{rel}#"):
                 return f"method:{class_id}#{mname}"
     # Fallback: attribute to file
-    return f"file:{rel}"
+    return f"file:{repo}:{rel}"
 
 
 def _resolve_call_target_class(
@@ -834,9 +836,10 @@ def _resolve_call_target_class(
     recv_kind: str,
     recv_name: str,
     index: Index,
+    repo: str = "default",
 ) -> Optional[str]:
     """Figure out target class for a method call."""
-    # caller_mid format: method:class:{file}#{class_name}#{method}
+    # caller_mid format: method:class:<repo>:<file>#<class_name>#<method>
     if not caller_mid.startswith("method:class:"):
         return None
     class_id = caller_mid[len("method:"):].rsplit("#", 1)[0]
@@ -849,21 +852,17 @@ def _resolve_call_target_class(
         caller_result = index.files_by_path.get(importer)
         if caller_result is None:
             return None
-        owner_class = class_id.split("#", 1)[1] if "#" in class_id else ""
-        # Walk methods to find constructor params whose identifier == recv_name
-        # (We didn't store field→type mapping, but di_refs uses type; infer via field name heuristic
-        # by looking at constructor_params_json if we had them. For now fall back to name lookup.)
         # Name-only fallback:
         hits = index.class_name_to_files.get(_capitalize_guess(recv_name), [])
         if len(hits) == 1:
-            return f"class:{hits[0]}#{_capitalize_guess(recv_name)}"
+            return f"class:{repo}:{hits[0]}#{_capitalize_guess(recv_name)}"
         return None
 
     if recv_kind == "name":
         # Try the imported symbols: receiver_name could be a variable bound to a class
         hits = index.class_name_to_files.get(recv_name, [])
         if len(hits) == 1:
-            return f"class:{hits[0]}#{recv_name}"
+            return f"class:{repo}:{hits[0]}#{recv_name}"
     return None
 
 
@@ -873,12 +872,13 @@ def _resolve_super_target_class(
     result: ParseResult,
     index: Index,
     resolver: Resolver,
+    repo: str = "default",
 ) -> Optional[str]:
     """Resolve the target class for a ``super().foo()`` call.
 
     Walks the enclosing class's first parent in :attr:`ParseResult.class_extends`
-    and returns the parent's ``class:{file}#{name}`` id, or ``None`` if the
-    parent isn't in the indexed graph (external bases like ``Exception`` /
+    and returns the parent's ``class:<repo>:<file>#<name>`` id, or ``None`` if
+    the parent isn't in the indexed graph (external bases like ``Exception`` /
     ``Enum`` / ``ABC`` fall through).
     """
     if not caller_mid.startswith("method:class:"):
@@ -893,7 +893,7 @@ def _resolve_super_target_class(
     target_file = _find_class(importer, parents[0], index, resolver)
     if target_file is None:
         return None
-    return f"class:{target_file}#{parents[0]}"
+    return f"class:{repo}:{target_file}#{parents[0]}"
 
 
 def _capitalize_guess(name: str) -> str:

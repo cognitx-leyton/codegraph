@@ -56,7 +56,7 @@ def test_python_test_prefix_pairs(captured_runs):
     })
     loader._write_test_edges(session=None, index=idx, stats=_Stats())
     rows = _tests_rows(captured_runs)
-    assert rows == [{"test": "pkg/test_foo.py", "peer": "pkg/foo.py"}]
+    assert rows == [{"test_id": "file:default:pkg/test_foo.py", "peer_id": "file:default:pkg/foo.py"}]
 
 
 def test_python_test_trailing_pairs(captured_runs):
@@ -67,7 +67,7 @@ def test_python_test_trailing_pairs(captured_runs):
     })
     loader._write_test_edges(session=None, index=idx, stats=_Stats())
     rows = _tests_rows(captured_runs)
-    assert rows == [{"test": "pkg/foo_test.py", "peer": "pkg/foo.py"}]
+    assert rows == [{"test_id": "file:default:pkg/foo_test.py", "peer_id": "file:default:pkg/foo.py"}]
 
 
 def test_conftest_does_not_pair(captured_runs):
@@ -107,4 +107,4 @@ def test_ts_pairing_still_works(captured_runs):
     })
     loader._write_test_edges(session=None, index=idx, stats=_Stats())
     rows = _tests_rows(captured_runs)
-    assert rows == [{"test": "pkg/foo.spec.ts", "peer": "pkg/foo.ts"}]
+    assert rows == [{"test_id": "file:default:pkg/foo.spec.ts", "peer_id": "file:default:pkg/foo.ts"}]

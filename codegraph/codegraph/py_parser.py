@@ -121,6 +121,7 @@ class PyParser:
         rel_path: str,
         package: str,
         is_test: bool = False,
+        repo_name: str = "default",
     ) -> Optional[ParseResult]:
         """Parse a single ``.py`` file into a :class:`ParseResult`.
 
@@ -142,6 +143,7 @@ class PyParser:
             language="py",
             loc=loc,
             is_test=is_test,
+            repo=repo_name,
         )
         result = ParseResult(file=file_node)
         walker = _PyWalker(src, result)
@@ -334,7 +336,7 @@ class _PyWalker:
             return
         name = self._text(name_node)
         rel = self.result.file.path
-        cls = ClassNode(name=name, file=rel, is_abstract=False)
+        cls = ClassNode(name=name, file=rel, is_abstract=False, repo=self.result.file.repo)
         self.result.classes.append(cls)
 
         # DEFINES_CLASS edge
@@ -565,6 +567,7 @@ class _PyWalker:
             return_type=self._extract_return_type(node),
             params_json=self._extract_params_json(node),
             docstring=self._extract_docstring(node),
+            repo=self.result.file.repo,
         )
         self.result.methods.append(method)
 
@@ -604,6 +607,7 @@ class _PyWalker:
                 controller_class=cls.id,
                 file=self.result.file.path,
                 handler=name,
+                repo=self.result.file.repo,
             )
             self.result.endpoints.append(ep)
             self.result.edges.append(Edge(kind=EXPOSES, src_id=cls.id, dst_id=ep.id))
@@ -718,6 +722,7 @@ class _PyWalker:
             docstring=self._extract_docstring(node),
             return_type=self._extract_return_type(node),
             params_json=self._extract_params_json(node),
+            repo=self.result.file.repo,
         )
         self.result.functions.append(fn)
 
@@ -754,6 +759,7 @@ class _PyWalker:
                 controller_class=self.result.file.id,
                 file=self.result.file.path,
                 handler=name,
+                repo=self.result.file.repo,
             )
             self.result.endpoints.append(ep)
             self.result.edges.append(Edge(kind=EXPOSES, src_id=self.result.file.id, dst_id=ep.id))

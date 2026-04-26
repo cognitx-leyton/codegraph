@@ -40,10 +40,10 @@ def captured_runs(monkeypatch):
 def test_decorated_by_partitions_function_src_ids(captured_runs):
     """func:-prefixed DECORATED_BY edges must reach a Function MERGE."""
     edges = [
-        Edge(kind=DECORATED_BY, src_id="class:a.py#A", dst_id="dec:dataclass"),
-        Edge(kind=DECORATED_BY, src_id="func:b.py#helper", dst_id="dec:staticmethod"),
-        Edge(kind=DECORATED_BY, src_id="func:c.py#main", dst_id="dec:app.command()"),
-        Edge(kind=DECORATED_BY, src_id="method:class:d.py#D#run", dst_id="dec:property"),
+        Edge(kind=DECORATED_BY, src_id="class:default:a.py#A", dst_id="dec:dataclass"),
+        Edge(kind=DECORATED_BY, src_id="func:default:b.py#helper", dst_id="dec:staticmethod"),
+        Edge(kind=DECORATED_BY, src_id="func:default:c.py#main", dst_id="dec:app.command()"),
+        Edge(kind=DECORATED_BY, src_id="method:class:default:d.py#D#run", dst_id="dec:property"),
     ]
     stats = _Stats()
 
@@ -59,7 +59,7 @@ def test_decorated_by_partitions_function_src_ids(captured_runs):
     rows = func_runs[0][1]
     assert len(rows) == 2
     src_ids = {r["src"] for r in rows}
-    assert src_ids == {"func:b.py#helper", "func:c.py#main"}
+    assert src_ids == {"func:default:b.py#helper", "func:default:c.py#main"}
 
     # Stats total covers all three buckets (class=1, func=2, method=1).
     assert stats.edges[DECORATED_BY] == 4
@@ -161,11 +161,11 @@ def _make_index(endpoints, file_path="/tmp/app.py"):
 
 
 def test_load_file_level_endpoint_exposes(monkeypatch, captured_runs):
-    """File-level endpoints must MERGE EXPOSES via File {path:}, not Class {id:}."""
+    """File-level endpoints must MERGE EXPOSES via File {id:}, not Class {id:}."""
     ldr = _make_loader(monkeypatch)
     ep = EndpointNode(
         method="GET", path="/",
-        controller_class="file:/tmp/app.py",
+        controller_class="file:default:/tmp/app.py",
         file="/tmp/app.py", handler="index",
     )
     idx = _make_index([ep])
@@ -174,12 +174,12 @@ def test_load_file_level_endpoint_exposes(monkeypatch, captured_runs):
 
     file_runs = [
         (cypher, rows) for cypher, rows in captured_runs
-        if "File {path: r.fpath}" in cypher and "EXPOSES" in cypher
+        if "File {id: r.file_id}" in cypher and "EXPOSES" in cypher
     ]
     assert len(file_runs) == 1, "expected one file-level EXPOSES batch"
     rows = file_runs[0][1]
     assert len(rows) == 1
-    assert rows[0]["fpath"] == "/tmp/app.py"
+    assert rows[0]["file_id"] == "file:default:/tmp/app.py"
 
     # Must NOT appear in the class-level batch
     class_runs = [
@@ -195,7 +195,7 @@ def test_load_class_level_endpoint_exposes(monkeypatch, captured_runs):
     ldr = _make_loader(monkeypatch)
     ep = EndpointNode(
         method="POST", path="/items",
-        controller_class="class:/tmp/app.py#ItemController",
+        controller_class="class:default:/tmp/app.py#ItemController",
         file="/tmp/app.py", handler="create",
     )
     idx = _make_index([ep])
@@ -209,12 +209,12 @@ def test_load_class_level_endpoint_exposes(monkeypatch, captured_runs):
     assert len(class_runs) == 1, "expected one class-level EXPOSES batch"
     rows = class_runs[0][1]
     assert len(rows) == 1
-    assert rows[0]["cls"] == "class:/tmp/app.py#ItemController"
+    assert rows[0]["cls"] == "class:default:/tmp/app.py#ItemController"
 
     # Must NOT appear in the file-level batch
     file_runs = [
         (cypher, rows) for cypher, rows in captured_runs
-        if "File {path: r.fpath}" in cypher and "EXPOSES" in cypher
+        if "File {id: r.file_id}" in cypher and "EXPOSES" in cypher
     ]
     for _, rows in file_runs:
         assert len(rows) == 0
@@ -230,8 +230,8 @@ def test_calls_edges_carry_confidence(captured_runs):
     edges = [
         Edge(
             kind=CALLS_KIND,
-            src_id="method:class:a.py#A#run",
-            dst_id="method:class:a.py#A#foo",
+            src_id="method:class:default:a.py#A#run",
+            dst_id="method:class:default:a.py#A#foo",
             props={"resolution": "typed"},
             confidence="EXTRACTED",
             confidence_score=1.0,
@@ -256,8 +256,8 @@ def test_imports_edges_carry_confidence(captured_runs):
     edges = [
         Edge(
             kind="IMPORTS",
-            src_id="file:a.py",
-            dst_id="file:b.py",
+            src_id="file:default:a.py",
+            dst_id="file:default:b.py",
             props={"specifier": ".b", "type_only": False},
             confidence="INFERRED",
             confidence_score=0.8,

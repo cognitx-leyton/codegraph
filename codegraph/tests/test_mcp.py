@@ -1022,7 +1022,7 @@ def test_reindex_file_looks_up_package_from_graph(monkeypatch, tmp_path):
     # The first query should be the package lookup
     first_cypher, first_params = driver.session_obj.calls[0]
     assert "f.package AS pkg" in first_cypher
-    assert first_params["path"] == str(py_file)
+    assert first_params["fid"] == f"file:default:{py_file}"
 
 
 def test_reindex_file_happy_path(monkeypatch, tmp_path):
@@ -1258,8 +1258,8 @@ def test_reindex_file_structural_edges_not_doubled(monkeypatch, tmp_path):
 
 
 def test_reindex_file_file_level_exposes_edge(monkeypatch, tmp_path):
-    """File-level endpoints (controller_class='file:<path>') get EXPOSES edges
-    written via MATCH (f:File {path: ...}), not MATCH (c:Class ...)."""
+    """File-level endpoints (controller_class='file:<repo>:<path>') get EXPOSES edges
+    written via MATCH (f:File {id: ...}), not MATCH (c:Class ...)."""
     monkeypatch.setattr(mcp_mod, "_allow_write", True)
 
     py_file = tmp_path / "app.py"
@@ -1272,7 +1272,7 @@ def test_reindex_file_file_level_exposes_edge(monkeypatch, tmp_path):
         EXPOSES, Edge, FileNode, FunctionNode, EndpointNode, ParseResult,
     )
 
-    file_id = f"file:{py_file}"
+    file_id = f"file:default:{py_file}"
     ep = EndpointNode(
         method="GET", path="/",
         controller_class=file_id,
@@ -1296,7 +1296,7 @@ def test_reindex_file_file_level_exposes_edge(monkeypatch, tmp_path):
         if "EXPOSES" in cypher
     ]
     assert len(exposes_calls) >= 1
-    file_exposes = [c for c, _ in exposes_calls if "File {path:" in c]
+    file_exposes = [c for c, _ in exposes_calls if "File {id:" in c]
     class_exposes = [c for c, _ in exposes_calls if "Class {id:" in c]
     assert len(file_exposes) == 1
     assert len(class_exposes) == 0

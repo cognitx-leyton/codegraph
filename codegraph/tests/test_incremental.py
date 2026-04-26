@@ -137,7 +137,7 @@ def test_delete_subgraph_emits_correct_cypher():
     ldr.driver = MagicMock()
     ldr.driver.session.return_value = FakeCtx()
 
-    count = ldr.delete_file_subgraph(["a.py", "b.py"])
+    count = ldr.delete_file_subgraph(["file:default:a.py", "file:default:b.py"])
     assert count == 2
 
     # Should have been called 3 times (class grandchildren, owned children,
@@ -145,11 +145,11 @@ def test_delete_subgraph_emits_correct_cypher():
     calls = session_mock.run.call_args_list
     assert len(calls) == 3
 
-    # Verify all calls received rows with both paths
+    # Verify all calls received rows with both file IDs
     for call in calls:
         rows = call.kwargs.get("rows") or call[1].get("rows", [])
-        paths = {r["path"] for r in rows}
-        assert paths == {"a.py", "b.py"}
+        ids = {r["id"] for r in rows}
+        assert ids == {"file:default:a.py", "file:default:b.py"}
 
 
 def test_delete_subgraph_empty_paths_is_noop():
@@ -203,7 +203,7 @@ def test_load_touched_files_filters_nodes(captured_runs):
     # Find the File MERGE call — only a.py should be in the rows
     file_merges = [
         (cy, rows) for cy, rows in captured_runs
-        if "MERGE (n:File {path: r.path})" in cy
+        if "MERGE (n:File {id: r.id})" in cy
     ]
     assert len(file_merges) == 1
     file_paths = {r["path"] for r in file_merges[0][1]}
@@ -242,7 +242,7 @@ def test_load_touched_files_none_loads_all(captured_runs):
 
     file_merges = [
         (cy, rows) for cy, rows in captured_runs
-        if "MERGE (n:File {path: r.path})" in cy
+        if "MERGE (n:File {id: r.id})" in cy
     ]
     assert len(file_merges) == 1
     file_paths = {r["path"] for r in file_merges[0][1]}
@@ -258,13 +258,13 @@ def test_load_touched_files_filters_edges(captured_runs):
 
     edges = [
         # a.py → b.py — a.py is touched, should be included
-        Edge(kind=IMPORTS, src_id="file:a.py", dst_id="file:b.py",
+        Edge(kind=IMPORTS, src_id="file:default:a.py", dst_id="file:default:b.py",
              props={"specifier": "b", "type_only": False}),
         # b.py → c.py — neither is touched, should be excluded
-        Edge(kind=IMPORTS, src_id="file:b.py", dst_id="file:c.py",
+        Edge(kind=IMPORTS, src_id="file:default:b.py", dst_id="file:default:c.py",
              props={"specifier": "c", "type_only": False}),
         # c.py → a.py — a.py is touched (dst), should be included
-        Edge(kind=IMPORTS_SYMBOL, src_id="file:c.py", dst_id="file:a.py",
+        Edge(kind=IMPORTS_SYMBOL, src_id="file:default:c.py", dst_id="file:default:a.py",
              props={"symbol": "X", "type_only": False}),
     ]
 
@@ -290,7 +290,7 @@ def test_load_touched_files_filters_edges(captured_runs):
     assert len(import_merges) == 1
     # Only the a.py → b.py edge, NOT b.py → c.py
     assert len(import_merges[0][1]) == 1
-    assert import_merges[0][1][0]["src"] == "a.py"
+    assert import_merges[0][1][0]["src"] == "file:default:a.py"
 
     # IMPORTS_SYMBOL — c.py → a.py should be included
     sym_merges = [
@@ -299,7 +299,7 @@ def test_load_touched_files_filters_edges(captured_runs):
     ]
     assert len(sym_merges) == 1
     assert len(sym_merges[0][1]) == 1
-    assert sym_merges[0][1][0]["dst"] == "a.py"
+    assert sym_merges[0][1][0]["dst"] == "file:default:a.py"
 
 
 def test_load_touched_files_always_writes_packages(captured_runs):
@@ -328,7 +328,7 @@ def test_load_touched_files_always_writes_packages(captured_runs):
     # Package MERGE should have been called
     pkg_merges = [
         (cy, rows) for cy, rows in captured_runs
-        if "MERGE (p:Package {name: r.name})" in cy
+        if "MERGE (p:Package {id: r.id})" in cy
     ]
     assert len(pkg_merges) == 1
     assert pkg_merges[0][1][0]["name"] == "mypkg"
@@ -363,9 +363,9 @@ def test_load_touched_files_filters_per_file_extras(captured_runs):
         if "READS_ENV" in cy
     ]
     assert len(env_merges) == 1
-    env_files = {r["file"] for r in env_merges[0][1]}
+    env_file_ids = {r["file_id"] for r in env_merges[0][1]}
     env_names = {r["env"] for r in env_merges[0][1]}
-    assert env_files == {"a.py"}
+    assert env_file_ids == {"file:default:a.py"}
     assert env_names == {"DB_URL"}
 
 
@@ -417,14 +417,14 @@ def test_per_file_extras_atom_stats_use_len_not_db_count(captured_runs):
 
 
 @pytest.mark.parametrize("node_id,expected", [
-    ("file:codegraph/cli.py", "codegraph/cli.py"),
-    ("class:codegraph/cli.py#Foo", "codegraph/cli.py"),
-    ("func:codegraph/cli.py#bar", "codegraph/cli.py"),
-    ("method:class:codegraph/cli.py#Cls#run", "codegraph/cli.py"),
-    ("atom:codegraph/cli.py#myAtom", "codegraph/cli.py"),
-    ("interface:codegraph/cli.py#IFoo", "codegraph/cli.py"),
-    ("endpoint:GET:/api@codegraph/cli.py#handler", "codegraph/cli.py"),
-    ("gqlop:query:Users@codegraph/cli.py#resolve", "codegraph/cli.py"),
+    ("file:default:codegraph/cli.py", "codegraph/cli.py"),
+    ("class:default:codegraph/cli.py#Foo", "codegraph/cli.py"),
+    ("func:default:codegraph/cli.py#bar", "codegraph/cli.py"),
+    ("method:class:default:codegraph/cli.py#Cls#run", "codegraph/cli.py"),
+    ("atom:default:codegraph/cli.py#myAtom", "codegraph/cli.py"),
+    ("interface:default:codegraph/cli.py#IFoo", "codegraph/cli.py"),
+    ("endpoint:GET:/api@default:codegraph/cli.py#handler", "codegraph/cli.py"),
+    ("gqlop:query:Users@default:codegraph/cli.py#resolve", "codegraph/cli.py"),
 ])
 def test_file_from_id_extracts_path(node_id, expected):
     assert _file_from_id(node_id) == expected
@@ -449,9 +449,9 @@ def test_load_touched_files_filters_columns(captured_runs):
     fn = FileNode(path="a.py", package="p", language="py", loc=10)
     pr = ParseResult(file=fn)
     # Valid column in a touched file
-    pr.columns.append(ColumnNode(entity_id="class:a.py#Foo", name="id", type="int"))
+    pr.columns.append(ColumnNode(entity_id="class:default:a.py#Foo", name="id", type="int"))
     # Valid column in an untouched file
-    pr.columns.append(ColumnNode(entity_id="class:b.py#Bar", name="id", type="int"))
+    pr.columns.append(ColumnNode(entity_id="class:default:b.py#Bar", name="id", type="int"))
     # Malformed entity_id (no colon prefix) — should be excluded, not crash
     pr.columns.append(ColumnNode(entity_id="malformed_no_colon", name="bad", type="str"))
     idx.add(pr)
@@ -478,7 +478,7 @@ def test_load_touched_files_filters_columns(captured_runs):
     ]
     assert len(col_merges) == 1
     col_ids = {r["entity_id"] for r in col_merges[0][1]}
-    assert col_ids == {"class:a.py#Foo"}
+    assert col_ids == {"class:default:a.py#Foo"}
 
 
 # ── Test group 6: --update cache integration ───────────────────────

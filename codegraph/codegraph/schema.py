@@ -32,10 +32,11 @@ class PackageNode:
     build_tool: Optional[str] = None
     package_manager: Optional[str] = None
     confidence: float = 0.0
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"package:{self.name}"
+        return f"package:{self.repo}:{self.name}"
 
     @classmethod
     def from_framework_info(cls, name: str, info: "FrameworkInfo") -> "PackageNode":
@@ -67,10 +68,11 @@ class FileNode:
     is_entity: bool = False
     is_resolver: bool = False
     is_test: bool = False
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"file:{self.path}"
+        return f"file:{self.repo}:{self.path}"
 
 
 @dataclass
@@ -85,10 +87,11 @@ class ClassNode:
     is_abstract: bool = False
     base_path: str = ""
     table_name: str = ""  # for entities
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"class:{self.file}#{self.name}"
+        return f"class:{self.repo}:{self.file}#{self.name}"
 
 
 @dataclass
@@ -100,20 +103,22 @@ class FunctionNode:
     docstring: str = ""
     return_type: str = ""
     params_json: str = "[]"
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"func:{self.file}#{self.name}"
+        return f"func:{self.repo}:{self.file}#{self.name}"
 
 
 @dataclass
 class InterfaceNode:
     name: str
     file: str
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"interface:{self.file}#{self.name}"
+        return f"interface:{self.repo}:{self.file}#{self.name}"
 
 
 @dataclass
@@ -128,6 +133,7 @@ class MethodNode:
     return_type: str = ""
     params_json: str = "[]"
     docstring: str = ""
+    repo: str = "default"
 
     @property
     def id(self) -> str:
@@ -141,10 +147,11 @@ class EndpointNode:
     controller_class: str
     file: str
     handler: str
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"endpoint:{self.method}:{self.path}@{self.file}#{self.handler}"
+        return f"endpoint:{self.method}:{self.path}@{self.repo}:{self.file}#{self.handler}"
 
 
 @dataclass
@@ -170,10 +177,11 @@ class GraphQLOperationNode:
     file: str
     resolver_class: str   # class id
     handler: str          # method name
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"gqlop:{self.op_type}:{self.name}@{self.file}#{self.handler}"
+        return f"gqlop:{self.op_type}:{self.name}@{self.repo}:{self.file}#{self.handler}"
 
 
 @dataclass
@@ -190,10 +198,11 @@ class AtomNode:
     name: str
     file: str
     family: bool = False
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"atom:{self.file}#{self.name}"
+        return f"atom:{self.repo}:{self.file}#{self.name}"
 
 
 @dataclass
@@ -210,10 +219,11 @@ class RouteNode:
     path: str
     component_name: str
     file: str
+    repo: str = "default"
 
     @property
     def id(self) -> str:
-        return f"route:{self.path}@{self.file}"
+        return f"route:{self.path}@{self.repo}:{self.file}"
 
 
 @dataclass

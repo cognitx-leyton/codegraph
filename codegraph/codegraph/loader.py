@@ -64,41 +64,58 @@ log = logging.getLogger(__name__)
 BATCH = 1000
 
 # Prefixes that encode a file path as ``<prefix>:<path>#<rest>``.
-_FILE_BEARING_PREFIXES = ("file:", "class:", "func:", "method:", "endpoint:", "gqlop:", "atom:", "interface:")
+_FILE_BEARING_PREFIXES = ("file:", "class:", "func:", "method:", "endpoint:", "gqlop:", "atom:", "interface:", "route:")
 
 
 def _file_from_id(node_id: str) -> str | None:
     """Extract the file path embedded in a node ID, or ``None``.
 
-    IDs follow ``<prefix>:<path>#<name>`` (class, func, method, …) or
-    ``<prefix>:<path>`` (file). Singletons like ``hook:``, ``external:``,
-    ``dec:`` don't encode a file path — return ``None`` for those.
+    IDs follow ``<prefix>:<repo>:<path>#<name>`` (class, func, …) or
+    ``<prefix>:<repo>:<path>`` (file). Singletons like ``hook:``,
+    ``external:``, ``dec:`` don't encode a file path — return ``None``.
 
     Special cases:
-    - ``method:class:<path>#<cls>#<method>`` — nested ``class:`` prefix.
-    - ``endpoint:<method>:<path>@<file>#<handler>`` — file is after ``@``.
-    - ``gqlop:<type>:<name>@<file>#<handler>`` — file is after ``@``.
+    - ``method:class:<repo>:<path>#<cls>#<method>`` — nested ``class:`` prefix.
+    - ``endpoint:<method>:<route>@<repo>:<file>#<handler>`` — file after ``@``.
+    - ``gqlop:<type>:<name>@<repo>:<file>#<handler>`` — file after ``@``.
     """
     for pfx in _FILE_BEARING_PREFIXES:
         if node_id.startswith(pfx):
             rest = node_id[len(pfx):]
-            # ``method:class:<path>#<cls>#<method>``
+            # ``method:class:<repo>:<path>#<cls>#<method>``
             if rest.startswith("class:"):
                 rest = rest[len("class:"):]
+                # rest = "<repo>:<path>#<cls>#<method>"
+                repo_rest = rest.split(":", 1)
+                if len(repo_rest) == 2:
+                    return repo_rest[1].split("#", 1)[0]
                 return rest.split("#", 1)[0]
-            # ``endpoint:`` and ``gqlop:`` embed the file after ``@``
-            if pfx in ("endpoint:", "gqlop:"):
+            # ``endpoint:``, ``gqlop:``, and ``route:`` embed the file after ``@``
+            if pfx in ("endpoint:", "gqlop:", "route:"):
                 at_idx = rest.find("@")
                 if at_idx >= 0:
                     after_at = rest[at_idx + 1:]
+                    # after_at = "<repo>:<file>#<handler>"
+                    repo_rest = after_at.split(":", 1)
+                    if len(repo_rest) == 2:
+                        return repo_rest[1].split("#", 1)[0]
                     return after_at.split("#", 1)[0]
                 return None
+            # Standard: "<repo>:<path>" or "<repo>:<path>#<name>"
+            repo_rest = rest.split(":", 1)
+            if len(repo_rest) == 2:
+                return repo_rest[1].split("#", 1)[0]
             return rest.split("#", 1)[0]
     return None
 
 
+_MIGRATIONS = [
+    "DROP CONSTRAINT file_path IF EXISTS",
+    "DROP CONSTRAINT package_name IF EXISTS",
+]
+
 _CONSTRAINTS = [
-    "CREATE CONSTRAINT file_path IF NOT EXISTS FOR (n:File) REQUIRE n.path IS UNIQUE",
+    "CREATE CONSTRAINT file_id IF NOT EXISTS FOR (n:File) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT class_id IF NOT EXISTS FOR (n:Class) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT func_id IF NOT EXISTS FOR (n:Function) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT method_id IF NOT EXISTS FOR (n:Method) REQUIRE n.id IS UNIQUE",
@@ -115,7 +132,7 @@ _CONSTRAINTS = [
     "CREATE CONSTRAINT author_email IF NOT EXISTS FOR (n:Author) REQUIRE n.email IS UNIQUE",
     "CREATE CONSTRAINT team_name IF NOT EXISTS FOR (n:Team) REQUIRE n.name IS UNIQUE",
     "CREATE CONSTRAINT route_id IF NOT EXISTS FOR (n:Route) REQUIRE n.id IS UNIQUE",
-    "CREATE CONSTRAINT package_name IF NOT EXISTS FOR (n:Package) REQUIRE n.name IS UNIQUE",
+    "CREATE CONSTRAINT package_id IF NOT EXISTS FOR (n:Package) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT edgegroup_id IF NOT EXISTS FOR (n:EdgeGroup) REQUIRE n.id IS UNIQUE",
 ]
 
@@ -123,7 +140,9 @@ _INDEXES = [
     "CREATE INDEX class_name IF NOT EXISTS FOR (n:Class) ON (n.name)",
     "CREATE INDEX func_name IF NOT EXISTS FOR (n:Function) ON (n.name)",
     "CREATE INDEX method_name IF NOT EXISTS FOR (n:Method) ON (n.name)",
+    "CREATE INDEX file_path IF NOT EXISTS FOR (n:File) ON (n.path)",
     "CREATE INDEX file_package IF NOT EXISTS FOR (n:File) ON (n.package)",
+    "CREATE INDEX file_repo IF NOT EXISTS FOR (n:File) ON (n.repo)",
     "CREATE INDEX endpoint_path IF NOT EXISTS FOR (n:Endpoint) ON (n.path)",
     "CREATE INDEX class_file IF NOT EXISTS FOR (n:Class) ON (n.file)",
     "CREATE INDEX gqlop_name IF NOT EXISTS FOR (n:GraphQLOperation) ON (n.name)",
@@ -160,15 +179,15 @@ class Neo4jLoader:
 
     def init_schema(self) -> None:
         with self.driver.session(database=self.database) as s:
-            for stmt in _CONSTRAINTS + _INDEXES:
+            for stmt in _MIGRATIONS + _CONSTRAINTS + _INDEXES:
                 s.run(stmt)
 
     def wipe(self) -> None:
         with self.driver.session(database=self.database) as s:
             s.run("MATCH (n) DETACH DELETE n")
 
-    def wipe_scoped(self, packages: list[str]) -> int:
-        """Delete every :File whose ``package`` is in *packages* and all owned children.
+    def wipe_scoped(self, packages: list[str], repo: str = "default") -> int:
+        """Delete every :File whose ``package`` is in *packages* and ``repo`` matches, plus all children.
 
         The shared-Neo4j model — every repo on the machine indexes into one
         ``codegraph-neo4j`` instance — makes a global ``MATCH (n) DETACH
@@ -177,34 +196,30 @@ class Neo4jLoader:
         Standalone ``codegraph wipe`` keeps the global wipe (explicit user
         intent for a clean slate).
 
-        Implementation: collect ``:File.path`` values where
-        ``f.package IN $packages``, then delegate to
-        :meth:`delete_file_subgraph` so the proven 3-step cascade does the
-        actual delete. Also drops the matching ``:Package`` nodes (re-index
-        will MERGE them back) to keep ``stats`` accurate.
-
         Returns the number of file subgraphs deleted.
         """
         if not packages:
             return 0
         with self.driver.session(database=self.database) as s:
-            paths_result = s.run(
-                "MATCH (f:File) WHERE f.package IN $packages RETURN f.path AS path",
-                packages=packages,
+            ids_result = s.run(
+                "MATCH (f:File) WHERE f.package IN $packages AND f.repo = $repo "
+                "RETURN f.id AS id",
+                packages=packages, repo=repo,
             )
-            paths = [row["path"] for row in paths_result]
-        deleted = self.delete_file_subgraph(paths) if paths else 0
-        # Drop orphaned :Package nodes for the wiped packages — load() will
-        # re-MERGE them with fresh framework metadata on the next index.
+            file_ids = [row["id"] for row in ids_result]
+        deleted = self.delete_file_subgraph(file_ids) if file_ids else 0
+        # Drop orphaned :Package nodes for the wiped packages/repo — load()
+        # will re-MERGE them with fresh framework metadata on the next index.
         with self.driver.session(database=self.database) as s:
             s.run(
-                "MATCH (p:Package) WHERE p.name IN $packages DETACH DELETE p",
-                packages=packages,
+                "MATCH (p:Package) WHERE p.name IN $packages AND p.repo = $repo "
+                "DETACH DELETE p",
+                packages=packages, repo=repo,
             )
         return deleted
 
-    def delete_file_subgraph(self, paths: list[str]) -> int:
-        """Delete :File nodes for *paths* and all owned children.
+    def delete_file_subgraph(self, file_ids: list[str]) -> int:
+        """Delete :File nodes by *file_ids* and all owned children.
 
         Uses a 3-step DETACH DELETE cascade that is resilient to schema
         changes (new relationship types are handled automatically):
@@ -214,34 +229,34 @@ class Neo4jLoader:
         3. File nodes themselves (DETACH DELETE auto-removes IMPORTS, etc.)
 
         Used by incremental re-indexing (``--since``) to clean up stale data
-        before re-loading touched files.  Returns the number of paths processed.
+        before re-loading touched files.  Returns the number of IDs processed.
         """
-        if not paths:
+        if not file_ids:
             return 0
-        rows = [dict(path=p) for p in paths]
+        rows = [dict(id=fid) for fid in file_ids]
         with self.driver.session(database=self.database) as s:
             # 1. Grandchildren of owned classes (Methods, Endpoints, GQL ops,
             #    Columns, etc.) — excludes Class (cross-file EXTENDS/INJECTS)
             #    and Decorator (shared singletons).
             _run(s, """
                 UNWIND $rows AS r
-                MATCH (f:File {path: r.path})-[:DEFINES_CLASS]->(c:Class)-->(child)
+                MATCH (f:File {id: r.id})-[:DEFINES_CLASS]->(c:Class)-->(child)
                 WHERE NOT child:Class AND NOT child:Decorator
                 DETACH DELETE child
             """, rows)
             # 2. Direct owned children (Classes, Functions, Interfaces, Atoms)
             _run(s, """
                 UNWIND $rows AS r
-                MATCH (f:File {path: r.path})-[:DEFINES_CLASS|DEFINES_FUNC|DEFINES_IFACE|DEFINES_ATOM]->(child)
+                MATCH (f:File {id: r.id})-[:DEFINES_CLASS|DEFINES_FUNC|DEFINES_IFACE|DEFINES_ATOM]->(child)
                 DETACH DELETE child
             """, rows)
             # 3. File nodes (DETACH DELETE auto-removes IMPORTS, BELONGS_TO, etc.)
             _run(s, """
                 UNWIND $rows AS r
-                MATCH (f:File {path: r.path})
+                MATCH (f:File {id: r.id})
                 DETACH DELETE f
             """, rows)
-        return len(paths)
+        return len(file_ids)
 
     def load(
         self,
@@ -250,6 +265,7 @@ class Neo4jLoader:
         ownership: dict | None = None,
         touched_files: set[str] | None = None,
         edge_groups: list[EdgeGroupNode] | None = None,
+        repo_name: str = "default",
     ) -> LoadStats:
         stats = LoadStats()
         files = [r.file for r in index.files_by_path.values()]
@@ -311,8 +327,10 @@ class Neo4jLoader:
             # ── Files ─────────────────────────────────────────────
             _run(s, """
                 UNWIND $rows AS r
-                MERGE (n:File {path: r.path})
-                SET n.package = r.package,
+                MERGE (n:File {id: r.id})
+                SET n.path = r.path,
+                    n.repo = r.repo,
+                    n.package = r.package,
                     n.language = r.language,
                     n.loc = r.loc,
                     n.is_controller = r.is_controller,
@@ -323,7 +341,8 @@ class Neo4jLoader:
                     n.is_resolver = r.is_resolver,
                     n.is_test = r.is_test
             """, [
-                dict(path=f.path, package=f.package, language=f.language, loc=f.loc,
+                dict(id=f.id, path=f.path, repo=f.repo, package=f.package,
+                     language=f.language, loc=f.loc,
                      is_controller=f.is_controller, is_injectable=f.is_injectable,
                      is_module=f.is_module, is_component=f.is_component,
                      is_entity=f.is_entity, is_resolver=f.is_resolver, is_test=f.is_test)
@@ -333,9 +352,9 @@ class Neo4jLoader:
             # Test files get :TestFile label
             _run(s, """
                 UNWIND $rows AS r
-                MATCH (f:File {path: r.path})
+                MATCH (f:File {id: r.id})
                 SET f:TestFile
-            """, [dict(path=f.path) for f in files if f.is_test])
+            """, [dict(id=f.id) for f in files if f.is_test])
 
             # ── Packages + BELONGS_TO edges ───────────────────────
             _write_packages(s, index.packages, stats)
@@ -355,11 +374,12 @@ class Neo4jLoader:
                     n.base_path = r.base_path,
                     n.table_name = r.table_name
                 WITH n, r
-                MATCH (f:File {path: r.file})
+                MATCH (f:File {id: r.file_id})
                 MERGE (f)-[rel:DEFINES_CLASS]->(n)
                 SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=c.id, name=c.name, file=c.file,
+                     file_id=f"file:{c.repo}:{c.file}",
                      is_controller=c.is_controller, is_injectable=c.is_injectable,
                      is_module=c.is_module, is_entity=c.is_entity,
                      is_resolver=c.is_resolver, is_abstract=c.is_abstract,
@@ -386,11 +406,12 @@ class Neo4jLoader:
                     n.docstring = r.docstring, n.return_type = r.return_type,
                     n.params_json = r.params_json
                 WITH n, r
-                MATCH (f:File {path: r.file})
+                MATCH (f:File {id: r.file_id})
                 MERGE (f)-[rel:DEFINES_FUNC]->(n)
                 SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=f.id, name=f.name, file=f.file,
+                     file_id=f"file:{f.repo}:{f.file}",
                      is_component=f.is_component, exported=f.exported,
                      docstring=f.docstring, return_type=f.return_type,
                      params_json=f.params_json)
@@ -429,10 +450,11 @@ class Neo4jLoader:
                 MERGE (n:Interface {id: r.id})
                 SET n.name = r.name, n.file = r.file
                 WITH n, r
-                MATCH (f:File {path: r.file})
+                MATCH (f:File {id: r.file_id})
                 MERGE (f)-[rel:DEFINES_IFACE]->(n)
                 SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
-            """, [dict(id=i.id, name=i.name, file=i.file) for i in ifaces])
+            """, [dict(id=i.id, name=i.name, file=i.file,
+                       file_id=f"file:{i.repo}:{i.file}") for i in ifaces])
 
             # ── Endpoints ─────────────────────────────────────────
             # Split: class-level vs file-level endpoints (see #195)
@@ -457,12 +479,12 @@ class Neo4jLoader:
                 SET e.method = r.method, e.path = r.path,
                     e.handler = r.handler, e.file = r.file
                 WITH e, r
-                MATCH (f:File {path: r.fpath})
+                MATCH (f:File {id: r.file_id})
                 MERGE (f)-[rel:EXPOSES]->(e)
                 SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
             """, [
                 dict(id=e.id, method=e.method, path=e.path, handler=e.handler,
-                     file=e.file, fpath=e.controller_class[len("file:"):])
+                     file=e.file, file_id=e.controller_class)
                 for e in endpoints
                 if e.controller_class.startswith("file:")
             ])
@@ -507,10 +529,11 @@ class Neo4jLoader:
                 MERGE (a:Atom {id: r.id})
                 SET a.name = r.name, a.file = r.file, a.family = r.family
                 WITH a, r
-                MATCH (f:File {path: r.file})
+                MATCH (f:File {id: r.file_id})
                 MERGE (f)-[rel:DEFINES_ATOM]->(a)
                 SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
-            """, [dict(id=a.id, name=a.name, file=a.file, family=a.family) for a in atoms])
+            """, [dict(id=a.id, name=a.name, file=a.file, family=a.family,
+                       file_id=f"file:{a.repo}:{a.file}") for a in atoms])
 
             # ── Externals / Hooks / Decorators / EnvVars / Events ─
             _run(s, "UNWIND $rows AS r MERGE (:External {specifier: r.spec})",
@@ -542,7 +565,7 @@ class Neo4jLoader:
 
             # ── Ownership (Phase 7) ───────────────────────────────
             if ownership is not None:
-                _write_ownership(s, ownership, stats)
+                _write_ownership(s, ownership, stats, repo_name=repo_name)
 
             # ── Edge groups (Phase 10) ───────────────────────────
             # Use unfiltered edges so MEMBER_OF edges survive incremental mode.
@@ -564,12 +587,14 @@ def _write_packages(session, packages: list[PackageNode], stats: LoadStats) -> N
     """MERGE one ``:Package`` node per configured monorepo package.
 
     All :class:`~.framework.FrameworkInfo` fields are flattened onto the node
-    so queries can branch by stack in a single hop. The ``name`` is the unique
-    key and matches the ``package`` string property on every :class:`FileNode`.
+    so queries can branch by stack in a single hop. The ``id`` (which embeds
+    ``repo`` and ``name``) is the unique key.
     """
     rows = [
         dict(
+            id=p.id,
             name=p.name,
+            repo=p.repo,
             framework=p.framework,
             framework_version=p.framework_version,
             typescript=p.typescript,
@@ -585,8 +610,10 @@ def _write_packages(session, packages: list[PackageNode], stats: LoadStats) -> N
     ]
     _run(session, """
         UNWIND $rows AS r
-        MERGE (p:Package {name: r.name})
-        SET p.framework         = r.framework,
+        MERGE (p:Package {id: r.id})
+        SET p.name              = r.name,
+            p.repo              = r.repo,
+            p.framework         = r.framework,
             p.framework_version = r.framework_version,
             p.typescript        = r.typescript,
             p.styling           = r.styling,
@@ -607,11 +634,12 @@ def _write_belongs_to(session, files, stats: LoadStats) -> None:
     existing ``file_package`` index) but makes Cypher patterns one hop cleaner,
     e.g. ``MATCH (f:File)-[:BELONGS_TO]->(p:Package {framework:'Next.js'})``.
     """
-    rows = [dict(path=f.path, package=f.package) for f in files if f.package]
+    rows = [dict(file_id=f.id, pkg_id=f"package:{f.repo}:{f.package}")
+            for f in files if f.package]
     _run(session, """
         UNWIND $rows AS r
-        MATCH (f:File {path: r.path})
-        MATCH (p:Package {name: r.package})
+        MATCH (f:File {id: r.file_id})
+        MATCH (p:Package {id: r.pkg_id})
         MERGE (f)-[rel:BELONGS_TO]->(p)
         SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
     """, rows)
@@ -647,7 +675,7 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
         if e.kind == IMPORTS:
             if e.props.get("external"):
                 buckets.setdefault("IMPORTS_EXT", []).append(dict(
-                    src=e.src_id[len("file:"):],
+                    src=e.src_id,
                     spec=e.dst_id[len("external:"):],
                     specifier=e.props.get("specifier", ""),
                     type_only=e.props.get("type_only", False),
@@ -655,8 +683,8 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
                 ))
             else:
                 buckets.setdefault("IMPORTS", []).append(dict(
-                    src=e.src_id[len("file:"):],
-                    dst=e.dst_id[len("file:"):],
+                    src=e.src_id,
+                    dst=e.dst_id,
                     specifier=e.props.get("specifier", ""),
                     type_only=e.props.get("type_only", False),
                     **_conf,
@@ -665,8 +693,8 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
 
         if e.kind == IMPORTS_SYMBOL:
             buckets.setdefault("IMPORTS_SYMBOL", []).append(dict(
-                src=e.src_id[len("file:"):],
-                dst=e.dst_id[len("file:"):],
+                src=e.src_id,
+                dst=e.dst_id,
                 symbol=e.props.get("symbol", ""),
                 type_only=e.props.get("type_only", False),
                 **_conf,
@@ -734,7 +762,7 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
     # Write each bucket with its specific Cypher
     _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:File {{path: r.src}}) MATCH (b:File {{path: r.dst}})
+        MATCH (a:File {{id: r.src}}) MATCH (b:File {{id: r.dst}})
         MERGE (a)-[rel:IMPORTS]->(b)
         SET rel.specifier = r.specifier, rel.type_only = r.type_only{_CONF_SET}
     """, buckets.get("IMPORTS", []))
@@ -742,7 +770,7 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
 
     _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:File {{path: r.src}}) MATCH (b:External {{specifier: r.spec}})
+        MATCH (a:File {{id: r.src}}) MATCH (b:External {{specifier: r.spec}})
         MERGE (a)-[rel:IMPORTS_EXTERNAL]->(b)
         SET rel.specifier = r.specifier, rel.type_only = r.type_only{_CONF_SET}
     """, buckets.get("IMPORTS_EXT", []))
@@ -750,7 +778,7 @@ def _write_edges(session, edges: list[Edge], stats: LoadStats) -> None:
 
     _run(session, f"""
         UNWIND $rows AS r
-        MATCH (a:File {{path: r.src}}) MATCH (b:File {{path: r.dst}})
+        MATCH (a:File {{id: r.src}}) MATCH (b:File {{id: r.dst}})
         MERGE (a)-[rel:IMPORTS_SYMBOL {{symbol: r.symbol}}]->(b)
         SET rel.type_only = r.type_only{_CONF_SET}
     """, buckets.get("IMPORTS_SYMBOL", []))
@@ -888,20 +916,21 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats, touched_file
     for rel, result in index.files_by_path.items():
         if touched_files is not None and rel not in touched_files:
             continue
+        repo = result.file.repo
         # Atom reads/writes: (component_name, atom_name) — lookup atom by name across files
         for comp, atom_name in result.atom_reads:
             atom_reads.append(dict(
-                fn_id=f"func:{rel}#{comp}",
+                fn_id=f"func:{repo}:{rel}#{comp}",
                 atom_name=atom_name,
             ))
         for comp, atom_name in result.atom_writes:
             atom_writes.append(dict(
-                fn_id=f"func:{rel}#{comp}",
+                fn_id=f"func:{repo}:{rel}#{comp}",
                 atom_name=atom_name,
             ))
         for env_name in set(result.env_reads):
             env_reads.append(dict(
-                file=rel,
+                file_id=f"file:{repo}:{rel}",
                 env=env_name,
             ))
         for method_id, ev in result.event_handlers:
@@ -929,7 +958,7 @@ def _write_per_file_extras(session, index: Index, stats: LoadStats, touched_file
 
     _run(session, """
         UNWIND $rows AS r
-        MATCH (f:File {path: r.file})
+        MATCH (f:File {id: r.file_id})
         MATCH (e:EnvVar {name: r.env})
         MERGE (f)-[rel:READS_ENV]->(e)
         SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
@@ -999,15 +1028,18 @@ def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
                 peer = cand
 
         if peer:
-            rows.append(dict(test=rel, peer=peer))
+            repo = r.file.repo
+            rows.append(dict(test_id=f"file:{repo}:{rel}",
+                             peer_id=f"file:{repo}:{peer}"))
         # Also link by described subject
         for subj in r.described_subjects:
-            rows_class.append(dict(test=rel, name=subj))
+            repo = r.file.repo
+            rows_class.append(dict(test_id=f"file:{repo}:{rel}", name=subj))
 
     _run(session, """
         UNWIND $rows AS r
-        MATCH (t:File {path: r.test})
-        MATCH (p:File {path: r.peer})
+        MATCH (t:File {id: r.test_id})
+        MATCH (p:File {id: r.peer_id})
         MERGE (t)-[rel:TESTS]->(p)
         SET rel.confidence = 'INFERRED', rel.confidence_score = 0.5
     """, rows)
@@ -1015,7 +1047,7 @@ def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
 
     _run(session, """
         UNWIND $rows AS r
-        MATCH (t:File {path: r.test})
+        MATCH (t:File {id: r.test_id})
         MATCH (c:Class {name: r.name})
         MERGE (t)-[rel:TESTS_CLASS]->(c)
         SET rel.confidence = 'INFERRED', rel.confidence_score = 0.6
@@ -1023,7 +1055,7 @@ def _write_test_edges(session, index: Index, stats: LoadStats) -> None:
     stats.edges[TESTS_CLASS] = len(rows_class)
 
 
-def _write_ownership(session, ownership: dict, stats: LoadStats) -> None:
+def _write_ownership(session, ownership: dict, stats: LoadStats, repo_name: str = "default") -> None:
     """Phase 7: git log + CODEOWNERS ingestion."""
     authors = ownership.get("authors", [])
     teams = ownership.get("teams", [])
@@ -1039,31 +1071,35 @@ def _write_ownership(session, ownership: dict, stats: LoadStats) -> None:
     _run(session, "UNWIND $rows AS r MERGE (:Team {name: r.name})",
          [dict(name=t) for t in teams])
 
+    # Ownership dicts contain {path: ...} — enrich with file_id for id-based MATCH.
+    def _enrich(rows):
+        return [{**r, "file_id": f"file:{repo_name}:{r['path']}"} for r in rows]
+
     _run(session, """
         UNWIND $rows AS r
-        MATCH (f:File {path: r.path})
+        MATCH (f:File {id: r.file_id})
         MATCH (a:Author {email: r.email})
         MERGE (f)-[rel:LAST_MODIFIED_BY]->(a)
         SET rel.at = r.at, rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
-    """, last_mod)
+    """, _enrich(last_mod))
     stats.edges[LAST_MODIFIED_BY] = len(last_mod)
 
     _run(session, """
         UNWIND $rows AS r
-        MATCH (f:File {path: r.path})
+        MATCH (f:File {id: r.file_id})
         MATCH (a:Author {email: r.email})
         MERGE (f)-[rel:CONTRIBUTED_BY]->(a)
         SET rel.commits = r.commits, rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
-    """, contribs)
+    """, _enrich(contribs))
     stats.edges[CONTRIBUTED_BY] = len(contribs)
 
     _run(session, """
         UNWIND $rows AS r
-        MATCH (f:File {path: r.path})
+        MATCH (f:File {id: r.file_id})
         MATCH (t:Team {name: r.team})
         MERGE (f)-[rel:OWNED_BY]->(t)
         SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0
-    """, owned)
+    """, _enrich(owned))
     stats.edges[OWNED_BY] = len(owned)
 
 

@@ -766,7 +766,7 @@ def wipe_graph(confirm: bool = False) -> dict:
 
 
 @mcp.tool()
-def reindex_file(path: str, package: Optional[str] = None) -> dict:
+def reindex_file(path: str, package: Optional[str] = None, repo: str = "default") -> dict:
     """Re-index a single file: delete its old subgraph, parse it, and reload.
 
     Refreshes the file's nodes (classes, functions, methods, etc.) and
@@ -780,6 +780,7 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
             Must end in ``.py``, ``.ts``, or ``.tsx``.
         package: Package name to associate the file with. If omitted, looked
             up from the existing ``:File`` node in the graph.
+        repo: Repository namespace. Defaults to ``"default"``.
     """
     if not _allow_write:
         return {"error": _WRITE_GATE_MSG}
@@ -790,10 +791,11 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
         return {"error": "path must end in .py, .ts, or .tsx"}
 
     # ── Resolve package from graph if not provided ──────────────
+    file_id = f"file:{repo}:{path}"
     if package is None:
         rows = _run_read(
-            "MATCH (f:File {path: $path}) RETURN f.package AS pkg",
-            path=path,
+            "MATCH (f:File {id: $fid}) RETURN f.package AS pkg",
+            fid=file_id,
         )
         if rows and "error" in rows[0]:
             return rows[0]
@@ -828,11 +830,11 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
         if path.endswith(".py"):
             from .py_parser import PyParser
 
-            result = PyParser().parse_file(abs_path, path, package, is_test=is_test)
+            result = PyParser().parse_file(abs_path, path, package, is_test=is_test, repo_name=repo)
         else:
             from .parser import TsParser
 
-            result = TsParser().parse_file(abs_path, path, package, is_test=is_test)
+            result = TsParser().parse_file(abs_path, path, package, is_test=is_test, repo_name=repo)
     except Exception as e:
         return {"error": f"Parse failed: {e}"}
 
@@ -844,35 +846,37 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
         with _write_session() as s:
             # 1. Grandchildren of owned classes (Methods, Endpoints, etc.)
             s.run(
-                "MATCH (f:File {path: $path})-[:DEFINES_CLASS]->(c:Class)-->(child) "
+                "MATCH (f:File {id: $fid})-[:DEFINES_CLASS]->(c:Class)-->(child) "
                 "WHERE NOT child:Class AND NOT child:Decorator "
                 "DETACH DELETE child",
-                path=path,
+                fid=file_id,
             )
             # 2. Direct owned children (Classes, Functions, Interfaces, Atoms)
             s.run(
-                "MATCH (f:File {path: $path})"
+                "MATCH (f:File {id: $fid})"
                 "-[:DEFINES_CLASS|DEFINES_FUNC|DEFINES_IFACE|DEFINES_ATOM]->(child) "
                 "DETACH DELETE child",
-                path=path,
+                fid=file_id,
             )
             # 3. File node (DETACH DELETE auto-removes IMPORTS, BELONGS_TO, etc.)
             s.run(
-                "MATCH (f:File {path: $path}) DETACH DELETE f",
-                path=path,
+                "MATCH (f:File {id: $fid}) DETACH DELETE f",
+                fid=file_id,
             )
 
             # ── Load new nodes ──────────────────────────────────
             f = result.file
             s.run(
-                "MERGE (n:File {path: $path}) "
-                "SET n.package = $package, n.language = $language, "
+                "MERGE (n:File {id: $id}) "
+                "SET n.path = $path, n.repo = $repo, "
+                "    n.package = $package, n.language = $language, "
                 "    n.loc = $loc, n.is_controller = $is_controller, "
                 "    n.is_injectable = $is_injectable, n.is_module = $is_module, "
                 "    n.is_component = $is_component, n.is_entity = $is_entity, "
                 "    n.is_resolver = $is_resolver, n.is_test = $is_test",
-                path=f.path, package=f.package, language=f.language,
-                loc=f.loc, is_controller=f.is_controller,
+                id=f.id, path=f.path, repo=f.repo, package=f.package,
+                language=f.language, loc=f.loc,
+                is_controller=f.is_controller,
                 is_injectable=f.is_injectable, is_module=f.is_module,
                 is_component=f.is_component, is_entity=f.is_entity,
                 is_resolver=f.is_resolver, is_test=f.is_test,
@@ -891,10 +895,10 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "    n.is_abstract = $is_abstract, "
                     "    n.base_path = $base_path, n.table_name = $table_name "
                     "WITH n "
-                    "MATCH (f:File {path: $file}) "
+                    "MATCH (f:File {id: $file_id}) "
                     "MERGE (f)-[rel:DEFINES_CLASS]->(n) "
                     "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
-                    id=c.id, name=c.name, file=c.file,
+                    id=c.id, name=c.name, file=c.file, file_id=f.id,
                     is_controller=c.is_controller,
                     is_injectable=c.is_injectable,
                     is_module=c.is_module, is_entity=c.is_entity,
@@ -913,10 +917,10 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "    n.return_type = $return_type, "
                     "    n.params_json = $params_json "
                     "WITH n "
-                    "MATCH (f:File {path: $file}) "
+                    "MATCH (f:File {id: $file_id}) "
                     "MERGE (f)-[rel:DEFINES_FUNC]->(n) "
                     "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
-                    id=fn.id, name=fn.name, file=fn.file,
+                    id=fn.id, name=fn.name, file=fn.file, file_id=f.id,
                     is_component=fn.is_component, exported=fn.exported,
                     docstring=fn.docstring, return_type=fn.return_type,
                     params_json=fn.params_json,
@@ -953,10 +957,10 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "MERGE (n:Interface {id: $id}) "
                     "SET n.name = $name, n.file = $file "
                     "WITH n "
-                    "MATCH (f:File {path: $file}) "
+                    "MATCH (f:File {id: $file_id}) "
                     "MERGE (f)-[rel:DEFINES_IFACE]->(n) "
                     "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
-                    id=i.id, name=i.name, file=i.file,
+                    id=i.id, name=i.name, file=i.file, file_id=f.id,
                 )
                 node_count += 1
 
@@ -970,11 +974,11 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                 )
                 if ep.controller_class.startswith("file:"):
                     s.run(
-                        "MATCH (f:File {path: $fpath}) "
+                        "MATCH (f:File {id: $fid}) "
                         "MATCH (e:Endpoint {id: $eid}) "
                         "MERGE (f)-[rel:EXPOSES]->(e) "
                         "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
-                        fpath=ep.controller_class[len("file:"):],
+                        fid=ep.controller_class,
                         eid=ep.id,
                     )
                 else:
@@ -1025,10 +1029,10 @@ def reindex_file(path: str, package: Optional[str] = None) -> dict:
                     "MERGE (n:Atom {id: $id}) "
                     "SET n.name = $name, n.file = $file, n.family = $family "
                     "WITH n "
-                    "MATCH (f:File {path: $file}) "
+                    "MATCH (f:File {id: $file_id}) "
                     "MERGE (f)-[rel:DEFINES_ATOM]->(n) "
                     "SET rel.confidence = 'EXTRACTED', rel.confidence_score = 1.0",
-                    id=a.id, name=a.name, file=a.file, family=a.family,
+                    id=a.id, name=a.name, file=a.file, family=a.family, file_id=f.id,
                 )
                 node_count += 1
 
