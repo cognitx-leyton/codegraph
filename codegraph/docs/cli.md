@@ -230,6 +230,121 @@ Policy reference: **[arch-policies.md](./arch-policies.md)**.
 
 ---
 
+## audit
+
+Run an agent-driven extraction self-check against the live graph. Launches an external coding agent (Claude Code, Codex, Cursor, …) with a tightly-scoped prompt that audits whether codegraph extracted everything it claims to support for *this* repo's frameworks. Agent finds extraction bugs (`@Controller` decorator missed, `mapped_column` overlooked, etc.); you triage them as GitHub issues.
+
+The audit itself is read-only — never writes to the graph or the source tree. The agent is launched in headless + permission-bypass mode by default, so it can iterate on `codegraph query` and `Read` calls without per-tool prompts.
+
+### Synopsis
+
+```bash
+codegraph audit [--repo PATH] [--agent NAME] [--list-agents]
+                [--print-prompt-only]
+                [--gh-issue/--no-gh-issue]
+                [--bypass/--no-bypass] [--unsafe]
+                [--timeout SECONDS] [--recompute-lock]
+                [--yes/-y] [--json]
+```
+
+### Flags
+
+| Flag | Type | Default | Notes |
+|---|---|---|---|
+| `--repo` | path | `.` | Repo to audit. |
+| `--agent` | str | (prompt) | One of `claude`, `codex`, `gemini`, `aider`, `opencode`, `droid`, `cursor`. If omitted and multiple agents are detected on PATH, prompts. |
+| `--list-agents` | bool | false | Print supported agents and detection status, then exit 0. |
+| `--print-prompt-only` | bool | false | Render the audit prompt to stdout without launching anything. Useful for inspection or piping to a non-supported agent. |
+| `--gh-issue/--no-gh-issue` | bool | (prompt) | After the audit, open a GitHub issue from the report via `gh issue create --label codegraph-audit`. If unset, prompts when findings exist. |
+| `--bypass/--no-bypass` | bool | true | Pass the agent's permission-bypass flag (`claude --dangerously-skip-permissions`, `codex --full-auto`, `gemini --yolo`, etc.). `--no-bypass` runs the agent interactively — every tool call prompts. |
+| `--unsafe` | bool | false | For codex only: replace the sandboxed `--full-auto` with `--dangerously-bypass-approvals-and-sandbox`. No-op for other agents. |
+| `--timeout` | int | `1800` | Agent timeout in seconds (30 min default). |
+| `--recompute-lock` | bool | false | Regenerate the prompt-template lock file before launching. Use after intentionally editing a template; otherwise the launch refuses on lock mismatch (anti-tampering). |
+| `--yes`, `-y` | bool | false | Non-interactive: auto-pick the only detected agent, skip the GitHub-issue confirmation. |
+| `--json` | bool | false | Emit the final report as JSON on stdout. |
+
+### Permission-bypass flags per agent
+
+| Agent | Bypass flag passed | `--unsafe` adds |
+|---|---|---|
+| `claude` | `--dangerously-skip-permissions` | — |
+| `codex` | `--full-auto` (sandboxed) | `--dangerously-bypass-approvals-and-sandbox` |
+| `gemini` | `--yolo` | — |
+| `aider` | `--yes-always` | — |
+| `opencode` | `--auto-approve` | — |
+| `droid` | `--yes` | — |
+| `cursor` | (no headless mode — writes `.cursor/rules/codegraph-audit.mdc`) | — |
+
+### Output
+
+Default mode prints a Rich summary with the report path and (if used) GitHub-issue URL. The agent's full report is written to `codegraph-out/audit-report.md` with a strict `## Issue N` block schema (parseable by both `--json` and `gh issue create --body-file`).
+
+`--json` emits:
+
+```json
+{
+  "ok": true,
+  "agent": "claude",
+  "repo": "/abs/path",
+  "report_path": "/abs/path/codegraph-out/audit-report.md",
+  "issues_found": 3,
+  "findings": [
+    {"index": 1, "category": "MISSING_NODE", "severity": "high", "construct": "...", "raw_block": "..."}
+  ],
+  "gh_issue_url": "https://github.com/<user>/<repo>/issues/42",
+  "error": null,
+  "warnings": []
+}
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Audit completed; either no findings or findings + GitHub issue opened. |
+| 1 | Audit completed with findings AND no GitHub issue created. |
+| 2 | Pre-launch failure (lock mismatch, no agent detected, agent binary missing). |
+| 124 | Agent exceeded `--timeout`. |
+| 127 | Agent binary not invokable. |
+
+### Prompt integrity
+
+The prompt templates ship under `codegraph/templates/audit/` and are protected by three layers, all of which fire automatically on any PR touching them:
+
+1. **CODEOWNERS review** required (`codegraph/templates/audit/**` etc.).
+2. **`.github/workflows/audit-prompt-integrity.yml`** posts a sticky reviewer warning, runs the static diff lint (no new external URLs in prompt files, no new shell-execution call sites in `audit.py` / `audit_agents.py`, no >50% line-count growth), and verifies the lock.
+3. **`templates/audit/.lock`** SHA-256 hashes every prompt file. The runtime checks the lock before launching the agent — refuses to run if the prompt has been tampered with on disk.
+
+To legitimately edit a template:
+
+```bash
+# edit codegraph/templates/audit/audit-prompt.md
+.venv/bin/python -m codegraph.audit_prompt_lint --update-lock
+git diff codegraph/templates/audit/.lock   # lock change visible in the same PR
+```
+
+### Examples
+
+```bash
+# Smoke test — see which agents are usable on this machine
+codegraph audit --list-agents
+
+# Inspect the prompt before running anything
+codegraph audit --agent claude --print-prompt-only | less
+
+# Full unattended run, auto-open issue
+codegraph audit --agent claude --gh-issue --yes
+
+# Audit with the agent in interactive mode (prompts for each tool call)
+codegraph audit --agent claude --no-bypass
+
+# Authorise a legitimate prompt edit
+python -m codegraph.audit_prompt_lint --update-lock
+codegraph audit --agent claude --recompute-lock
+```
+
+---
+
 ## query
 
 Run a Cypher query against the current graph.

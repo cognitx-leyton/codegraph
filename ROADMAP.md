@@ -43,6 +43,7 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
+<unreleased> feat(audit): codegraph audit — agent-driven extraction self-check
 f887f70  refactor(install): deduplicate template-var logic into init.py (issue #259)
 6a359f0  fix(install): preserve shared AGENTS.md sections during partial uninstall (#261, closes #257)
 9fae95b  fix(install): resolve template variables in platform install content (#260, closes #256)
@@ -57,6 +58,36 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### audit — agent-driven extraction self-check (`codegraph audit`)
+
+New top-level CLI subcommand and supporting modules. Sibling of `validate` (graph-shape sanity) and `arch-check` (policy gating). Solves a different problem: per-codebase parser bugs that no fixture-based unit test will find — e.g. "this repo uses NestJS but for some custom-decorator reason 5 of the 47 controllers didn't get an `:Endpoint` node".
+
+**Flow.** Verify prompt-template lock → pick agent (interactive or `--agent`) → assemble prompt (filtered to detected frameworks, with sample files + Cypher catalogue) → launch the agent in headless + permission-bypass mode → parse the agent's `codegraph-out/audit-report.md` → optionally `gh issue create --label codegraph-audit`. Read-only at every step; never modifies graph or source.
+
+**Files added:**
+- `codegraph/codegraph/audit.py` — orchestrator. Lock check, agent selection, prompt assembly with `string.Template`, subprocess launch, report parsing (`## Issue N` blocks → `AuditFinding` dataclass), `gh issue create` shell-out. `AuditReport` dataclass with `to_json()`.
+- `codegraph/codegraph/audit_agents.py` — 7-entry registry: `claude` / `codex` / `gemini` / `aider` / `opencode` / `droid` / `cursor`. `AuditAgent` dataclass holds `binary`, `headless_args`, `permission_bypass_args`, `unsafe_extra` (for codex's no-sandbox flag), `fallback_skill_path` (only Cursor uses it). `build_argv()` composes the launch line.
+- `codegraph/codegraph/audit_prompt_lint.py` — three-layer integrity. Lock-file generator (`--update-lock` / `--check-lock`), URL-diff lint (no new external URLs in prompt files), suspicious-call-site lint (no new shell-execution call sites in `audit.py` / `audit_agents.py`), line-count-growth cap (50%). Suspicious patterns are obfuscated at runtime so the source file itself doesn't trip security scanners.
+- `codegraph/codegraph/templates/audit/audit-prompt.md` — the master prompt. Seven mandatory sections: role, inputs available, inputs forbidden, extraction inventory (placeholder), files to spot-check (placeholder), methodology (triangulation pass), output schema (machine-parseable), hard non-goals, anti-injection clause.
+- `codegraph/codegraph/templates/audit/inventory-python.md` + `inventory-typescript.md` — per-framework inventory snippets. Filtered at runtime to detected frameworks via `MATCH (p:Package) RETURN DISTINCT p.framework`. ~3-5x token reduction vs dumping everything.
+- `codegraph/codegraph/templates/audit/cypher-checks.md` — catalogue of triangulation Cypher queries the agent runs.
+- `codegraph/codegraph/templates/audit/report-template.md` — skeleton.
+- `codegraph/codegraph/templates/audit/.lock` — SHA-256 hashes of all sibling files. Verified at runtime; refuses to launch on mismatch.
+- `.github/workflows/audit-prompt-integrity.yml` — CI gate triggered on PRs touching the audit prompt or launcher. Posts a sticky reviewer warning, runs `--check-lock` and `--check-diff`. Defence in depth alongside CODEOWNERS.
+- Tests: `tests/test_audit.py` (24 cases), `tests/test_audit_prompt_lint.py` (13 cases). All offline — no agent binaries required, no network.
+
+**Files modified:**
+- `codegraph/codegraph/cli.py` — `@app.command() def audit(...)` registration with 11 flags (`--agent`, `--list-agents`, `--print-prompt-only`, `--gh-issue/--no-gh-issue`, `--bypass/--no-bypass`, `--unsafe`, `--timeout`, `--recompute-lock`, `--yes`, `--json`, `--repo`, `--uri`).
+- `CODEOWNERS` (root) — explicit entries for `codegraph/codegraph/templates/audit/**`, `audit.py`, `audit_agents.py`, `audit_prompt_lint.py`, and the integrity workflow. Branch-protection "Require code owner review" forces a notification on every change.
+- `codegraph/pyproject.toml` — added `templates/audit/.lock` to `[tool.setuptools.package-data]` so the wheel ships the lock file (hidden filename, no `*.lock` glob match).
+- `codegraph/README.md`, `codegraph/docs/cli.md`, `CHANGELOG.md` — user-facing docs.
+
+**Permission-bypass philosophy.** The user explicitly opted into bypass by running `codegraph audit`. Without it, the agent would prompt for every `Read` and every `codegraph query` — defeating the unattended audit. Default ON. `--no-bypass` for paranoid users; `--unsafe` is a separate codex-only escape hatch (`--full-auto` is sandboxed; `--dangerously-bypass-approvals-and-sandbox` is not).
+
+**Why not auto-PR?** User stated preference: they have their own implementation workflow and want to triage findings as GitHub issues, not bulk-merge LLM-generated patches.
+
+**Tests:** 867 passing → 904 passing (+37 new). 11 skipped, 0 warnings. ~8s suite.
 
 ### install — deduplicate template-var logic into init.py (issue #259)
 

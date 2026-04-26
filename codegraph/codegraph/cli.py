@@ -946,6 +946,144 @@ def arch_check(
     raise typer.Exit(code=0 if report.ok else 1)
 
 
+# ── audit ────────────────────────────────────────────────────────────
+
+@app.command()
+def audit(
+    repo: Path = typer.Option(
+        Path("."), "--repo",
+        help="Repo root to audit (default: current directory).",
+        exists=True, file_okay=False,
+    ),
+    uri: str = DEFAULT_URI,
+    agent: Optional[str] = typer.Option(
+        None, "--agent",
+        help="Coding agent to launch (claude/codex/gemini/aider/opencode/droid/cursor). "
+             "If omitted, prompts interactively.",
+    ),
+    list_agents: bool = typer.Option(
+        False, "--list-agents",
+        help="Print supported agents and detection status, then exit.",
+    ),
+    print_prompt_only: bool = typer.Option(
+        False, "--print-prompt-only",
+        help="Render the audit prompt to stdout without launching any agent.",
+    ),
+    gh_issue: Optional[bool] = typer.Option(
+        None, "--gh-issue/--no-gh-issue",
+        help="After the audit, open a GitHub issue from the report. "
+             "If unset, prompts interactively when findings exist.",
+    ),
+    bypass: bool = typer.Option(
+        True, "--bypass/--no-bypass",
+        help="Pass the agent's permission-bypass flag (default: on, since "
+             "the audit is unattended). --no-bypass runs the agent in "
+             "interactive mode where each tool call prompts.",
+    ),
+    unsafe: bool = typer.Option(
+        False, "--unsafe",
+        help="For agents that distinguish 'sandboxed bypass' from 'no sandbox' "
+             "(currently codex), pass the no-sandbox flag.",
+    ),
+    timeout_sec: int = typer.Option(
+        1800, "--timeout",
+        help="Agent timeout in seconds (default: 1800 = 30 minutes).",
+    ),
+    recompute_lock: bool = typer.Option(
+        False, "--recompute-lock",
+        help="Regenerate the audit prompt lock file before launching. Use "
+             "after intentionally editing a template; otherwise the launch "
+             "will refuse on lock mismatch.",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Non-interactive mode. Auto-pick the only detected agent and "
+             "skip the GitHub-issue confirmation prompt.",
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit final report as JSON on stdout.",
+    ),
+) -> None:
+    """Run an agent-driven extraction self-check against the live graph.
+
+    Pipeline: (1) verify the prompt-template lock file is intact, (2) detect
+    or pick a coding agent, (3) build a prompt scoped to the frameworks
+    present in this repo, (4) launch the agent in headless + permission-
+    bypass mode, (5) parse the agent's report at
+    ``codegraph-out/audit-report.md``, (6) optionally open a GitHub issue.
+
+    The audit reads the graph and source files; it never writes either.
+    """
+    from .audit import run_audit
+    from .audit_agents import AUDIT_AGENTS
+
+    if list_agents:
+        if as_json:
+            print(json.dumps({
+                "ok": True,
+                "agents": [
+                    {
+                        "name": a.name,
+                        "display_name": a.display_name,
+                        "binary": a.binary,
+                        "installed": a.is_installed(),
+                        "headless": a.fallback_skill_path is None,
+                    }
+                    for a in AUDIT_AGENTS.values()
+                ],
+            }, indent=2))
+        else:
+            t = Table(title="codegraph audit — supported agents",
+                      show_header=True, header_style="bold magenta")
+            t.add_column("name"); t.add_column("display"); t.add_column("binary")
+            t.add_column("installed", justify="center")
+            t.add_column("headless", justify="center")
+            for a in AUDIT_AGENTS.values():
+                t.add_row(
+                    a.name, a.display_name, a.binary,
+                    "[green]✓[/]" if a.is_installed() else "[red]✗[/]",
+                    "[green]✓[/]" if a.fallback_skill_path is None else "[yellow]fallback[/]",
+                )
+            console.print(t)
+        raise typer.Exit(code=0)
+
+    try:
+        report = run_audit(
+            repo=repo.resolve(),
+            uri=uri,
+            agent_name=agent,
+            bypass=bypass,
+            unsafe=unsafe,
+            gh_issue=gh_issue,
+            print_prompt_only=print_prompt_only,
+            yes=yes,
+            timeout_sec=timeout_sec,
+            recompute_lock=recompute_lock,
+            console=None if as_json else console,
+        )
+    except SystemExit:
+        raise
+
+    if as_json:
+        print(report.to_json())
+        raise typer.Exit(code=0 if report.ok else 1)
+
+    if not print_prompt_only:
+        console.print()
+        if report.issues_found == 0:
+            console.print("[bold green]✓[/] No extraction issues found.")
+        else:
+            console.print(
+                f"[bold yellow]Found {report.issues_found} potential extraction issue(s).[/]"
+            )
+            console.print(f"  Report: [cyan]{report.report_path}[/]")
+            if report.gh_issue_url:
+                console.print(f"  GitHub issue: [cyan]{report.gh_issue_url}[/]")
+        for w in report.warnings:
+            console.print(f"  [yellow]⚠[/] {w}")
+    raise typer.Exit(code=0 if report.ok else 1)
+
+
 # ── query ────────────────────────────────────────────────────────────
 
 @app.command()

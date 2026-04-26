@@ -126,4 +126,7 @@ codegraph = [
     "templates/**/*.yml",
     "templates/**/*.toml",
     "templates/**/*.js",
+    # The audit prompt integrity lock file. Hidden filename (no glob match
+    # via `*.lock`), so listed explicitly.
+    "templates/audit/.lock",
 ]

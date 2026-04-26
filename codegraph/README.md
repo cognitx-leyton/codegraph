@@ -27,6 +27,7 @@ codegraph arch-check                   # exit 1 on architecture violations
 | `codegraph query <cypher>` | Run a Cypher query. `-n/--limit`, `--json`. |
 | `codegraph arch-check` | Run architecture-conformance policies. Auto-scopes to configured packages; `--scope` / `--no-scope` overrides. Exits 1 on violations, 2 on config errors. |
 | `codegraph validate` | Sanity-check the loaded graph (counts, orphans, schema). |
+| `codegraph audit` | Agent-driven extraction self-check. Launches `claude` / `codex` / `gemini` / `aider` / `opencode` / `droid` (or writes a `cursor` rules file as fallback) in headless + permission-bypass mode against the live graph; the agent flags places where codegraph claims to extract X but missed it on this repo. Output is `codegraph-out/audit-report.md` plus an optional `gh issue create`. Prompt templates protected by CODEOWNERS, a CI workflow, and a runtime SHA-256 lock. Flags: `--agent`, `--list-agents`, `--print-prompt-only`, `--gh-issue`, `--bypass/--no-bypass`, `--unsafe`, `--timeout`, `--recompute-lock`, `--yes`, `--json`. Full reference: [`docs/cli.md#audit`](docs/cli.md#audit). |
 | `codegraph wipe` | `MATCH (n) DETACH DELETE n`. |
 | `codegraph stats` | Quick node / edge counts. |
 | `codegraph export` | Produce `graph.html` (interactive vis-network), `graph.json`, optional `graph.graphml` and `graph.cypher`. Runs after `index` unless `--no-export`. |
