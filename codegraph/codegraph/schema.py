@@ -403,6 +403,10 @@ DECIDES                 = "DECIDES"
 JUSTIFIES               = "JUSTIFIES"
 SEMANTICALLY_SIMILAR_TO = "SEMANTICALLY_SIMILAR_TO"
 
+# Phase 13 — vision extraction
+ILLUSTRATES_CONCEPT     = "ILLUSTRATES_CONCEPT"
+SHOWS_ARCHITECTURE      = "SHOWS_ARCHITECTURE"
+
 
 # ── Test-file pairing conventions ────────────────────────────
 TS_TEST_SUFFIXES = (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx")

@@ -216,6 +216,11 @@ def index(
         help="Extract semantic concepts/decisions from markdown via Claude API. "
              "Requires the [semantic] extra and ANTHROPIC_API_KEY env var.",
     ),
+    extract_images: bool = typer.Option(
+        False, "--extract-images",
+        help="Extract image content (diagrams, screenshots) via Claude vision API. "
+             "Requires the [semantic] extra and ANTHROPIC_API_KEY env var.",
+    ),
 ) -> None:
     """Index a TypeScript monorepo into Neo4j."""
     try:
@@ -235,6 +240,7 @@ def index(
             repo_name=repo_name,
             extract_docs=extract_docs,
             extract_markdown=extract_markdown,
+            extract_images=extract_images,
         )
     except ConfigError as e:
         _emit_error(as_json, "config", str(e))
@@ -339,6 +345,7 @@ def _run_index(
     repo_name: Optional[str] = None,
     extract_docs: bool = False,
     extract_markdown: bool = False,
+    extract_images: bool = False,
 ) -> dict[str, Any]:
     """Core indexing routine. Returns a flat dict of stats (files, edges, ...).
 
@@ -362,6 +369,8 @@ def _run_index(
     # --extract-markdown implies --extract-docs (we need the structural
     # markdown docs parsed before the semantic pass can run over them).
     if extract_markdown:
+        extract_docs = True
+    if extract_images:
         extract_docs = True
 
     # ── Incremental mode setup ──────────────────────────────────
@@ -622,9 +631,37 @@ def _run_index(
                     md_count += 1
                 except Exception as exc:
                     say(f"  [yellow]skip[/] {rel}: {exc}")
+        img_count = 0
+        if extract_images:
+            from .schema import DocumentNode
+            from .vision_extract import IMAGE_EXTENSIONS, _MAX_IMAGE_SIZE
+            from datetime import datetime, timezone
+            for pkg in pkg_configs:
+                for ext in IMAGE_EXTENSIONS:
+                    for p in pkg.root.rglob(f"*{ext}"):
+                        if not p.is_file():
+                            continue
+                        if any(part in exclude_dirs for part in p.parts):
+                            continue
+                        rel = str(p.resolve().relative_to(repo)).replace("\\", "/")
+                        if ignore_filter is not None and ignore_filter.should_ignore_file(rel):
+                            continue
+                        fsize = p.stat().st_size
+                        if fsize > _MAX_IMAGE_SIZE:
+                            say(f"  [yellow]skip[/] {rel}: exceeds 20 MB size limit")
+                            continue
+                        doc_nodes.append(DocumentNode(
+                            path=rel,
+                            file_type="image",
+                            loc=fsize,
+                            extracted_at=datetime.now(timezone.utc).isoformat(),
+                            repo=effective_repo_name,
+                        ))
+                        img_count += 1
+        img_msg = f" + {img_count} image(s)" if img_count else ""
         say(
-            f"[bold green]✓[/] extracted {pdf_count} PDF(s) + {md_count} markdown file(s), "
-            f"{len(doc_section_nodes)} section(s)"
+            f"[bold green]✓[/] extracted {pdf_count} PDF(s) + {md_count} markdown file(s)"
+            f"{img_msg}, {len(doc_section_nodes)} section(s)"
         )
 
     # ── Semantic extraction (opt-in) ─────────────────────────
@@ -673,6 +710,50 @@ def _run_index(
             f"[bold green]✓[/] semantic: {len(concept_nodes)} concepts, "
             f"{len(decision_nodes)} decisions, {len(rationale_nodes)} rationales "
             f"(cache: {sem_hits} hit, {sem_misses} miss)"
+        )
+
+    # ── Vision extraction (opt-in) ─────────────────────────────
+    if extract_images:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            raise ConfigError(
+                "--extract-images requires ANTHROPIC_API_KEY in the environment. "
+                "Set it or add it to .env."
+            )
+        from .schema import ILLUSTRATES_CONCEPT
+        from .semantic_extract import SemanticCache
+        from .vision_extract import extract_vision, _file_content_hash, _vision_cache_key
+        say("[bold]Running vision extraction…")
+        vis_cache = SemanticCache(repo)
+        img_docs = [d for d in doc_nodes if d.file_type == "image"]
+        vis_hits = vis_misses = 0
+        for img_doc in img_docs:
+            img_path = repo / img_doc.path
+            if not img_path.is_file():
+                continue
+            try:
+                fhash = _file_content_hash(img_path)
+            except OSError:
+                continue
+            cache_key = _vision_cache_key(fhash, img_doc.path, effective_repo_name)
+            cached = vis_cache.get(cache_key)
+            if cached is not None:
+                result = cached
+                vis_hits += 1
+            else:
+                try:
+                    result = extract_vision(img_path, img_doc.path, repo_name=effective_repo_name)
+                except Exception as exc:
+                    say(f"  [yellow]skip[/] {img_doc.path}: {exc}")
+                    continue
+                vis_cache.put(cache_key, result)
+                vis_misses += 1
+            concept_nodes.extend(result.concepts)
+            semantic_edge_list.extend(result.edges)
+        say(
+            f"[bold green]✓[/] vision: {len([d for d in doc_nodes if d.file_type == 'image'])} image(s), "
+            f"{sum(1 for e in semantic_edge_list if e.kind == ILLUSTRATES_CONCEPT)} concept edges "
+            f"(cache: {vis_hits} hit, {vis_misses} miss)"
         )
 
     say(f"[bold]Connecting to Neo4j…[/] {uri}")

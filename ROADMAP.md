@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-26 after commits `6990e71` → `57b1a4a` (Markdown semantic extraction via Claude API — Concept/Decision/Rationale nodes, closes issue #265). v0.1.105.
+> **Last updated:** 2026-04-26 after commits `d2e6f06` → `66f70cd` (image/vision semantic extraction — ILLUSTRATES_CONCEPT edges, closes issue #266). v0.1.105.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-265-markdown-semantic`. Markdown semantic extraction (`--extract-markdown` flag on `codegraph index`) with three new schema nodes (`ConceptNode`, `DecisionNode`, `RationaleNode`) and four new edge types (`DOCUMENTS_CONCEPT`, `DECIDES`, `JUSTIFIES`, `SEMANTICALLY_SIMILAR_TO`). LLM-backed extraction via `semantic_extract.py` + `anthropic>=0.40` optional extra (`pip install "codegraph[semantic]"`). Per-file SHA-256 cache prevents duplicate API calls. Also fixes `wipe_scoped` to clean up Document/Concept/Decision/Rationale nodes (#274). Closes issue #265. v0.1.105.
-- **Tests:** 974 passing (10 new in `test_doc_parser_markdown.py`, 14 new in `test_semantic_extract.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-266-image-vision`. Image/vision semantic extraction (`--extract-images` flag on `codegraph index`) with two new edge constants (`ILLUSTRATES_CONCEPT`, `SHOWS_ARCHITECTURE`). Vision extraction via `vision_extract.py` + `vision.md` prompt template — calls the Claude claude-sonnet-4-6 vision API, parses structured YAML-like response, emits `ILLUSTRATES_CONCEPT` edges from images to `ConceptNode` targets. Per-file SHA-256 cache reuses `SemanticCache`. 20 MB size guard. Closes issue #266. v0.1.105.
+- **Tests:** 992 passing (18 new in `test_vision_extract.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.105 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -43,7 +43,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
-57b1a4a  feat(docs): markdown semantic extraction — concepts, decisions, rationales
+66f70cd  feat(vision): image/vision semantic extraction with ILLUSTRATES_CONCEPT edges
+d2e6f06  feat(semantic): markdown semantic extraction — Concept, Decision, Rationale nodes (#279)
 38bd173  feat(docs): PDF document ingestion with outline and page-based section extraction (#276)
 6990e71  fix(schema): namespace all node IDs with repo to prevent cross-repo overwrite (#273)
 743c02f  chore: bump version to 0.1.103
@@ -68,6 +69,35 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### vision — image/vision semantic extraction with ILLUSTRATES_CONCEPT edges (issue #266)
+
+- `66f70cd feat(vision)` — Seven files changed (4 new, 3 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/vision_extract.py`** (~220 LOC) — Claude vision API integration. `VisionCache` (alias of `SemanticCache`) keyed by file SHA-256 + `rel` + `repo_name`. `_MEDIA_TYPES` dict maps extension → MIME type (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`). `_file_content_hash(path)` reads the file and returns its SHA-256 hex digest. `extract_vision(image_path, rel, repo_name, api_key)` encodes the image as base64, calls the Anthropic API with the `vision.md` prompt, and parses the structured response into a list of `Edge` objects with `kind=ILLUSTRATES_CONCEPT`. `_parse_vision_response()` extracts headings-delimited concept sections and returns one `Edge` per concept. 20 MB size guard raises `ValueError` on oversized files.
+
+  2. **`codegraph/codegraph/templates/semantic/vision.md`** — Prompt template for image concept extraction. Instructs the model to identify concepts illustrated or referenced in the image (diagrams, architecture charts, screenshots, wireframes). Strict output schema with `## Concepts` section; anti-hallucination constraints.
+
+  3. **`codegraph/tests/test_vision_extract.py`** (18 tests) — Covers happy path (concept count, edge kind, target ID format), cache hit/miss, oversized file guard, unsupported extension guard, API key validation, `_parse_vision_response` with fence stripping, empty response, SHOWS_ARCHITECTURE constant presence, base64 encoding round-trip.
+
+  4. **`codegraph/tests/fixtures/images/sample.png`** — 1×1 white PNG (~68 bytes). Used as the live fixture for all `vision_extract` tests.
+
+  **Updated files:**
+
+  5. **`codegraph/codegraph/schema.py`** — Added `ILLUSTRATES_CONCEPT = "ILLUSTRATES_CONCEPT"` and `SHOWS_ARCHITECTURE = "SHOWS_ARCHITECTURE"` edge constants (Phase 13).
+
+  6. **`codegraph/codegraph/loader.py`** — Added `ILLUSTRATES_CONCEPT` to the edge-label map and the write loop so vision edges are persisted to Neo4j. Import ordering corrected (alphabetical).
+
+  7. **`codegraph/codegraph/cli.py`** — Added `--extract-images` flag to `codegraph index` (implies `--extract-docs` and requires `ANTHROPIC_API_KEY`). Image walk globs `**/*.{png,jpg,jpeg,gif,webp}`, applies `exclude_dirs` + `ignore_filter`. Vision extraction dispatches per-file with per-file error handling. `img_count` only printed in summary when > 0. Edge kind comparison uses `ILLUSTRATES_CONCEPT` constant (not string literal).
+
+  **Code review (3 issues found and fixed):**
+  - `[IMPORT ORDER]` `loader.py` — `ILLUSTRATES_CONCEPT` inserted between `DocumentNode` and `DocumentSectionNode` breaking alphabetical order → moved after `DocumentSectionNode`.
+  - `[UX]` `cli.py` summary printed `"+ 0 image(s)"` even when `--extract-images` was not used → moved image count into a conditional (`if img_count`).
+  - `[ROBUSTNESS]` `cli.py` vision summary used string literal `'ILLUSTRATES_CONCEPT'` for edge kind check → replaced with the imported constant.
+
+  - **Validation:** 992 tests pass (18 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass.
 
 ### docs — markdown semantic extraction via Claude API (issue #265)
 
@@ -1656,17 +1686,17 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-265-markdown-semantic` |
+| Current branch | `archon/task-feat-issue-266-image-vision` |
 | Base branch | `main` |
-| Unpushed commits | Multiple — markdown semantic extraction (`57b1a4a`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
+| Unpushed commits | Multiple — vision extraction (`66f70cd`) + markdown semantic extraction (`d2e6f06`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/markdown-semantic-extraction.plan.md`) |
-| Test count | 974 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/image-vision-extract.plan.md`) |
+| Test count | 992 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `57b1a4a`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic]"` after any `pyproject.toml` edit. |
+| Last editable install | After `66f70cd`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic]"` after any `pyproject.toml` edit. |
 | Wheel built? | Not yet for v0.1.105. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
-| New files | `codegraph/codegraph/semantic_extract.py`, `codegraph/codegraph/templates/semantic/extract.md`, `.env.example`, `tests/fixtures/markdown/{concepts,decisions,empty,no-headings}.md`, `tests/test_doc_parser_markdown.py`, `tests/test_semantic_extract.py` |
+| New files | `codegraph/codegraph/vision_extract.py`, `codegraph/codegraph/templates/semantic/vision.md`, `tests/fixtures/images/sample.png`, `tests/test_vision_extract.py` |
 
 ---
 
@@ -1875,7 +1905,7 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 
 - **`relationship_mapper` port** — `RENDERS` is already there; `NAVIGATES_TO` / `SHARES_STATE` are fuzzy heuristics. Not worth it until MCP usage reveals a specific need.
 - **Go parser frontend** — big tree-sitter work, not the bottleneck.
-- ~~**`knowledge_enricher` LLM-powered semantic pass**~~ — **PARTIALLY SHIPPED** (`57b1a4a`). `--extract-markdown` extracts Concept/Decision/Rationale nodes from Markdown docs via Claude API. Full graph-node enrichment (annotating existing Code nodes with LLM-inferred meaning) remains deferred — revisit once MCP usage surfaces specific needs.
+- ~~**`knowledge_enricher` LLM-powered semantic pass**~~ — **PARTIALLY SHIPPED** (`d2e6f06`, `66f70cd`). `--extract-markdown` extracts Concept/Decision/Rationale nodes from Markdown docs via Claude API; `--extract-images` extracts ILLUSTRATES_CONCEPT edges from images via the vision API. Full graph-node enrichment (annotating existing Code nodes with LLM-inferred meaning) remains deferred — revisit once MCP usage surfaces specific needs.
 - **Web UI / dashboard** — Neo4j Browser at `:7475` is the interactive surface.
 - ~~**Real-time file watching**~~ — **SHIPPED** (`be939bc`). `codegraph watch` + `codegraph hook install` cover the automated re-index use case.
 

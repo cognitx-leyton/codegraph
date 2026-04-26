@@ -25,6 +25,7 @@ from .schema import (
     DOCUMENTS_CONCEPT,
     DocumentNode,
     DocumentSectionNode,
+    ILLUSTRATES_CONCEPT,
     Edge,
     EdgeGroupNode,
     EMITS_EVENT,
@@ -784,6 +785,7 @@ _SEMANTIC_EDGE_LABELS: dict[str, tuple[str, str]] = {
     DOCUMENTS_CONCEPT: ("Document", "Concept"),
     DECIDES: ("Document", "Decision"),
     JUSTIFIES: ("Rationale", "Decision"),
+    ILLUSTRATES_CONCEPT: ("Document", "Concept"),
 }
 
 
@@ -793,7 +795,7 @@ def _write_semantic_edges(
     stats: LoadStats,
 ) -> None:
     """Write semantic extraction edges (DOCUMENTS_CONCEPT, DECIDES, JUSTIFIES, etc.)."""
-    for kind in (DOCUMENTS_CONCEPT, DECIDES, JUSTIFIES, SEMANTICALLY_SIMILAR_TO):
+    for kind in (DOCUMENTS_CONCEPT, DECIDES, JUSTIFIES, ILLUSTRATES_CONCEPT, SEMANTICALLY_SIMILAR_TO):
         bucket = [e for e in semantic_edges if e.kind == kind]
         if not bucket:
             continue
