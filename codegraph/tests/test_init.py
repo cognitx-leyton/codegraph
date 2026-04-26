@@ -173,15 +173,31 @@ def test_derive_container_name_differs_by_path(tmp_path: Path):
 def test_build_template_vars_all_keys():
     vars_ = build_template_vars(packages=["a"], container_name="c")
     assert set(vars_.keys()) == {
-        "PACKAGE_PATHS_FLAGS", "DEFAULT_PACKAGE_PREFIX", "CROSS_PAIRS_TOML",
+        "PACKAGE_PATHS_FLAGS", "PACKAGES_TOML_LIST",
+        "DEFAULT_PACKAGE_PREFIX", "CROSS_PAIRS_TOML",
         "CONTAINER_NAME", "NEO4J_BOLT_PORT", "NEO4J_HTTP_PORT", "PIPX_VERSION",
     }
     assert vars_["PACKAGE_PATHS_FLAGS"] == "-p a"
+    assert vars_["PACKAGES_TOML_LIST"] == '  "a"'
     assert vars_["CONTAINER_NAME"] == "c"
     # Defaults are offset from Neo4j stock 7687/7474 to avoid collisions and to
     # match cli.py's DEFAULT_URI = bolt://localhost:7688.
     assert vars_["NEO4J_BOLT_PORT"] == "7688"
     assert vars_["NEO4J_HTTP_PORT"] == "7475"
+
+
+def test_build_template_vars_packages_toml_list():
+    """Multi-package list renders as one indented quoted entry per line."""
+    vars_ = build_template_vars(
+        packages=["src/server", "src/web"], container_name="c",
+    )
+    assert vars_["PACKAGES_TOML_LIST"] == '  "src/server",\n  "src/web"'
+
+
+def test_build_template_vars_packages_toml_list_empty():
+    """Empty package list renders a placeholder comment, keeping the file parseable."""
+    vars_ = build_template_vars(packages=[], container_name="c")
+    assert "# add packages here" in vars_["PACKAGES_TOML_LIST"]
 
 
 def test_build_template_vars_cross_pairs():

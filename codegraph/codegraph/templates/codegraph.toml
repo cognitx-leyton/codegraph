@@ -1,0 +1,30 @@
+# codegraph project config.
+#
+# This file tells `codegraph index`, `codegraph stats`, the auto-rebuild
+# hooks, the watcher, and `codegraph audit` which packages of this
+# repository to consider. Without it, every command would need an
+# explicit `-p / --package` flag.
+#
+# Every key here is also accepted under `[tool.codegraph]` in
+# `pyproject.toml` if you'd rather keep all project configuration in one
+# file. `codegraph.toml` takes precedence when both exist.
+
+# Packages to index. Paths are relative to this file (= the repo root).
+# Each entry should be a TypeScript package directory (containing
+# `package.json` / `tsconfig.json`) or a Python package directory
+# (containing `__init__.py` / `pyproject.toml` / `setup.py`).
+packages = [
+$PACKAGES_TOML_LIST
+]
+
+# Optional — these EXTEND the built-in exclude lists, they don't replace
+# them. Add anything else you want skipped during indexing.
+# exclude_dirs     = ["custom-build", "fixtures"]
+# exclude_suffixes = [".gen.ts"]
+
+# Optional — explicit Neo4j connection. If unset, codegraph reads the
+# CODEGRAPH_NEO4J_URI / _USER / _PASS env vars (defaults:
+# bolt://localhost:7688, neo4j, codegraph123).
+# neo4j_uri      = "bolt://localhost:7688"
+# neo4j_user     = "neo4j"
+# neo4j_password = "codegraph123"

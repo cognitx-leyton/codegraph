@@ -35,7 +35,10 @@ class ValidationReport:
 
 
 def run_validation(uri, user, password, repo_root, console=None) -> ValidationReport:
-    console = console or Console()
+    """Run the validation suite. When *console* is None, no Rich output is
+    rendered — useful for ``--json`` mode where the caller serialises the
+    returned :class:`ValidationReport` itself.
+    """
     driver = GraphDatabase.driver(uri, auth=(user, password))
     try:
         coverage = _coverage_metrics(driver)
@@ -43,7 +46,8 @@ def run_validation(uri, user, password, repo_root, console=None) -> ValidationRe
         smoke = _smoke_queries(driver)
     finally:
         driver.close()
-    _render(console, coverage, assertions, smoke)
+    if console is not None:
+        _render(console, coverage, assertions, smoke)
     return ValidationReport(coverage=coverage, assertions=assertions, smoke=smoke)
 
 

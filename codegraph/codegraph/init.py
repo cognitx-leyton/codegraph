@@ -485,8 +485,17 @@ def build_template_vars(
             f'  {{ importer = "{importer}", importee = "{importee}" }},\n'
         )
 
+    # TOML-array body for codegraph.toml — one quoted entry per line, indented
+    # by two spaces, no trailing comma on the last line. Empty list renders as
+    # a single empty-string-friendly placeholder so the file is still valid.
+    if packages:
+        packages_toml_list = ",\n".join(f'  "{p}"' for p in packages)
+    else:
+        packages_toml_list = '  # add packages here, e.g. "src/server"'
+
     return {
         "PACKAGE_PATHS_FLAGS": flags,
+        "PACKAGES_TOML_LIST": packages_toml_list,
         "DEFAULT_PACKAGE_PREFIX": default_package_prefix,
         "CROSS_PAIRS_TOML": cross_pairs_toml,
         "CONTAINER_NAME": container_name,
@@ -592,6 +601,23 @@ def _scaffold_files(
                 root / ".claude" / "commands" / cmd,
                 rendered, force=force, console=console,
             )
+
+    # Project config — codegraph.toml at the repo root. Skipped when the user
+    # already declares packages under [tool.codegraph] in pyproject.toml so
+    # they don't end up with two competing config sources.
+    pyproject = root / "pyproject.toml"
+    has_pyproject_block = False
+    if pyproject.exists():
+        try:
+            has_pyproject_block = "[tool.codegraph]" in pyproject.read_text(encoding="utf-8")
+        except OSError:
+            has_pyproject_block = False
+    if not has_pyproject_block:
+        _write_if_new(
+            root / "codegraph.toml",
+            _render("codegraph.toml", variables),
+            force=force, console=console,
+        )
 
     # Arch-policies config
     _write_if_new(

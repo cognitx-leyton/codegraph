@@ -236,14 +236,41 @@ def _query_graph_json(uri: str, cypher: str, console: Console) -> list[dict]:
     return list(payload.get("rows", []))
 
 
-def _detect_frameworks(uri: str, console: Console) -> tuple[set[str], set[str]]:
+def _detect_frameworks(
+    uri: str,
+    console: Console,
+    repo: Optional[Path] = None,
+) -> tuple[set[str], set[str]]:
     """Detect (frameworks, languages) present in the live graph.
 
     Returns ``(frameworks, languages)`` where frameworks is e.g.
     ``{'NestJS', 'React (TypeScript)'}`` and languages is e.g. ``{'py','ts'}``.
+
+    With *repo* set and a ``codegraph.toml`` (or ``[tool.codegraph]``) at
+    that root, the detection is scoped to the configured packages — so an
+    audit launched from repo A doesn't pull in repo B's frameworks just
+    because they share the same Neo4j. Without config, falls back to the
+    global query (legacy behaviour).
     """
+    package_filter = ""
+    package_names: list[str] = []
+    if repo is not None:
+        try:
+            from .config import load_config
+            cfg = load_config(repo)
+            package_names = list(cfg.packages or [])
+        except Exception:
+            package_names = []
+    if package_names:
+        # Build a literal IN clause; package names are simple repo-relative
+        # paths from a config file we wrote ourselves, so no injection risk.
+        joined = ", ".join(json.dumps(p) for p in package_names)
+        package_filter = f" WHERE p.name IN [{joined}]"
+
     fw_rows = _query_graph_json(
-        uri, "MATCH (p:Package) RETURN DISTINCT p.framework AS framework", console
+        uri,
+        f"MATCH (p:Package){package_filter} RETURN DISTINCT p.framework AS framework",
+        console,
     )
     frameworks: set[str] = set()
     for row in fw_rows:
@@ -251,9 +278,15 @@ def _detect_frameworks(uri: str, console: Console) -> tuple[set[str], set[str]]:
         if isinstance(fw, str) and fw and fw != "Unknown":
             frameworks.add(fw)
 
-    lang_rows = _query_graph_json(
-        uri, "MATCH (f:File) RETURN DISTINCT f.language AS language", console
-    )
+    if package_names:
+        joined = ", ".join(json.dumps(p) for p in package_names)
+        lang_query = (
+            f"MATCH (f:File) WHERE f.package IN [{joined}] "
+            "RETURN DISTINCT f.language AS language"
+        )
+    else:
+        lang_query = "MATCH (f:File) RETURN DISTINCT f.language AS language"
+    lang_rows = _query_graph_json(uri, lang_query, console)
     languages: set[str] = set()
     for row in lang_rows:
         lang = row.get("language")
@@ -370,7 +403,7 @@ def build_prompt(
     console: Console,
 ) -> str:
     """Assemble the final prompt as a single string."""
-    frameworks, languages = _detect_frameworks(uri, console)
+    frameworks, languages = _detect_frameworks(uri, console, repo=repo)
     inventory = _filter_inventory(frameworks, languages)
     samples = _sample_files(uri, languages, console)
     cypher_patterns = _read_template("cypher-checks.md")
@@ -594,6 +627,24 @@ def run_audit(
     if console is None:
         console = Console(quiet=True)
     verify_lock_or_die(console, recompute=recompute_lock)
+
+    # `--recompute-lock` is a maintenance action — the user just edited
+    # templates and wants to refresh the .lock file. Don't go on to launch
+    # an agent; that would make the CLI hang for minutes on a flag whose
+    # name doesn't suggest "and also run the audit".
+    if recompute_lock:
+        console.print(
+            "[green]✓[/] regenerated audit prompt lock at "
+            f"{Path(__file__).resolve().parent / 'templates' / 'audit' / '.lock'}"
+        )
+        return AuditReport(
+            ok=True,
+            agent="(none)",
+            repo=str(repo),
+            report_path="(lock recomputed)",
+            issues_found=0,
+        )
+
     agent = choose_agent(console, agent_name, yes=yes)
     prompt = build_prompt(repo, agent, uri, console)
 

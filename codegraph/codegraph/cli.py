@@ -1454,9 +1454,10 @@ def report(
         from .analyze import run_analysis
         from .report import generate_report, write_report
     except ImportError as e:
+        # Escape the brackets so Rich doesn't strip them as unknown style tags.
         console.print(
             f"[bold red]missing dependency:[/] {e}\n"
-            "Install the [analyze] extra: pip install 'codegraph[analyze]'"
+            r"Install the \[analyze] extra: pip install 'codegraph\[analyze]'"
         )
         raise typer.Exit(code=2)
 
