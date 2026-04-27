@@ -117,6 +117,9 @@ def run_clone(
     password: str,
     full_clone: bool = False,
     as_json: bool = False,
+    no_export: bool = False,
+    no_benchmark: bool = False,
+    no_analyze: bool = False,
     console: Console,
 ) -> int:
     """Clone a GitHub repo and index it. Returns exit code (0 success, 2 error)."""
@@ -184,5 +187,75 @@ def run_clone(
     else:
         _print_load_stats_dict(stats)
         console.print(f"\n[green]✓[/] Cloned to {dest}")
+
+    # 6. Post-processing (mirrors index command)
+    from neo4j import GraphDatabase
+
+    from .config import merge_cli_overrides
+
+    if not no_export:
+        try:
+            from .export import dump_graph as _dump_graph, to_html, to_json
+            out_dir = dest / "codegraph-out"
+            driver = GraphDatabase.driver(uri, auth=(user, password))
+            try:
+                driver.verify_connectivity()
+                nodes, edges = _dump_graph(driver, scope=packages_resolved)
+            finally:
+                driver.close()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            to_html(nodes, edges, out_dir / "graph.html")
+            to_json(nodes, edges, out_dir / "graph.json")
+            if not as_json:
+                console.print(f"[green]✓[/] exported graph.html + graph.json → {out_dir}")
+        except Exception as exc:  # noqa: BLE001
+            if not as_json:
+                console.print(f"[yellow]warning:[/] export failed: {exc}")
+
+    if not no_benchmark:
+        try:
+            from .benchmark import print_benchmark_summary, run_benchmark as _run_bench, write_benchmark_json
+            bench_cfg = load_config(dest)
+            bench_cfg = merge_cli_overrides(bench_cfg, packages=packages_resolved)
+            bench_result = _run_bench(
+                uri=uri, user=user, password=password,
+                repo=dest,
+                packages=list(bench_cfg.packages),
+            )
+            bench_out = dest / "codegraph-out"
+            write_benchmark_json(bench_result, bench_out)
+            if not as_json:
+                print_benchmark_summary(bench_result, console)
+        except Exception as exc:  # noqa: BLE001
+            if not as_json:
+                console.print(f"[yellow]warning:[/] benchmark failed: {exc}")
+
+    if not no_analyze:
+        try:
+            from .analyze import run_analysis
+            from .report import generate_report, write_report
+            an_cfg = load_config(dest)
+            an_cfg = merge_cli_overrides(an_cfg, packages=packages_resolved)
+            an_scope = list(an_cfg.packages) or None
+            an_driver = GraphDatabase.driver(uri, auth=(user, password))
+            try:
+                an_driver.verify_connectivity()
+                analysis = run_analysis(
+                    an_driver, scope=an_scope,
+                    console=None if as_json else console,
+                )
+            finally:
+                an_driver.close()
+            report_text = generate_report(analysis)
+            out_dir = dest / "codegraph-out"
+            write_report(report_text, out_dir / "GRAPH_REPORT.md")
+            if not as_json:
+                console.print(
+                    f"[green]✓[/] GRAPH_REPORT.md → {out_dir} "
+                    f"({analysis['community_count']} communities)"
+                )
+        except Exception as exc:  # noqa: BLE001
+            if not as_json:
+                console.print(f"[yellow]warning:[/] analyze failed: {exc}")
 
     return 0

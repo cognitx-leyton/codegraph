@@ -161,6 +161,9 @@ def clone(
     password: str = typer.Option(DEFAULT_PASS, "--password", help="Neo4j password."),
     full_clone: bool = typer.Option(False, "--full-clone", help="Full git history (enables ownership data)."),
     as_json: bool = typer.Option(False, "--json", help="Emit stats as JSON on stdout."),
+    no_export: bool = typer.Option(False, "--no-export", help="Skip HTML/JSON export after indexing."),
+    no_benchmark: bool = typer.Option(False, "--no-benchmark", help="Skip token-reduction benchmark after indexing."),
+    no_analyze: bool = typer.Option(False, "--no-analyze", help="Skip Leiden community detection + GRAPH_REPORT after indexing."),
 ) -> None:
     """Clone a GitHub repo, cache it locally, and auto-index into Neo4j."""
     from .clone import run_clone as _run_clone
@@ -172,6 +175,9 @@ def clone(
         password=password,
         full_clone=full_clone,
         as_json=as_json,
+        no_export=no_export,
+        no_benchmark=no_benchmark,
+        no_analyze=no_analyze,
         console=console,
     ))
 
