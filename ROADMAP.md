@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-27 after commits `a6c9221` → `e2ee2fb` (parse-result validator to catch malformed extractions before Neo4j load, closes issue #269). v0.1.105.
+> **Last updated:** 2026-04-27 after commits `a6c9221` → `19376d7` (graph HTML polish — community toggle, convex hull overlays, diacritic-insensitive search, closes issue #270). v0.1.105.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-269-extraction-validator`. New `parse_validator.py` module — validates `ParseResult` before Neo4j write: duplicate node IDs, dangling edge src/dst, unknown edge kinds, invalid confidence labels/scores. `--strict-validate` flag on `codegraph index`. 20 new tests. Closes issue #269. v0.1.105.
-- **Tests:** 1051 passing (20 new in `test_parse_validator.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-270-graph-html-polish`. `export.py` viewer polish — per-community filter sidebar, convex hull overlays (inline Graham-scan JS, no CDN), diacritic-insensitive node search. 5 new tests. Closes issue #270. v0.1.105.
+- **Tests:** 1056 passing (5 new in `test_export.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.105 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -43,9 +43,9 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
-e2ee2fb  feat(validate): add parse-result validator to catch malformed extractions before Neo4j load (#269)
-7cb1fdd  fix(clone): add --no-export/--no-benchmark/--no-analyze flags and post-processing
-0728528  feat(clone): add codegraph clone command to index remote Git repos
+19376d7  feat(export): polish graph HTML — community toggle, convex hull, search UX
+776bf01  feat(validate): add parse-result validator to catch malformed extractions before Neo4j load (#284)
+b691de1  feat(clone): add codegraph clone command to index remote Git repos (#283)
 a4bb1a2  feat(audio): Whisper-based audio/video transcription (#267) (#282)
 b7f331e  fix(audio): wire TRANSCRIBED_FROM edge into loader and CLI emission
 3dde404  feat(audio): Whisper-based audio/video transcription with DocumentNode extraction
@@ -75,6 +75,40 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### export — graph HTML viewer polish (issue #270)
+
+- `19376d7 feat(export)` — Two files changed (0 new, 2 updated):
+
+  **Updated files:**
+
+  1. **`codegraph/codegraph/export.py`** — Three functions updated:
+
+     - **`to_html()`** — Partitions `EdgeGroup` nodes and `MEMBER_OF` edges out of the vis.js render (EdgeGroup synthetic nodes were showing as dangling vertices). Builds per-community sidebar HTML: one checkbox + HSL-coloured swatch per community, with `html.escape()` + `_js_safe()` on community labels to prevent XSS. Stats line counts only regular (non-EdgeGroup) nodes.
+
+     - **`_community_css()`** (new helper) — Inline CSS block for the sidebar: `#sidebar` toggle button, `#communities` collapsible section with `#communities:empty { display: none; }` guard (prevents empty padding/border when no communities exist).
+
+     - **`_html_script()`** — Three features added:
+       - **Community filter toggles**: `change` handler on each checkbox. `cb` variable used consistently throughout (avoids `this` vs. `cb` ambiguity inside nested callbacks). Unchecking a community hides all member nodes via `nodes.update({hidden: true})`.
+       - **Convex hull overlays**: inline Graham-scan (~25 lines JS, no external dependency). Rendered via vis.js `afterDrawing` canvas hook. Semi-transparent `hsla` fills (alpha 0.12) and strokes (alpha 0.3), padded 20px outward from centroid. Skips communities with <3 hull points (e.g. collinear layouts).
+       - **Diacritic-insensitive search**: `stripDiacritics()` helper using `String.prototype.normalize('NFD')` + Unicode combining-marks regex. Applied to both the search query and node labels/titles so accented characters match their base form.
+
+  2. **`codegraph/tests/test_export.py`** — Two fixtures + five tests added:
+     - `community_result` fixture — `ParseResult` with two community `EdgeGroup` nodes + `MEMBER_OF` edges.
+     - `html_with_communities` fixture — calls `to_html()` on the above.
+     - `test_to_html_community_checkboxes` — verifies `class="community-item"` items present.
+     - `test_to_html_community_colors` — verifies `hsl(` colour swatches in sidebar.
+     - `test_to_html_no_edgegroup_in_vis` — verifies EdgeGroup label absent from vis.js `nodes` array.
+     - `test_to_html_no_communities_graceful` — verifies no sidebar checkboxes when no communities.
+     - `test_to_html_community_label_escaped` — verifies `<script>` in community label is HTML-escaped.
+
+  **Code review (2 issues found and fixed):**
+  - `[BUG]` Empty `#communities` div rendered padding + border when no communities → fixed with `#communities:empty { display: none; }` CSS rule.
+  - `[STYLE]` `this.checked` / `this.dataset.community` mixed with `cb.checked` in same handler → normalised to `cb.*` throughout.
+
+  **Pre-existing pattern noted (out of scope):** search-clear resets `hidden: false` on ALL nodes, including community-hidden ones — same behaviour as the legend toggle. Not fixed here.
+
+  - **Validation:** 1056 tests pass (5 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 policies pass.
 
 ### validate — parse-result validator before Neo4j load (issue #269)
 
@@ -1771,12 +1805,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-269-extraction-validator` |
+| Current branch | `archon/task-feat-issue-270-graph-html-polish` |
 | Base branch | `main` |
-| Unpushed commits | Multiple — extraction validator (`e2ee2fb`) + clone command (`7cb1fdd`, `0728528`) + audio transcription (`a4bb1a2`) + vision extraction (`a6c9221`) + markdown semantic extraction (`d2e6f06`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
+| Unpushed commits | Multiple — graph HTML polish (`19376d7`) + extraction validator (`776bf01`) + clone command (`b691de1`) + audio transcription (`a4bb1a2`) + vision extraction (`a6c9221`) + markdown semantic extraction (`d2e6f06`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/extraction-validator.plan.md`) |
-| Test count | 1051 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/graph-html-polish.plan.md`) |
+| Test count | 1056 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `0728528`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic,transcribe]"` after any `pyproject.toml` edit. |
