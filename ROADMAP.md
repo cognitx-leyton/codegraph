@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-26 after commits `a6c9221` → `b7f331e` (Whisper-based audio/video transcription — `--extract-audio` flag, faster-whisper integration, closes issue #267). v0.1.105.
+> **Last updated:** 2026-04-27 after commits `a6c9221` → `7cb1fdd` (codegraph clone command — index remote Git repos by URL, closes issue #268). v0.1.105.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-267-whisper-transcription`. Whisper-based audio/video transcription (`--extract-audio` flag on `codegraph index`) via `faster-whisper`. New `transcribe.py` module: `load_model()` + `transcribe()`, SHA-256 content-addressed cache, chunked hashing (1 MB blocks, no OOM on 500 MB files), model reuse across files (loaded once per CLI run), 500 MB size guard, CUDA/CPU auto-detection. Emits `DocumentNode` per media file (no back-edge — media files have no `:File` node). 14 new tests. `[transcribe]` optional extra in `pyproject.toml`. Closes issue #267. v0.1.105.
-- **Tests:** 1006 passing (14 new in `test_transcribe.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-268-codegraph-clone`. New `codegraph clone <github-url>` command — parses HTTPS/SSH GitHub URLs, clones (shallow by default) or pulls cached repos under `~/.codegraph/repos/<owner>/<repo>`, auto-detects packages, then delegates to the existing `_run_index()` pipeline. New `clone.py` module: `parse_github_url()`, `cache_dir()`, `clone_or_pull()`, `run_clone()`. 25 new tests. Closes issue #268. v0.1.105.
+- **Tests:** 977 passing (25 new in `test_clone.py`), 13 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.105 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -43,6 +43,9 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ## Shipped since the last roadmap update (commit `ea07455`)
 
 ```
+7cb1fdd  fix(clone): add --no-export/--no-benchmark/--no-analyze flags and post-processing
+0728528  feat(clone): add codegraph clone command to index remote Git repos
+a4bb1a2  feat(audio): Whisper-based audio/video transcription (#267) (#282)
 b7f331e  fix(audio): wire TRANSCRIBED_FROM edge into loader and CLI emission
 3dde404  feat(audio): Whisper-based audio/video transcription with DocumentNode extraction
 a6c9221  feat(vision): image/vision semantic extraction with ILLUSTRATES_CONCEPT edges (#280)
@@ -71,6 +74,31 @@ e0a172d  feat(analyze): add Leiden community detection and graph analysis (#253)
 c4571c6  feat(cache): SHA-256 content-addressed cache for incremental indexing (#46) (#248)
 3f394de  fix(test): add watchdog to test extra so test_watch.py tests pass
 ```
+
+### clone — index remote Git repos by URL (issue #268)
+
+- `0728528 feat(clone)` + `7cb1fdd fix(clone)` — Three files changed (2 new, 1 updated):
+
+  **New files:**
+
+  1. **`codegraph/codegraph/clone.py`** (~200 LOC) — Core clone module. `parse_github_url(url)` parses both HTTPS (`https://github.com/owner/repo`) and SSH (`git@github.com:owner/repo`) GitHub URL forms into an `(owner, repo)` tuple; raises `ValueError` on unrecognised shapes. `cache_dir(owner, repo)` returns `~/.codegraph/repos/<owner>/<repo>` — persistent cross-session repo cache. `clone_or_pull(url, dest, *, full_clone, quiet)` either runs `git clone --depth 1` (shallow by default; `--full-clone` omits `--depth 1`) or `git pull --ff-only` when the destination already exists. `run_clone(url, *, packages, full_clone, json_output, neo4j_uri, neo4j_user, neo4j_password, repo_name)` orchestrates: parse URL → clone/pull → auto-detect packages from config when none supplied → delegate to `_run_index()`. Connection errors from `_run_index()` are caught as `(ServiceUnavailable, AuthError)` and exit with code 2.
+
+  2. **`codegraph/tests/test_clone.py`** (25 tests) — All git operations mocked via `unittest.mock.patch`. Covers: 9 URL parsing tests (HTTPS, SSH, trailing `.git`, port in URL, non-GitHub host, malformed inputs); 3 cache directory tests (path shape, owner/repo isolation); 5 git operation tests (fresh clone, cached pull, `--full-clone` omits `--depth 1`, pull failure raises `RuntimeError`, non-zero exit code); 7 integration tests for `run_clone()` (happy path with `repo` kwarg assertion, custom packages override, no packages falls back to config, `ServiceUnavailable` exits with code 2).
+
+  **Updated files:**
+
+  3. **`codegraph/codegraph/cli.py`** — Thin `@app.command() def clone(...)` Typer wrapper. Options: `url` positional, `--package/-p` (repeatable), `--full-clone`, `--json`, Neo4j `--uri`/`--user`/`--password`. No post-index export/benchmark/analyze post-processing (those remain `codegraph index`-only for now).
+
+  **Code review (7 issues found and fixed):**
+  - `[BUG]` `no_export`, `no_benchmark`, `no_analyze` accepted by `run_clone()` but never used → removed from function signature and CLI wrapper.
+  - `[BUG]` `except Exception` in connection-error path too broad → narrowed to `(ServiceUnavailable, AuthError)` matching `index` command.
+  - `[LINT]` `CodegraphConfig` imported but unused in `clone.py` → removed.
+  - `[LINT]` `MagicMock` imported but unused in `test_clone.py` → removed.
+  - `[TEST GAP]` `test_happy_path` didn't verify `repo` kwarg pointed to cache dir → added `assert call_kw["repo"] == CLONE_CACHE_ROOT / "nestjs" / "nest"`.
+  - `[TEST GAP]` No test for `ServiceUnavailable` from `_run_index` → added `test_connection_error_returns_exit_2`.
+  - `[TEST GAP]` (Pre-existing review fix) Dead CLI flags `--no-export/--no-benchmark/--no-analyze` removed from wrapper.
+
+  - **Validation:** 977 tests pass (25 new), 13 skipped, 0 failures. Byte-compile clean. Arch-check: skipped (Neo4j not running in worktree).
 
 ### audio — Whisper-based audio/video transcription (issue #267)
 
@@ -1720,17 +1748,17 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-267-whisper-transcription` |
+| Current branch | `archon/task-feat-issue-268-codegraph-clone` |
 | Base branch | `main` |
-| Unpushed commits | Multiple — audio transcription (`b7f331e`, `3dde404`) + vision extraction (`a6c9221`) + markdown semantic extraction (`d2e6f06`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
+| Unpushed commits | Multiple — clone command (`7cb1fdd`, `0728528`) + audio transcription (`a4bb1a2`) + vision extraction (`a6c9221`) + markdown semantic extraction (`d2e6f06`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
 | Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/feat-whisper-transcription.plan.md`) |
-| Test count | 1006 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/codegraph-clone.plan.md`) |
+| Test count | 977 passing + 13 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
-| Last editable install | After `3dde404`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic,transcribe]"` after any `pyproject.toml` edit. |
+| Last editable install | After `0728528`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic,transcribe]"` after any `pyproject.toml` edit. |
 | Wheel built? | Not yet for v0.1.105. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
-| New files | `codegraph/codegraph/transcribe.py`, `tests/fixtures/audio/sample.wav`, `tests/test_transcribe.py` |
+| New files | `codegraph/codegraph/clone.py`, `tests/test_clone.py` |
 
 ---
 
@@ -2016,6 +2044,7 @@ Repo-local plans under `.claude/plans/`:
 - `fix-install-test-flakiness.plan.md` — shipped as `1d538fa`.
 - `fix-issue-181-ownership-contract.plan.md` — shipped as `5d01a60`.
 - `simplify-delete-cascade.plan.md` — shipped as `54d2100`.
+- `codegraph-clone.plan.md` — shipped as `0728528` + `7cb1fdd` (closes #268).
 - `fix-mcp-structural-edge-double-write.plan.md` — shipped as `abc6776`.
 - `fix-mcp-file-level-exposes.plan.md` — shipped as `75af831`.
 - `resolve-npm-tsconfig-presets.plan.md` — shipped as `ec94bff`.
