@@ -479,7 +479,7 @@ class _PyWalker:
             self.result.edges.append(Edge(
                 kind=HAS_COLUMN,
                 src_id=cls.id,
-                dst_id=f"col:{cls.id}#{col_name}",
+                dst_id=col.id,
             ))
             # Scan Column args for nested ForeignKey/relationship calls
             self._scan_nested_relations(rhs, cls, col_name)
