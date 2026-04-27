@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-27 after commits `a6c9221` → `19376d7` (graph HTML polish — community toggle, convex hull overlays, diacritic-insensitive search, closes issue #270). v0.1.105.
+> **Last updated:** 2026-04-27 after PR #287 created — epic #271 graphify-parity closeout (closed 8 sub-issues #263–#270, opened PR to main). 9 new findings from code review noted for follow-up. v0.1.105.
 
 ---
 
@@ -27,8 +27,9 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-270-graph-html-polish`. `export.py` viewer polish — per-community filter sidebar, convex hull overlays (inline Graham-scan JS, no CDN), diacritic-insensitive node search. 5 new tests. Closes issue #270. v0.1.105.
-- **Tests:** 1056 passing (5 new in `test_export.py`), 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-271-graphify-parity`. Epic #271 closeout — 8 sub-issues (#263–#270) closed, PR #287 open targeting `main`. No new code; all feature work was implemented in prior commits on this branch. v0.1.105.
+- **Tests:** 1057 passing, 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Open PR:** [cognitx-leyton/codegraph#287](https://github.com/cognitx-leyton/codegraph/pull/287) — epic summary table, `Closes #271`, targets `main`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
 - **Package:** `cognitx-codegraph` v0.1.105 in `pyproject.toml`. Wheel + sdist build cleanly. **Not yet on PyPI** — needs one-time operational setup (Trusted Publisher registration). `release.yml` now waits for propagation and smoke-tests the published version.
@@ -41,6 +42,14 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 ---
 
 ## Shipped since the last roadmap update (commit `ea07455`)
+
+### epic #271 closeout — graphify parity (no code, GitHub ops only)
+
+- All 8 sub-issues (#263 schema-namespacing, #264 PDF ingestion, #265 markdown semantic extraction, #266 vision extraction, #267 audio transcription, #268 clone command, #269 parse-result validator, #270 graph HTML polish) closed with references to their implementing commits.
+- Epic issue #271 closed with a summary comment linking all 8 sub-issues.
+- PR #287 created targeting `main` with epic summary table.
+- Arch-check: 4/4 PASS. Tests: 1057/1057 PASS.
+- 9 new findings from the consolidated code review noted above (8 → "Known open questions", 3 pre-existing trackers #277/#278/#285 already open).
 
 ```
 19376d7  feat(export): polish graph HTML — community toggle, convex hull, search UX
@@ -1805,12 +1814,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-270-graph-html-polish` |
+| Current branch | `archon/task-feat-issue-271-graphify-parity` |
 | Base branch | `main` |
-| Unpushed commits | Multiple — graph HTML polish (`19376d7`) + extraction validator (`776bf01`) + clone command (`b691de1`) + audio transcription (`a4bb1a2`) + vision extraction (`a6c9221`) + markdown semantic extraction (`d2e6f06`) + PDF ingestion (`38bd173`) + repo-namespace fix (`6990e71`) + prior work |
-| Open PR | None. |
-| Working tree | Clean (untracked: `.claude/plans/graph-html-polish.plan.md`) |
-| Test count | 1056 passing + 11 skipped + 0 deselected |
+| Unpushed commits | Branch pushed — PR #287 open targeting `main` |
+| Open PR | [#287](https://github.com/cognitx-leyton/codegraph/pull/287) — epic #271 graphify-parity closeout |
+| Working tree | Clean (untracked: `.claude/plans/epic-271-graphify-parity-closeout.plan.md`) |
+| Test count | 1057 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `0728528`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic,transcribe]"` after any `pyproject.toml` edit. |
@@ -2045,6 +2054,17 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 5. ~~**`.arch-policies.toml` schema versioning**~~ — **SHIPPED** (`bc70d01`). `[meta] schema_version = 1` added; forward-compat guard raises on unknown versions; backwards-compat confirmed (files without `[meta]` treated as v1).
 
 6. **Twenty's 184,809 import cycles** — surfaced by the e2e run. Are these real architectural problems or an artefact of the cycle detection (e.g. barrel files counting twice)? Needs a quick sample-and-validate. If the heuristic is over-reporting, cap the cycle length or dedupe by node set.
+
+8. **New findings from epic #271 code review** (5 MEDIUM, 4 LOW — not yet filed as issues):
+   - `[MEDIUM]` `clone.py:75-88` — shallow→full clone transition doesn't unshallow; ownership data silently wrong.
+   - `[MEDIUM]` `semantic_extract.py:96-103` — cache race: concurrent writers share the same `.tmp` path.
+   - `[MEDIUM]` `semantic_extract.py:193` / `vision_extract.py:141` — `response.content[0].text` raises `IndexError` on empty content list.
+   - `[MEDIUM]` `transcribe.py:222-237` — path traversal via yt-dlp `video_id` in manual path construction.
+   - `[MEDIUM]` `cli.py:416` / `mcp.py:769` — repo-name validation missing `@` character.
+   - `[LOW]` `transcribe.py:62-65` — cache key missing `model_size`/`language`; stale cache hits possible.
+   - `[LOW]` `test_py_parser.py:65,95` / `test_loader_partitioning.py:69` — stale docstrings (17→23, 16→17 counts).
+   - `[LOW]` `test_transcribe.py:48` — dead class-level `call_count` never reset.
+   - `[LOW]` `test_mcp.py:895-904` — `_allow_write` state leak — monkeypatch records wrong value.
 
 ---
 

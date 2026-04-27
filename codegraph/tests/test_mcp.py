@@ -898,10 +898,9 @@ def test_main_parses_allow_write(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["codegraph-mcp", "--allow-write"])
     monkeypatch.setattr(mcp_mod.mcp, "run", lambda **kw: None)
     monkeypatch.setattr(mcp_mod, "_driver", None)
+    monkeypatch.setattr(mcp_mod, "_allow_write", False)
     mcp_mod.main()
     assert mcp_mod._allow_write is True
-    # Reset
-    monkeypatch.setattr(mcp_mod, "_allow_write", False)
 
 
 def test_main_default_no_allow_write(monkeypatch):
