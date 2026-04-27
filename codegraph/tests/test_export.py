@@ -188,6 +188,25 @@ def test_to_html_diacritic_search(tmp_path: Path) -> None:
     assert "\\u0300-\\u036f" in content
 
 
+def test_to_html_community_label_xss(tmp_path: Path) -> None:
+    """Community labels containing HTML/JS are escaped."""
+    xss_nodes = _FIXTURE_NODES + [
+        {"id": "eg_xss", "labels": ["EdgeGroup"],
+         "properties": {"id": "community:xss", "kind": "community",
+                        "label": '<script>alert("xss")</script>', "node_count": 1}},
+    ]
+    xss_edges = _FIXTURE_EDGES + [
+        {"src": "n1", "dst": "eg_xss", "type": "MEMBER_OF", "properties": {"cid": 0}},
+    ]
+    out = tmp_path / "graph.html"
+    to_html(xss_nodes, xss_edges, out)
+    content = out.read_text()
+    # Raw <script> must NOT appear — it should be escaped
+    assert '<script>alert("xss")</script>' not in content
+    # Escaped form should be present somewhere in the sidebar
+    assert "&lt;script&gt;" in content or "\\x3c" in content
+
+
 def test_to_html_community_excludes_edgegroup_nodes(tmp_path: Path) -> None:
     """EdgeGroup synthetic nodes should not appear as vis.js nodes."""
     out = tmp_path / "graph.html"
