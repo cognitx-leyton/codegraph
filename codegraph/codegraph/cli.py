@@ -30,6 +30,7 @@ from .framework import FrameworkDetector
 from .ignore import IgnoreConfigError, IgnoreFilter
 from .loader import LoadStats, Neo4jLoader
 from .ownership import collect_ownership
+from .parse_validator import validate_cross_file_edges, validate_parse_result
 from .parser import TsParser
 from .resolver import (
     Index,
@@ -262,6 +263,11 @@ def index(
         help="Transcribe audio/video files via Whisper. "
              "Requires the [transcribe] extra.",
     ),
+    strict_validate: bool = typer.Option(
+        False, "--strict-validate",
+        help="Fail the run if any parse-result validation errors are found "
+             "(malformed nodes/edges). Default: log warnings and continue.",
+    ),
 ) -> None:
     """Index a TypeScript monorepo into Neo4j."""
     try:
@@ -283,6 +289,7 @@ def index(
             extract_markdown=extract_markdown,
             extract_images=extract_images,
             extract_audio=extract_audio,
+            strict_validate=strict_validate,
         )
     except ConfigError as e:
         _emit_error(as_json, "config", str(e))
@@ -389,6 +396,7 @@ def _run_index(
     extract_markdown: bool = False,
     extract_images: bool = False,
     extract_audio: bool = False,
+    strict_validate: bool = False,
 ) -> dict[str, Any]:
     """Core indexing routine. Returns a flat dict of stats (files, edges, ...).
 
@@ -552,6 +560,7 @@ def _run_index(
     progress_step = max(1, len(to_parse) // 20)
     new_manifest: dict[str, str] = {}
     cache_hits = 0
+    all_validation_errors: list[str] = []
     for i, (abs_p, rel, pkg_name, is_test) in enumerate(to_parse):
         # Cache check
         if ast_cache is not None:
@@ -574,6 +583,15 @@ def _run_index(
                                            repo_name=effective_repo_name)
         if result is None:
             continue
+        # Pre-load validation
+        file_errors = validate_parse_result(result)
+        if file_errors:
+            if strict_validate:
+                all_validation_errors.extend(f"{rel}: {e}" for e in file_errors)
+            else:
+                say(f"[yellow]  validation: {rel}: {len(file_errors)} error(s)[/]")
+                for e in file_errors:
+                    say(f"[yellow]    - {e}[/]")
         index_obj.add(result)
         if ast_cache is not None:
             ast_cache.put(rel, content_hash, result)
@@ -619,6 +637,22 @@ def _run_index(
         say(
             f"  imports: total={total_imports} resolved={total_imports-unresolved_imports} "
             f"unresolved={unresolved_imports} ({pct:.1f}% resolved)  [{time.time()-t0:.1f}s]"
+        )
+
+    # Cross-file edge validation
+    xfile_errors = validate_cross_file_edges(all_edges, index_obj)
+    if xfile_errors:
+        if strict_validate:
+            all_validation_errors.extend(f"cross-file: {e}" for e in xfile_errors)
+        else:
+            say(f"[yellow]  validation: cross-file edges: {len(xfile_errors)} error(s)[/]")
+            for e in xfile_errors:
+                say(f"[yellow]    - {e}[/]")
+
+    if strict_validate and all_validation_errors:
+        raise ConfigError(
+            f"--strict-validate: {len(all_validation_errors)} validation error(s) — "
+            f"aborting before Neo4j write"
         )
 
     for r in index_obj.files_by_path.values():
