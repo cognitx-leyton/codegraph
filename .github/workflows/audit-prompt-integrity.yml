@@ -51,7 +51,7 @@ jobs:
         run: pip install -e ./codegraph
 
       - name: Sticky warning comment for the reviewer
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: codegraph-audit-prompt-integrity
           message: |
