@@ -1,6 +1,6 @@
 tree-sitter>=0.23,<0.25
 tree-sitter-typescript>=0.23.2
-neo4j>=5.28,<6
+neo4j>=5.28.3,<6
 typer>=0.15
 rich>=13
 pyyaml>=6.0.3
