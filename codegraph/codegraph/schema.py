@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -276,7 +278,16 @@ class DocumentSectionNode:
 
 def _slug(text: str) -> str:
     """Collapse free-text into a safe ID fragment (no ``#``, ``:``, or spaces)."""
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", text).strip("_").lower()
+    # NFKD normalize: accented chars decompose into base + combining mark
+    normalised = unicodedata.normalize("NFKD", text)
+    # Drop non-ASCII (combining marks, CJK, etc.) keeping transliterated bases
+    ascii_text = normalised.encode("ascii", errors="ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", ascii_text).strip("_").lower()
+    if slug:
+        return slug
+    # Deterministic hash fallback for purely non-ASCII or empty input
+    # Hash the NFKD-normalised form so canonically equivalent strings match.
+    return hashlib.sha256(normalised.encode()).hexdigest()[:8]
 
 
 @dataclass

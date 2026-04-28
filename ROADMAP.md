@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-28 after `65a104a` — docs(schema): fix stale Cypher patterns to use id-based lookups (closes #272). Docs-only fix across 4 files + 2 live command syncs. 1057 tests pass. v0.1.112.
+> **Last updated:** 2026-04-28 after `5067452` — fix(schema): normalize Unicode before slug hashing so canonical equivalents map to the same ID (closes #277). `_slug()` rewrite + 16 new tests. 1073 tests pass. v0.1.112.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-docs-issue-272-stale-cypher-patterns`. Docs-only fix for issue #272 — stale `File {path:}` Cypher patterns updated to use `id`-based lookups across `graph.md`, `who-owns.md`, `queries.md`, and `schema.md`. v0.1.112.
-- **Tests:** 1057 passing, 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-277-slug-unicode`. Fixes issue #277 — `_slug()` in `schema.py` now NFKD-normalises input before slug hashing so accented chars transliterate (`café` → `cafe`) and CJK/empty strings get a deterministic SHA-256[:8] fallback. Canonical Unicode equivalents map to the same ID. v0.1.112.
+- **Tests:** 1073 passing, 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Open PR:** [cognitx-leyton/codegraph#287](https://github.com/cognitx-leyton/codegraph/pull/287) — epic summary table, `Closes #271`, targets `main`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
@@ -41,7 +41,48 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ---
 
-## Shipped since the last roadmap update (commit `ea07455`)
+## Shipped since the last roadmap update (commit `5067452`)
+
+### fix(schema) — normalize Unicode before slug hashing (issue #277)
+
+- `5067452 fix(schema)` — Two files changed (1 new test file, 1 modified):
+
+  **Modified files:**
+
+  1. **`codegraph/codegraph/schema.py`** — Added `import hashlib` + `import unicodedata`. Rewrote `_slug()`:
+     - NFKD-normalises input (`unicodedata.normalize('NFKD', text)`), encodes to ASCII with `errors='ignore'` to transliterate accented characters (`café` → `cafe`, `naïve résumé` → `naive resume`, `Ñoño` → `nono`).
+     - Falls back to a deterministic `sha256(nfkd_normalised_bytes).hexdigest()[:8]` when the ASCII result would be empty (CJK scripts, empty string, whitespace-only input) — ensures IDs remain stable and non-empty.
+     - Hash computed over the NFKD-normalised form (not the original) so canonically-equivalent Unicode inputs (precomposed vs. decomposed) always produce the same ID.
+
+  **New files:**
+
+  2. **`codegraph/tests/test_schema.py`** (16 tests) — Covers:
+     - ASCII passthrough, dots/dashes preservation.
+     - Accented transliteration: `café`, `naïve résumé`, `Ñoño`.
+     - CJK hash fallback, empty string, whitespace-only.
+     - Hash uniqueness: different CJK strings → different hashes.
+     - Determinism: same input always produces same output.
+     - No forbidden chars (`#`, `:`, space) in any output.
+     - Canonical Unicode equivalence (precomposed `が` vs. decomposed `か`+dakuten → same ID).
+     - Node ID integration for `ConceptNode`, `DecisionNode`, `RationaleNode`.
+
+  **Code review (1 issue found and fixed):**
+  - `[BUG]` Hash fallback was hashing `text.encode()` (original) instead of `normalised.encode()` — canonically-equivalent Unicode pairs (precomposed vs. decomposed) produced different hashes → fixed; hash now computed over NFKD-normalised bytes. Tests updated to assert the normalised hash + added `test_slug_canonical_equivalence`.
+
+  **Known limitations (out of scope for #277):**
+  - Mixed ASCII+non-ASCII slug collision: `"api_世界"` → `"api"` equals `"api_你好"` → `"api"`. Would need a hash-suffix design.
+  - German `ß` doesn't fully decompose under NFKD (`"Straße"` → `"strae"`). Would need `unidecode` library.
+
+  - **Validation:** 1073 tests pass (16 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 PASS.
+
+```
+5067452  fix(schema): normalize Unicode before slug hashing so canonical equivalents map to the same ID
+65a104a  docs(schema): fix stale Cypher patterns to use id-based lookups (closes #272)
+```
+
+---
+
+## Shipped since `ea07455`
 
 ### docs — fix stale Cypher patterns to use id-based lookups (issue #272)
 
@@ -74,7 +115,7 @@ b2cd9fa  feat(graphify-parity): close epic #271 — multimodal ingestion, multi-
 - Epic issue #271 closed with a summary comment linking all 8 sub-issues.
 - PR #287 created targeting `main` with epic summary table.
 - Arch-check: 4/4 PASS. Tests: 1057/1057 PASS.
-- 9 new findings from the consolidated code review noted above (8 → "Known open questions", 3 pre-existing trackers #277/#278/#285 already open).
+- 9 new findings from the consolidated code review noted above (8 → "Known open questions", 3 pre-existing trackers #277/#278/#285 already open). **#277 now closed** (`5067452`).
 
 ```
 19376d7  feat(export): polish graph HTML — community toggle, convex hull, search UX
