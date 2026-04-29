@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-29 after `6df41ce` — fix(export): composite `hiddenReasons` map so search no longer resets legend/community visibility filters (closes #285). `setHidden(nodeId, reason, hide)` helper added; all three vis handlers (search, legend toggle, community toggle) use namespaced reason keys. 1085 tests pass. v0.1.112.
+> **Last updated:** 2026-04-29 after `13e28ed` — fix(clone): unshallow cached shallow repos when full history is requested (closes #288). Guard added in `clone_or_pull()`: when a cached clone exists, `shallow=False` is requested, and `.git/shallow` is present, runs `git fetch --unshallow` before `git pull --ff-only`. Failure raises `ConfigError`. 4 new tests; 1089 total pass. v0.1.112.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-fix-issue-285-search-legend-community-reset`. Closes issue #285 — composite `hiddenReasons` map in the HTML export so clearing a search no longer unhides nodes that were hidden by legend or community toggles. `setHidden(nodeId, reason, hide)` helper; namespaced reason keys (`'search'`, `'legend:<label>'`, `'community:<cid>'`). `hiddenCommunities` object preserved for hull renderer. v0.1.112.
-- **Tests:** 1085 passing, 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-fix-issue-288-clone-unshallow`. Closes issue #288 — unshallow guard in `clone_or_pull()`: when a cached clone is shallow and the caller requests full history (`shallow=False`), runs `git fetch --unshallow` before `git pull --ff-only`. `ConfigError` raised on fetch failure, consistent with existing subprocess error pattern. v0.1.112.
+- **Tests:** 1089 passing, 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Open PR:** [cognitx-leyton/codegraph#287](https://github.com/cognitx-leyton/codegraph/pull/287) — epic summary table, `Closes #271`, targets `main`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
@@ -38,6 +38,33 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 - **Onboarding:** `codegraph init` scaffolds everything needed to dogfood codegraph in any repo. Live-tested against 3 fixtures including the real Twenty monorepo (13k files indexed end-to-end).
 - **Python Stage 2:** FastAPI / Flask / Django / SQLAlchemy framework detection + `:Endpoint` nodes. `/trace-endpoint` now works against Python repos.
 - **Incremental re-indexing:** `codegraph index --since <git-ref>` diffs git, cleans stale subgraphs, and upserts only touched files. Implies `--no-wipe`. REPL supports `index --since HEAD~1`. Non-code files (`.md`, `.json`, `.yml`, etc.) are now filtered from the diff before processing.
+
+---
+
+## Shipped since the last roadmap update (commit `42707be`)
+
+### fix(clone) — unshallow cached shallow repos when full history is requested (issue #288)
+
+- `13e28ed fix(clone)` — Two files changed, 4 new tests:
+
+  **Modified files:**
+
+  1. **`codegraph/codegraph/clone.py`** — Added unshallow guard in `clone_or_pull()` (lines 76–87). When a cached clone exists, `shallow=False` is requested, and `.git/shallow` sentinel is present, runs `git fetch --unshallow` before the existing `git pull --ff-only`. Uses the same `subprocess.run(cwd=dest, check=True, capture_output=True, text=True)` kwargs as the pull call. Failure raises `ConfigError` with `f"git fetch --unshallow failed in {dest}:\n{exc.stderr.strip()}"` — consistent with the pull error message pattern. No new imports; no docstring changes.
+
+  2. **`codegraph/tests/test_clone.py`** — 4 new tests:
+     - `test_cached_shallow_repo_unshallowed_when_full_requested` — `.git/shallow` present, `shallow=False`: asserts `fetch --unshallow` runs first, then `pull --ff-only` (2 subprocess calls in correct order with correct `cwd`).
+     - `test_cached_shallow_repo_stays_shallow_when_shallow_requested` — `.git/shallow` present, `shallow=True`: asserts only 1 call (pull); guard short-circuits on `not shallow`.
+     - `test_cached_full_repo_skips_unshallow` — no `.git/shallow`, `shallow=False`: asserts only 1 call; guard short-circuits on `.exists()`.
+     - `test_unshallow_failure_raises_config_error` — `subprocess.run` side-effect raises `CalledProcessError`: asserts `ConfigError` with matching message substring.
+
+  **Code review (0 issues):** Guard condition is minimal and correct; `.git/shallow` is the standard sentinel Git creates for shallow clones and removes after `--unshallow`; subprocess kwargs and error format mirror existing patterns exactly; no TOCTOU concern for a CLI tool.
+
+  **Validation:** 1089 tests pass (4 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 PASS.
+
+```
+13e28ed  fix(clone): unshallow cached shallow repos when full history is requested
+42707be  fix(export): composite hiddenReasons so search doesn't reset legend/community filters (#309)
+```
 
 ---
 
@@ -1985,12 +2012,12 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-281-whisper-language-flag` |
+| Current branch | `archon/task-fix-issue-288-clone-unshallow` |
 | Base branch | `main` |
-| Unpushed commits | `2038f73` (feat #281/#292 — `--transcribe-language` flag + language-keyed cache) |
+| Unpushed commits | `13e28ed` (fix #288 — unshallow cached shallow repos when full history requested) |
 | Open PR | None |
-| Working tree | Clean (untracked: `.claude/plans/feat-whisper-language-flag.plan.md`) |
-| Test count | 1084 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/fix-clone-unshallow.plan.md`) |
+| Test count | 1089 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `0728528`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic,transcribe]"` after any `pyproject.toml` edit. |
@@ -2227,7 +2254,7 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
 6. **Twenty's 184,809 import cycles** — surfaced by the e2e run. Are these real architectural problems or an artefact of the cycle detection (e.g. barrel files counting twice)? Needs a quick sample-and-validate. If the heuristic is over-reporting, cap the cycle length or dedupe by node set.
 
 8. **New findings from epic #271 code review** (5 MEDIUM, 4 LOW — not yet filed as issues):
-   - `[MEDIUM]` `clone.py:75-88` — shallow→full clone transition doesn't unshallow; ownership data silently wrong.
+   - ~~`[MEDIUM]` `clone.py:75-88` — shallow→full clone transition doesn't unshallow; ownership data silently wrong.~~ **FIXED** (`13e28ed`, closes #288).
    - `[MEDIUM]` `semantic_extract.py:96-103` — cache race: concurrent writers share the same `.tmp` path.
    - `[MEDIUM]` `semantic_extract.py:193` / `vision_extract.py:141` — `response.content[0].text` raises `IndexError` on empty content list.
    - `[MEDIUM]` `transcribe.py:222-237` — path traversal via yt-dlp `video_id` in manual path construction.
@@ -2294,6 +2321,7 @@ Repo-local plans under `.claude/plans/`:
 - `simplify-delete-cascade.plan.md` — shipped as `54d2100`.
 - `extraction-validator.plan.md` — shipped as `e2ee2fb` (closes #269).
 - `codegraph-clone.plan.md` — shipped as `0728528` + `7cb1fdd` (closes #268).
+- `fix-clone-unshallow.plan.md` — shipped as `13e28ed` (closes #288).
 - `fix-mcp-structural-edge-double-write.plan.md` — shipped as `abc6776`.
 - `fix-mcp-file-level-exposes.plan.md` — shipped as `75af831`.
 - `resolve-npm-tsconfig-presets.plan.md` — shipped as `ec94bff`.

@@ -132,6 +132,44 @@ class TestCloneOrPull:
             with pytest.raises(ConfigError, match="git pull failed"):
                 clone_or_pull("https://github.com/o/r", dest, console=_silent_console())
 
+    def test_cached_shallow_repo_unshallowed_when_full_requested(self, tmp_path: Path):
+        dest = tmp_path / "repo"
+        (dest / ".git").mkdir(parents=True)
+        (dest / ".git" / "shallow").touch()
+        with patch("codegraph.clone.subprocess.run") as mock_run:
+            clone_or_pull("https://github.com/o/r", dest, shallow=False, console=_silent_console())
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0][0][0] == ["git", "fetch", "--unshallow"]
+        assert mock_run.call_args_list[0][1]["cwd"] == dest
+        assert mock_run.call_args_list[1][0][0] == ["git", "pull", "--ff-only"]
+        assert mock_run.call_args_list[1][1]["cwd"] == dest
+
+    def test_cached_shallow_repo_stays_shallow_when_shallow_requested(self, tmp_path: Path):
+        dest = tmp_path / "repo"
+        (dest / ".git").mkdir(parents=True)
+        (dest / ".git" / "shallow").touch()
+        with patch("codegraph.clone.subprocess.run") as mock_run:
+            clone_or_pull("https://github.com/o/r", dest, shallow=True, console=_silent_console())
+        mock_run.assert_called_once()
+        assert mock_run.call_args[0][0] == ["git", "pull", "--ff-only"]
+
+    def test_cached_full_repo_skips_unshallow(self, tmp_path: Path):
+        dest = tmp_path / "repo"
+        (dest / ".git").mkdir(parents=True)
+        with patch("codegraph.clone.subprocess.run") as mock_run:
+            clone_or_pull("https://github.com/o/r", dest, shallow=False, console=_silent_console())
+        mock_run.assert_called_once()
+        assert mock_run.call_args[0][0] == ["git", "pull", "--ff-only"]
+
+    def test_unshallow_failure_raises_config_error(self, tmp_path: Path):
+        dest = tmp_path / "repo"
+        (dest / ".git").mkdir(parents=True)
+        (dest / ".git" / "shallow").touch()
+        exc = subprocess.CalledProcessError(1, "git", stderr="fatal: unable to access remote")
+        with patch("codegraph.clone.subprocess.run", side_effect=exc):
+            with pytest.raises(ConfigError, match="git fetch --unshallow failed"):
+                clone_or_pull("https://github.com/o/r", dest, shallow=False, console=_silent_console())
+
 
 # ── run_clone ───────────────────────────────────────────────
 
