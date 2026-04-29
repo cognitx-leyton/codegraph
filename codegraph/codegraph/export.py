@@ -190,14 +190,25 @@ var network = new vis.Network(container, data, options);
 function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function stripDiacritics(s) { return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); }
 
+// Visibility coordination — each control adds/removes its own reason.
+// A node is hidden iff it has any reason.
+var hiddenReasons = {};
+function setHidden(nodeId, reason, hide) {
+    if (!hiddenReasons[nodeId]) hiddenReasons[nodeId] = {};
+    if (hide) hiddenReasons[nodeId][reason] = true;
+    else delete hiddenReasons[nodeId][reason];
+    var keys = Object.keys(hiddenReasons[nodeId]);
+    nodes.update({id: nodeId, hidden: keys.length > 0});
+}
+
 // Search (diacritic-insensitive)
 document.getElementById('search').addEventListener('input', function(e) {
     var q = stripDiacritics(e.target.value.toLowerCase());
-    if (!q) { nodes.forEach(function(n) { nodes.update({id: n.id, hidden: false}); }); return; }
     nodes.forEach(function(n) {
+        if (!q) { setHidden(n.id, 'search', false); return; }
         var match = stripDiacritics((n.label || '').toLowerCase()).indexOf(q) >= 0
                  || stripDiacritics((n.title || '').toLowerCase()).indexOf(q) >= 0;
-        nodes.update({id: n.id, hidden: !match});
+        setHidden(n.id, 'search', !match);
     });
 });
 
@@ -229,7 +240,7 @@ document.querySelectorAll('.legend-item').forEach(function(el) {
         this.classList.toggle('hidden');
         nodes.forEach(function(n) {
             if ((n._labels || []).indexOf(lbl) >= 0) {
-                nodes.update({id: n.id, hidden: !!hiddenLabels[lbl]});
+                setHidden(n.id, 'legend:' + lbl, !!hiddenLabels[lbl]);
             }
         });
     });
@@ -244,7 +255,7 @@ document.querySelectorAll('.community-item input').forEach(function(cb) {
         cb.parentElement.classList.toggle('hidden', !cb.checked);
         nodes.forEach(function(n) {
             if (n._communityId === cid) {
-                nodes.update({id: n.id, hidden: !cb.checked});
+                setHidden(n.id, 'community:' + cid, !cb.checked);
             }
         });
     });

@@ -207,6 +207,25 @@ def test_to_html_community_label_xss(tmp_path: Path) -> None:
     assert "&lt;script&gt;" in content or "\\x3c" in content
 
 
+def test_to_html_hidden_reasons_coordination(tmp_path: Path) -> None:
+    """Search, legend, and community controls use hiddenReasons so they
+    don't overwrite each other's hidden state (GH-285)."""
+    out = tmp_path / "graph.html"
+    to_html(_FIXTURE_COMMUNITY_NODES, _FIXTURE_COMMUNITY_EDGES, out)
+    content = out.read_text()
+    # The hiddenReasons infrastructure must be present
+    assert "hiddenReasons" in content
+    assert "setHidden" in content
+    # Each handler must use setHidden with its own reason namespace
+    assert "setHidden(n.id, 'search'" in content
+    assert "setHidden(n.id, 'legend:'" in content
+    assert "setHidden(n.id, 'community:'" in content
+    # The old absolute hidden=false pattern must NOT appear in the search clear path
+    assert "nodes.update({id: n.id, hidden: false})" not in content
+    # hiddenCommunities must still exist — the hull renderer reads it
+    assert "hiddenCommunities" in content
+
+
 def test_to_html_community_excludes_edgegroup_nodes(tmp_path: Path) -> None:
     """EdgeGroup synthetic nodes should not appear as vis.js nodes."""
     out = tmp_path / "graph.html"
