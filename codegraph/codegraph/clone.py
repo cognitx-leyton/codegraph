@@ -73,6 +73,20 @@ def clone_or_pull(
     Raises :class:`~codegraph.config.ConfigError` on git failure.
     """
     if (dest / ".git").is_dir():
+        if not shallow and (dest / ".git" / "shallow").exists():
+            console.print(f"[dim]Unshallowing cached clone:[/] {dest}")
+            try:
+                subprocess.run(
+                    ["git", "fetch", "--unshallow"],
+                    cwd=dest,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                raise ConfigError(
+                    f"git fetch --unshallow failed in {dest}:\n{exc.stderr.strip()}"
+                ) from exc
         console.print(f"[dim]Updating cached clone:[/] {dest}")
         try:
             subprocess.run(
