@@ -59,22 +59,46 @@ def _file_content_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def _transcript_cache_path(repo: Path, file_hash: str) -> Path:
-    """Return the cache file path for a transcript."""
-    return repo / ".codegraph-cache" / "transcripts" / f"{file_hash}.txt"
+def _transcript_cache_path(
+    repo: Path,
+    file_hash: str,
+    *,
+    model_size: str = _DEFAULT_MODEL,
+    language: str | None = None,
+) -> Path:
+    """Return the cache file path for a transcript.
+
+    The key includes *model_size* and *language* so switching either
+    parameter invalidates stale cached transcripts (see #281, #292).
+    """
+    lang_tag = language or "auto"
+    return repo / ".codegraph-cache" / "transcripts" / f"{file_hash}_{model_size}_{lang_tag}.txt"
 
 
-def _get_cached_transcript(repo: Path, file_hash: str) -> str | None:
+def _get_cached_transcript(
+    repo: Path,
+    file_hash: str,
+    *,
+    model_size: str = _DEFAULT_MODEL,
+    language: str | None = None,
+) -> str | None:
     """Read cached transcript text, or *None* if not cached."""
-    cache = _transcript_cache_path(repo, file_hash)
+    cache = _transcript_cache_path(repo, file_hash, model_size=model_size, language=language)
     if cache.is_file():
         return cache.read_text(encoding="utf-8")
     return None
 
 
-def _put_cached_transcript(repo: Path, file_hash: str, text: str) -> None:
+def _put_cached_transcript(
+    repo: Path,
+    file_hash: str,
+    text: str,
+    *,
+    model_size: str = _DEFAULT_MODEL,
+    language: str | None = None,
+) -> None:
     """Write transcript text to cache (atomic via os.replace)."""
-    cache = _transcript_cache_path(repo, file_hash)
+    cache = _transcript_cache_path(repo, file_hash, model_size=model_size, language=language)
     cache.parent.mkdir(parents=True, exist_ok=True)
     tmp = cache.with_suffix(".tmp")
     tmp.write_text(text, encoding="utf-8")
@@ -123,6 +147,7 @@ def transcribe(
     initial_prompt: str = "",
     model_size: str = _DEFAULT_MODEL,
     model: object | None = None,
+    language: str | None = None,
 ) -> tuple[DocumentNode, str]:
     """Transcribe *path* and return a document node + transcript text.
 
@@ -143,6 +168,9 @@ def transcribe(
         Pre-loaded :class:`faster_whisper.WhisperModel`.  When ``None``
         (the default), a new model is created — prefer passing one from
         :func:`load_model` when transcribing multiple files.
+    language:
+        Language code for Whisper transcription (e.g. ``"en"``, ``"fr"``).
+        ``None`` means auto-detect (Whisper's default behaviour).
 
     Returns
     -------
@@ -173,7 +201,7 @@ def transcribe(
 
     segments, _info = model.transcribe(
         str(path),
-        language="en",
+        language=language,
         beam_size=5,
         vad_filter=True,
         initial_prompt=initial_prompt or None,

@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** Capture enough context for a fresh agent session (or a human returning after time away) to continue work on codegraph without re-deriving state from scratch. Separate from the user-facing roadmap bullets in `README.md`, which stay short and pitch-oriented.
 >
-> **Last updated:** 2026-04-28 after `5dd9655` — feat(doc-parser): add setext/tilde heading support with fenced-code backtracking fix (closes #278). `_FENCED_CODE_RE` backtracking fix + `_SETEXT_HEADING_RE` + 6 new tests. 1079 tests pass. v0.1.112.
+> **Last updated:** 2026-04-29 after `2038f73` — feat(transcribe): add `--transcribe-language` flag and language-keyed cache (closes #281 / #292). Language param threaded through `transcribe()`, `config.py`, `cli.py`; cache key now includes `model_size` + `language`. 1084 tests pass. v0.1.112.
 
 ---
 
@@ -27,8 +27,8 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ## TL;DR — where we are
 
-- **Branch:** `archon/task-feat-issue-278-markdown-tilde-setext`. Closes issue #278 — two CommonMark compliance gaps in `extract_markdown()`: (1) `_FENCED_CODE_RE` split into two alternation branches that exclude the fence character from the info string, preventing backtracking so a 4-backtick fence can no longer be closed by a 3-backtick close; (2) new `_SETEXT_HEADING_RE` handles `===`/`---` underline headings, merged with ATX headings sorted by document position. Also fixes duplicate heading bug when ATX heading followed by `===`/`---`. v0.1.112.
-- **Tests:** 1079 passing, 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
+- **Branch:** `archon/task-feat-issue-281-whisper-language-flag`. Closes issues #281 + #292 — exposes `--transcribe-language` CLI flag for Whisper (previously hardcoded `"en"`); fixes cache key to include `model_size` + `language` so stale hits from different language/model combos are impossible. Config field `transcribe_language` wired through TOML → `CodegraphConfig` → `_run_index()` → `transcribe()`. v0.1.112.
+- **Tests:** 1084 passing, 11 skipped, 0 warnings. Run via `.venv/bin/python -m pytest tests/ -q` from `codegraph/`.
 - **Open PR:** [cognitx-leyton/codegraph#287](https://github.com/cognitx-leyton/codegraph/pull/287) — epic summary table, `Closes #271`, targets `main`.
 - **Graph indexed:** Twenty CRM is currently loaded into the local Neo4j container at `bolt://localhost:7688` (13,473 files, 2,559 classes, 6,088 methods, 5,562 CALLS, 6,708 hook usages, 4,593 RENDERS).
 - **MCP server:** 15 read-only tools (incl. new `describe_group`) + **2 write tools** (`wipe_graph`, `reindex_file`) gated by `--allow-write` flag + **29 prompt templates** (all Cypher blocks from `queries.md` auto-registered via `_register_query_prompts()`). `codegraph-mcp` console script registered. Smoke-tested via raw JSON-RPC.
@@ -41,7 +41,40 @@ Catch-up pass that synchronises all user-facing docs with the current codebase a
 
 ---
 
-## Shipped since the last roadmap update (commit `5dd9655`)
+## Shipped since the last roadmap update (commit `2038f73`)
+
+### feat(transcribe) — `--transcribe-language` flag and language-keyed cache (issues #281 + #292)
+
+- `2038f73 feat(transcribe)` — Four source files changed, 5 new tests:
+
+  **Modified files:**
+
+  1. **`codegraph/codegraph/transcribe.py`** — Added `language: str | None = None` param to `transcribe()`. Removed hardcoded `language="en"` so Whisper falls back to auto-detect when no language is specified. Cache path helpers (`_transcript_cache_path`, `_get_cached_transcript`, `_put_cached_transcript`) now include `model_size` and `language` in the filename: `{hash}_{model_size}_{language_or_auto}.txt`. Fixes the stale-cache bug (#292) where transcribing the same audio with a different model or language could silently return a cached result from a prior run.
+
+  2. **`codegraph/codegraph/config.py`** — Added `transcribe_language: str | None = None` field to `CodegraphConfig`. Parses `[transcribe] language` from `codegraph.toml` / `pyproject.toml`. Wired through `merge_cli_overrides` so TOML defaults can be overridden by the CLI flag.
+
+  3. **`codegraph/codegraph/cli.py`** — Added `--transcribe-language` Typer option to `index`. Threaded through `_run_index()` signature and body. Precedence: CLI flag > TOML config > `None` (Whisper auto-detect). Passes `language=` to `_get_cached_transcript`, `_transcribe`, and `_put_cached_transcript`.
+
+  4. **`codegraph/tests/test_transcribe.py`** — 5 new tests:
+     - `test_transcribe_language_forwarded` — language kwarg is forwarded to `faster_whisper`.
+     - `test_transcribe_default_language_is_none` — default language is `None` (auto-detect), not `"en"`.
+     - `test_cache_isolation_by_language` — `"en"` and `"fr"` transcriptions get separate cache files; no cross-contamination.
+     - `test_cache_isolation_auto_detect` — `None` (auto) and `"en"` are separate cache entries.
+     - `test_cache_isolation_by_model_size` — `"base"` and `"large-v3"` produce separate cache files.
+
+  **Code review (1 issue found and fixed during review pass):**
+  - `[BUG]` `cli.py:466-472` — `transcribe_language` was passed to both `merge_cli_overrides` AND resolved again via `or` fallback — two redundant mechanisms for the same precedence logic. Fixed: removed the redundant `merge_cli_overrides` param; kept the simpler `or` fallback (matches how other per-run params work in `_run_index`).
+
+  **Validation:** 1084 tests pass (5 new), 11 skipped, 0 failures. Byte-compile clean. Arch-check: 4/4 PASS.
+
+```
+2038f73  feat(transcribe): add --transcribe-language flag and language-keyed cache (#281)
+5dd9655  feat(doc-parser): add setext/tilde heading support with fenced-code backtracking fix (#307)
+```
+
+---
+
+## Shipped since `5dd9655`
 
 ### feat(doc-parser) — setext/tilde heading support with fenced-code backtracking fix (issue #278)
 
@@ -1919,17 +1952,17 @@ Beyond unit/integration tests, these were dogfooded against real systems:
 
 | Thing | Value |
 |---|---|
-| Current branch | `archon/task-feat-issue-278-markdown-tilde-setext` |
+| Current branch | `archon/task-feat-issue-281-whisper-language-flag` |
 | Base branch | `main` |
-| Unpushed commits | `5dd9655` (feat #278 — setext/tilde heading support) |
+| Unpushed commits | `2038f73` (feat #281/#292 — `--transcribe-language` flag + language-keyed cache) |
 | Open PR | None |
-| Working tree | Clean (untracked: `.claude/plans/markdown-tilde-setext.plan.md`) |
-| Test count | 1079 passing + 11 skipped + 0 deselected |
+| Working tree | Clean (untracked: `.claude/plans/feat-whisper-language-flag.plan.md`) |
+| Test count | 1084 passing + 11 skipped + 0 deselected |
 | Test runtime | ~16 s |
 | Byte-compile | Clean |
 | Last editable install | After `0728528`. Re-run `cd codegraph && .venv/bin/pip install -e ".[python,mcp,test,watch,analyze,docs,semantic,transcribe]"` after any `pyproject.toml` edit. |
 | Wheel built? | Not yet for v0.1.112. Run `cd codegraph && .venv/bin/pip install build && python -m build` to produce wheel + sdist. |
-| New files | `codegraph/tests/fixtures/markdown/setext.md`, `codegraph/tests/fixtures/markdown/mixed-headings.md` |
+| New files | None (tests only — no new fixtures) |
 
 ---
 
@@ -2166,7 +2199,7 @@ Custom Cypher policies are already supported via `[[policies.custom]]` in `.arch
    - `[MEDIUM]` `semantic_extract.py:193` / `vision_extract.py:141` — `response.content[0].text` raises `IndexError` on empty content list.
    - `[MEDIUM]` `transcribe.py:222-237` — path traversal via yt-dlp `video_id` in manual path construction.
    - `[MEDIUM]` `cli.py:416` / `mcp.py:769` — repo-name validation missing `@` character.
-   - `[LOW]` `transcribe.py:62-65` — cache key missing `model_size`/`language`; stale cache hits possible.
+   - ~~`[LOW]` `transcribe.py:62-65` — cache key missing `model_size`/`language`; stale cache hits possible.~~ **FIXED** (`2038f73`).
    - `[LOW]` `test_py_parser.py:65,95` / `test_loader_partitioning.py:69` — stale docstrings (17→23, 16→17 counts).
    - `[LOW]` `test_transcribe.py:48` — dead class-level `call_count` never reset.
    - `[LOW]` `test_mcp.py:895-904` — `_allow_write` state leak — monkeypatch records wrong value.

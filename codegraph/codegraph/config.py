@@ -75,6 +75,10 @@ class CodegraphConfig:
     """Run Leiden community detection + GRAPH_REPORT after indexing.
     Requires the ``[analyze]`` extra (networkx + graspologic)."""
 
+    transcribe_language: Optional[str] = None
+    """Language code for Whisper transcription (e.g. ``"en"``, ``"fr"``).
+    ``None`` means auto-detect."""
+
     source: Optional[str] = None
     """Where the config came from (``"codegraph.toml"``,
     ``"pyproject.toml"``, or ``None`` for CLI-only)."""
@@ -123,6 +127,7 @@ def merge_cli_overrides(
     exclude_suffixes: Optional[Iterable[str]] = None,
     ignore_file: Optional[str] = None,
     analyze: Optional[bool] = None,
+    transcribe_language: Optional[str] = None,
 ) -> CodegraphConfig:
     """Return a new config with CLI-provided values taking precedence.
 
@@ -136,6 +141,7 @@ def merge_cli_overrides(
         exclude_suffixes=tuple(config.exclude_suffixes),
         ignore_file=config.ignore_file,
         analyze=config.analyze,
+        transcribe_language=config.transcribe_language,
         source=config.source,
     )
     if packages:
@@ -148,6 +154,8 @@ def merge_cli_overrides(
         merged.ignore_file = ignore_file
     if analyze is not None:
         merged.analyze = analyze
+    if transcribe_language is not None:
+        merged.transcribe_language = transcribe_language
     return merged
 
 
@@ -195,11 +203,18 @@ def _build_config(data: dict, *, source: str) -> CodegraphConfig:
     analyze = data.get("analyze", False)
     if not isinstance(analyze, bool):
         raise ConfigError(f"{source}: `analyze` must be a boolean")
+    transcribe_section = data.get("transcribe", {})
+    if not isinstance(transcribe_section, dict):
+        raise ConfigError(f"{source}: `[transcribe]` must be a table")
+    transcribe_language = transcribe_section.get("language")
+    if transcribe_language is not None and not isinstance(transcribe_language, str):
+        raise ConfigError(f"{source}: `transcribe.language` must be a string")
     return CodegraphConfig(
         packages=list(packages),
         exclude_dirs=set(exclude_dirs),
         exclude_suffixes=tuple(exclude_suffixes),
         ignore_file=ignore_file,
         analyze=analyze,
+        transcribe_language=transcribe_language,
         source=source,
     )

@@ -55,6 +55,18 @@ class _MockWhisperModel:
         return iter([_MockSegment("hello world")]), _MockInfo()
 
 
+class _CapturingWhisperModel:
+    """Records kwargs passed to ``transcribe()`` for assertion."""
+    last_kwargs: dict = {}
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def transcribe(self, audio, **kwargs):
+        _CapturingWhisperModel.last_kwargs = dict(kwargs)
+        return iter([_MockSegment("bonjour")]), _MockInfo()
+
+
 # ── Basic transcription ──────────────────────────────────────────────
 
 
@@ -142,6 +154,42 @@ def test_transcript_cache_roundtrip(tmp_path):
 def test_cache_miss_returns_none(tmp_path):
     result = _get_cached_transcript(tmp_path, "nonexistent")
     assert result is None
+
+
+# ── Language forwarding (#281) ───────────────────────────────────────
+
+
+def test_transcribe_forwards_language(monkeypatch):
+    monkeypatch.setattr(transcribe_mod, "faster_whisper", type("M", (), {"WhisperModel": _CapturingWhisperModel})())
+    _doc, _text = transcribe(FIXTURE, "audio/sample.wav", language="fr")
+    assert _CapturingWhisperModel.last_kwargs["language"] == "fr"
+
+
+def test_transcribe_default_language_is_none(monkeypatch):
+    monkeypatch.setattr(transcribe_mod, "faster_whisper", type("M", (), {"WhisperModel": _CapturingWhisperModel})())
+    _doc, _text = transcribe(FIXTURE, "audio/sample.wav")
+    assert _CapturingWhisperModel.last_kwargs["language"] is None
+
+
+# ── Cache isolation (#281, #292) ─────────────────────────────────────
+
+
+def test_cache_key_includes_language(tmp_path):
+    _put_cached_transcript(tmp_path, "abc", "english text", language="en")
+    assert _get_cached_transcript(tmp_path, "abc", language="en") == "english text"
+    assert _get_cached_transcript(tmp_path, "abc", language="fr") is None
+
+
+def test_cache_key_auto_language(tmp_path):
+    _put_cached_transcript(tmp_path, "abc", "auto text")
+    assert _get_cached_transcript(tmp_path, "abc") == "auto text"
+    assert _get_cached_transcript(tmp_path, "abc", language="en") is None
+
+
+def test_cache_key_includes_model_size(tmp_path):
+    _put_cached_transcript(tmp_path, "abc", "base text", model_size="base")
+    assert _get_cached_transcript(tmp_path, "abc", model_size="base") == "base text"
+    assert _get_cached_transcript(tmp_path, "abc", model_size="large-v3") is None
 
 
 # ── Extension sets ───────────────────────────────────────────────────

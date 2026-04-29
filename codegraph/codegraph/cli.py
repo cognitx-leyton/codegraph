@@ -263,6 +263,11 @@ def index(
         help="Transcribe audio/video files via Whisper. "
              "Requires the [transcribe] extra.",
     ),
+    transcribe_language: Optional[str] = typer.Option(
+        None, "--transcribe-language",
+        help="Language code for Whisper transcription (e.g. 'en', 'fr'). "
+             "Default: auto-detect. Requires --extract-audio.",
+    ),
     strict_validate: bool = typer.Option(
         False, "--strict-validate",
         help="Fail the run if any parse-result validation errors are found "
@@ -289,6 +294,7 @@ def index(
             extract_markdown=extract_markdown,
             extract_images=extract_images,
             extract_audio=extract_audio,
+            transcribe_language=transcribe_language,
             strict_validate=strict_validate,
         )
     except ConfigError as e:
@@ -396,6 +402,7 @@ def _run_index(
     extract_markdown: bool = False,
     extract_images: bool = False,
     extract_audio: bool = False,
+    transcribe_language: Optional[str] = None,
     strict_validate: bool = False,
 ) -> dict[str, Any]:
     """Core indexing routine. Returns a flat dict of stats (files, edges, ...).
@@ -458,6 +465,8 @@ def _run_index(
     config = load_config(repo)
     config = merge_cli_overrides(config, packages=packages, ignore_file=ignore_file)
     require_packages(config)
+    # Resolve transcribe_language: CLI flag > config file > None (auto-detect)
+    transcribe_language = transcribe_language or config.transcribe_language
 
     source_note = f" (from {config.source})" if config.source and not packages else ""
     say(f"[bold]Indexing[/] {repo}  packages={config.packages}{source_note}")
@@ -874,7 +883,9 @@ def _run_index(
                         fhash = _audio_hash(p)
                     except OSError:
                         continue
-                    cached_text = _get_cached_transcript(repo, fhash)
+                    cached_text = _get_cached_transcript(
+                        repo, fhash, language=transcribe_language,
+                    )
                     if cached_text is not None:
                         text = cached_text
                         audio_cache_hits += 1
@@ -890,11 +901,14 @@ def _run_index(
                             doc, text = _transcribe(
                                 p, rel, repo_name=effective_repo_name,
                                 model=whisper_model,
+                                language=transcribe_language,
                             )
                         except Exception as exc:
                             say(f"  [yellow]skip[/] {rel}: {exc}")
                             continue
-                        _put_cached_transcript(repo, fhash, text)
+                        _put_cached_transcript(
+                            repo, fhash, text, language=transcribe_language,
+                        )
                         audio_cache_misses += 1
                     doc_nodes.append(doc)
                     audio_count += 1
