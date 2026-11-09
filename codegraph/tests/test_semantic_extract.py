@@ -61,6 +61,17 @@ class _MockMessages:
         return _MockResponse(self._text)
 
 
+class _EmptyContentMessages:
+    def create(self, **kwargs):
+        response = _MockResponse("")
+        response.content = []
+        return response
+
+
+class _EmptyContentClient:
+    messages = _EmptyContentMessages()
+
+
 class MockAnthropicClient:
     def __init__(self, response_text: str = _MOCK_RESPONSE_JSON):
         self.messages = _MockMessages(response_text)
@@ -172,6 +183,18 @@ def test_extract_semantic_malformed_response(caplog):
     assert result.decisions == []
     assert result.rationales == []
     assert "Malformed JSON" in caplog.text
+
+
+def test_extract_semantic_empty_content_list(caplog):
+    """A reply with no content blocks is reported as that, not as an IndexError."""
+    with caplog.at_level(logging.WARNING):
+        result = extract_semantic("# Empty", "docs/test.md", client=_EmptyContentClient())
+    assert result.concepts == []
+    assert result.decisions == []
+    assert result.rationales == []
+    assert result.edges == []
+    assert "Empty API response for docs/test.md" in caplog.text
+    assert "index out of range" not in caplog.text
 
 
 def test_extract_semantic_deterministic_rerun(tmp_path):

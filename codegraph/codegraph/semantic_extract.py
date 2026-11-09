@@ -190,6 +190,9 @@ def extract_semantic(
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
+        if not response.content:
+            log.warning("Empty API response for %s", rel)
+            return SemanticResult()
         text = response.content[0].text
     except Exception as exc:
         log.warning("Claude API call failed for %s: %s", rel, exc)

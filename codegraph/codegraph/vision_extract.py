@@ -138,6 +138,9 @@ def extract_vision(
                 ],
             }],
         )
+        if not response.content:
+            log.warning("Empty vision API response for %s", rel)
+            return SemanticResult()
         text = response.content[0].text
     except Exception as exc:
         log.warning("Claude vision API call failed for %s: %s", rel, exc)
