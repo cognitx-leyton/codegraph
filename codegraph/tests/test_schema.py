@@ -76,6 +76,35 @@ def test_slug_canonical_equivalence():
     assert _slug(precomposed) == _slug(decomposed)
 
 
+# ── _slug: ASCII prefix with letters that have no ASCII base ────────
+
+
+def test_slug_mixed_names_with_different_non_ascii_letters_differ():
+    assert _slug("api_世界") != _slug("api_你好")
+
+
+def test_slug_mixed_name_keeps_readable_prefix_and_hash_suffix():
+    text = "api_世界"
+    normalised = unicodedata.normalize("NFKD", text)
+    expected_hash = hashlib.sha256(normalised.encode()).hexdigest()[:8]
+    assert _slug(text) == f"api_{expected_hash}"
+
+
+def test_slug_mixed_name_canonical_equivalence():
+    """A composed and a decomposed form of the same mixed name give the same slug."""
+    assert _slug("café_世界") == _slug("café_世界")
+
+
+def test_slug_typographic_punctuation_gets_no_hash():
+    assert _slug("don’t panic") == "dont_panic"
+
+
+def test_concept_node_ids_differ_for_mixed_names():
+    first = ConceptNode(name="api_世界", description="x", source_file="f.md")
+    second = ConceptNode(name="api_你好", description="x", source_file="f.md")
+    assert first.id != second.id
+
+
 # ── _slug: no forbidden characters ──────────────────────────────────
 
 
