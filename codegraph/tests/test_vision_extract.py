@@ -61,6 +61,17 @@ class _MockMessages:
         return _MockResponse(self._text)
 
 
+class _EmptyContentMessages:
+    def create(self, **kwargs):
+        response = _MockResponse("")
+        response.content = []
+        return response
+
+
+class _EmptyContentClient:
+    messages = _EmptyContentMessages()
+
+
 class MockAnthropicClient:
     def __init__(self, response_text: str = _MOCK_RESPONSE_JSON):
         self.messages = _MockMessages(response_text)
@@ -147,6 +158,16 @@ def test_extract_vision_malformed_response(caplog):
     assert result.concepts == []
     assert result.edges == []
     assert "Malformed JSON" in caplog.text
+
+
+def test_extract_vision_empty_content_list(caplog):
+    """A reply with no content blocks is reported as that, not as an IndexError."""
+    with caplog.at_level(logging.WARNING):
+        result = extract_vision(FIXTURE_PNG, "docs/arch.png", client=_EmptyContentClient())
+    assert result.concepts == []
+    assert result.edges == []
+    assert "Empty vision API response for docs/arch.png" in caplog.text
+    assert "index out of range" not in caplog.text
 
 
 def test_extract_vision_file_too_large(tmp_path):
