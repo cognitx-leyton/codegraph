@@ -283,6 +283,10 @@ def _slug(text: str) -> str:
     # Drop non-ASCII (combining marks, CJK, etc.) keeping transliterated bases
     ascii_text = normalised.encode("ascii", errors="ignore").decode("ascii")
     slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", ascii_text).strip("_").lower()
+    # Letters and digits with no ASCII base (CJK, "ß", "ø") were dropped above,
+    # so names that differ only in them would share this slug.
+    if slug and any(c.isalnum() and not c.isascii() for c in normalised):
+        return slug + "_" + hashlib.sha256(normalised.encode()).hexdigest()[:8]
     if slug:
         return slug
     # Deterministic hash fallback for purely non-ASCII or empty input
