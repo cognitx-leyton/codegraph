@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -94,7 +95,8 @@ class SemanticCache:
 
     def put(self, key: str, result: SemanticResult) -> None:
         entry = self.cache_dir / f"{key}.json"
-        tmp = entry.with_suffix(".tmp")
+        # One temp file per call: writers on the same key must not share it.
+        tmp = entry.with_name(f"{key}.{uuid.uuid4().hex}.tmp")
         try:
             tmp.write_text(json.dumps(_result_to_dict(result)), encoding="utf-8")
             os.replace(tmp, entry)
