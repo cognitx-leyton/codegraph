@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -186,6 +187,49 @@ def test_extract_semantic_deterministic_rerun(tmp_path):
     assert r2 is not None
     assert len(r2.concepts) == len(r1.concepts)
     assert len(r2.edges) == len(r1.edges)
+
+
+def test_cache_put_concurrent_writers_do_not_share_tmp(tmp_path, monkeypatch):
+    """A second writer finishing inside the first writer's window must not break it."""
+    cache = SemanticCache(tmp_path)
+    key = _semantic_cache_key("# Race\nContent", "docs/test.md", "default")
+    first = SemanticResult(concepts=[
+        ConceptNode(name="first", description="", source_file="docs/test.md"),
+    ])
+    second = SemanticResult(concepts=[
+        ConceptNode(name="second", description="", source_file="docs/test.md"),
+    ])
+    real_replace = os.replace
+    tmp_dirs: list[Path] = []
+    competitor_ran: list[bool] = []
+
+    def replace_after_competitor(src, dst):
+        tmp_dirs.append(Path(src).parent)
+        if not competitor_ran:
+            competitor_ran.append(True)
+            cache.put(key, second)
+        real_replace(src, dst)
+
+    monkeypatch.setattr(semantic_extract.os, "replace", replace_after_competitor)
+    cache.put(key, first)
+
+    assert tmp_dirs == [cache.cache_dir, cache.cache_dir]
+    got = cache.get(key)
+    assert got is not None
+    assert [c.name for c in got.concepts] == ["first"]
+    assert list(cache.cache_dir.glob("*.tmp")) == []
+
+
+def test_cache_put_removes_tmp_when_replace_fails(tmp_path, monkeypatch):
+    cache = SemanticCache(tmp_path)
+
+    def failing_replace(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(semantic_extract.os, "replace", failing_replace)
+    with pytest.raises(OSError, match="disk full"):
+        cache.put("a" * 64, SemanticResult())
+    assert list(cache.cache_dir.iterdir()) == []
 
 
 # ── _parse_response tests ────────────────────────────────────────────
