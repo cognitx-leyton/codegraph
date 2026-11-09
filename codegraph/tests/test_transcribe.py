@@ -141,6 +141,84 @@ def test_download_audio_missing_ytdlp(monkeypatch):
         download_audio("https://example.com/video", Path("/tmp"))
 
 
+def _mock_yt_dlp(video_id: str):
+    class _MockYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=True):
+            return {"id": video_id}
+
+    return type("M", (), {"YoutubeDL": _MockYoutubeDL})()
+
+
+@pytest.mark.parametrize("video_id", ["abc123", "a-b_c.d"])
+def test_download_audio_returns_wav_for_plain_video_id(monkeypatch, tmp_path, video_id):
+    (tmp_path / f"{video_id}.wav").write_bytes(b"RIFF")
+    monkeypatch.setattr(transcribe_mod, "yt_dlp", _mock_yt_dlp(video_id))
+    assert download_audio("https://example.com/v", tmp_path) == tmp_path / f"{video_id}.wav"
+
+
+@pytest.mark.parametrize("video_id", ["../escape", "sub/clip"])
+def test_download_audio_rejects_video_id_with_path_parts(monkeypatch, tmp_path, video_id):
+    out = tmp_path / "out"
+    (out / "sub").mkdir(parents=True)
+    (out / "sub" / "clip.wav").write_bytes(b"RIFF")
+    (tmp_path / "escape.wav").write_bytes(b"RIFF")
+    monkeypatch.setattr(transcribe_mod, "yt_dlp", _mock_yt_dlp(video_id))
+    with pytest.raises(ValueError, match="video id"):
+        download_audio("https://example.com/v", out)
+
+
+def test_download_audio_rejects_absolute_video_id(monkeypatch, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    (tmp_path / "escape.wav").write_bytes(b"RIFF")
+    monkeypatch.setattr(transcribe_mod, "yt_dlp", _mock_yt_dlp(str(tmp_path / "escape")))
+    with pytest.raises(ValueError, match="video id"):
+        download_audio("https://example.com/v", out)
+
+
+def test_download_audio_rejects_symlink_leaving_output_dir(monkeypatch, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    target = tmp_path / "elsewhere.wav"
+    target.write_bytes(b"RIFF")
+    try:
+        (out / "link.wav").symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create symlinks here")
+    monkeypatch.setattr(transcribe_mod, "yt_dlp", _mock_yt_dlp("link"))
+    with pytest.raises(ValueError, match="video id"):
+        download_audio("https://example.com/v", out)
+
+
+def test_download_audio_returns_other_extension_inside_output_dir(monkeypatch, tmp_path):
+    (tmp_path / "clip.m4a").write_bytes(b"x")
+    monkeypatch.setattr(transcribe_mod, "yt_dlp", _mock_yt_dlp("clip"))
+    assert download_audio("https://example.com/v", tmp_path) == tmp_path / "clip.m4a"
+
+
+def test_download_audio_skips_other_extension_that_leaves_output_dir(monkeypatch, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    target = tmp_path / "elsewhere.m4a"
+    target.write_bytes(b"x")
+    try:
+        (out / "clip.m4a").symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create symlinks here")
+    monkeypatch.setattr(transcribe_mod, "yt_dlp", _mock_yt_dlp("clip"))
+    with pytest.raises(FileNotFoundError):
+        download_audio("https://example.com/v", out)
+
+
 # ── Caching ──────────────────────────────────────────────────────────
 
 

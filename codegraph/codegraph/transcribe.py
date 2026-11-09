@@ -240,6 +240,8 @@ def download_audio(url: str, output_dir: Path) -> Path:
     ------
     ImportError
         If ``yt_dlp`` is not installed.
+    ValueError
+        If the video id yt-dlp reports is not a plain file name.
     """
     if yt_dlp is None:
         raise ImportError(
@@ -263,12 +265,21 @@ def download_audio(url: str, output_dir: Path) -> Path:
         video_id = info["id"]
 
     result = output_dir / f"{video_id}.wav"
+    root = output_dir.resolve()
+    # The id comes from the remote extractor, so it must name a file in output_dir.
+    if (
+        Path(video_id).name != video_id
+        or not result.resolve().is_relative_to(root)
+    ):
+        raise ValueError(
+            f"video id {video_id!r} from {url} does not name a file in {output_dir}"
+        )
     if result.is_file():
         return result
 
     # yt-dlp may use a different extension; find the downloaded file.
     for candidate in output_dir.iterdir():
-        if candidate.stem == video_id:
+        if candidate.stem == video_id and candidate.resolve().is_relative_to(root):
             return candidate
 
     raise FileNotFoundError(
